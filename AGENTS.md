@@ -175,6 +175,23 @@ Do not use "Create a merge commit" or "Rebase and merge". This keeps
 releases (see above) clean, since a squashed history avoids interleaving
 this fork's work-in-progress commits with upstream's.
 
+## Keeping PR branches up to date
+
+While a PR is open, update its branch by **rebasing onto the base branch**,
+never by merging the base branch into it:
+
+```sh
+git fetch origin main
+git rebase origin/main
+git push --force-with-lease
+```
+
+Do not `git merge origin/main` (or use a "Update branch" button that creates
+a merge commit) into an open PR branch. Merge commits pollute the PR's diff
+and commit history with noise unrelated to the change, and since PRs are
+squash merged anyway (see above), a merge commit adds no value — it only
+makes the PR harder to review in the meantime.
+
 ## Summary for contributors and agents
 
 - Read-only: everything except `kcp/` (and rare, additive manifest edits).
@@ -189,6 +206,8 @@ this fork's work-in-progress commits with upstream's.
 - Commit messages and PR descriptions: concise, not padded, and never
   include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
 - All PRs are squash merged — no merge commits, no rebase-and-merge.
+- Keep open PR branches up to date by rebasing onto the base branch, not by
+  merging the base branch in — no merge commits on PR branches either.
 - New code and user-visible behavior ship with matching docs in
   `kcp/docs/site/` — user docs (installation/usage) and design docs
   (architecture/deep dives). See `kcp/README.md#documentation`.
