@@ -53,6 +53,11 @@ supply that, and do so efficiently:
   is more commonly documented against, but it's not the only one it
   exposes, and the `GetManager` escape hatch is what makes it usable here
   without touching upstream.
+- Its `Provider` constructor (`New(cfg *rest.Config, endpointSliceName
+  string, options Options) (*Provider, error)`) takes a kcp
+  `APIExportEndpointSlice` name directly, which is also kcp's own
+  horizontal-sharding primitive (see D6/Phase 4) — one less thing we need
+  to invent.
 
 So the plan is: adopt the library as the discovery+cache engine (Phase 2,
 G1/G2 below), and write only the thin per-workspace glue — Engage/Disengage
@@ -95,12 +100,22 @@ needs verifying in the Phase 1 spike rather than assumed:
 - **Write-path routing.** Reads are clearly wildcard-shared; each engaged
   workspace's `GetManager()` result must still route *writes* to that
   specific workspace, not the wildcard endpoint. Verify this explicitly.
-- **Horizontal sharding across replicas.** The library gives one
-  leader-elected process handling all engaged workspaces. If that's not
-  enough capacity for the target workspace count, splitting workspaces
-  across multiple manager-pod replicas is still on us — the same shape of
-  limitation CAPI's existing single-cluster deployment already has, not a
-  regression, but not solved for free either (Phase 4).
+- **Horizontal sharding across replicas — solved by kcp's own topology
+  API, not something to build.** kcp's `APIExportEndpointSlice` is
+  documented as "consumed by managers to start controllers and informers
+  for the respective APIExport services," filtered by an optional
+  `Partition` (itself generated from a `PartitionSet` selecting `Shard`
+  objects by label). `multicluster-provider`'s `Provider` constructor
+  takes an endpoint-slice name directly, so pointing different
+  replica-groups at different endpoint slices already gives each one a
+  disjoint set of shards/workspaces to engage, with kcp itself owning
+  shard-membership and rebalancing. See D6/Phase 4 — this is now mostly
+  manifest work (Partitions + APIExportEndpointSlices + one
+  `--endpoint-slice-name` flag per replica-group), not new code, and it's
+  irrelevant until a kcp install actually runs multiple shards. What's
+  still unverified: whether the Provider picks up `.status.endpoints`
+  changes live if shard membership changes underneath a running partition
+  (workspace migration between shards) — confirm in the Phase 1/P8 spike.
 - **Per-workspace controller overhead still scales with W.** Each
   workspace still gets its own real `controller.Controller`
   (workqueue, goroutines, rate limiter) once `SetupWithManager` runs
@@ -130,7 +145,7 @@ early and expensive to unwind later.
 | D3 | APIExport/APIBinding schema strategy | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. |
 | D4 | Discovery + cache engine: adopt `kcp-dev/multicluster-provider`'s `Provider` + `multicluster-runtime`'s `mcmanager.Manager.GetManager()`, or hand-roll | Default to adopting (see "Chosen model"/"Scalability" above). Confirm write-path routing, leader-election behavior, and library maturity in the Phase 1 spike before locking this in; hand-rolling a `WildcardCache`-alike layer is the documented fallback, not the default. |
 | D5 | Identity/RBAC model | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). |
-| D6 | Horizontal sharding of engaged workspaces across manager-pod replicas | Not solved by the library (it leader-elects one process for all engaged workspaces). Only urgent once a single process's capacity is a real constraint — see Phase 4. |
+| D6 | Partition topology for horizontal sharding: how many `Partition`/`APIExportEndpointSlice` pairs, how they map to replica-group deployments | Use kcp's own `PartitionSet`→`Partition`→`APIExportEndpointSlice` chain (see "Chosen model"/"Scalability" above) rather than app-level hashing. Only matters once a kcp install runs multiple shards — moot for single-shard dev/small deployments, so this can start as "one partition, one replica-group" and grow later. |
 
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.
@@ -218,7 +233,7 @@ different binary/concern."
 | P3 | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
 | P4 | Webhook wiring for all 4 providers through G4 | G4, P1–P3 (can stub against G4's interface early) |
 | P5 | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
-| P6 | APIExport/APIBinding manifests + permission-claim wiring per D3 | D3 (Phase 0 only) |
+| P6 | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard) | D3 (Phase 0 only) |
 | P7 | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
 | P8 | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
@@ -230,11 +245,12 @@ once — same recipe, different source `main.go`.
 
 ## Phase 4 — hardening (after Phase 3 lands)
 
-- Scale-out (D6): shard workspaces across replicas — e.g. partition which
-  workspaces each replica's `Provider` engages by consistent hash or label
-  selector — so one process isn't holding every workspace. Only build this
-  once a single leader-elected process's capacity is an actual measured
-  constraint, not preemptively.
+- Scale-out (D6): define the `PartitionSet`/`Partition`/`APIExportEndpointSlice`
+  topology (P6-adjacent manifest work) and templated replica-group
+  deployments, each Provider pointed at its own endpoint slice via
+  `--endpoint-slice-name`. Only build this out once a kcp install actually
+  runs multiple shards and a single leader-elected process's capacity is
+  a measured constraint — not preemptively.
 - Idle eviction: stop (and later restart) managers for workspaces with no
   recent reconcile activity, to bound steady-state memory.
 - Upgrade/rebase drill: pull the next upstream cluster-api release through
@@ -275,3 +291,8 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
 3. How many workspaces this needs to scale to in practice — determines how
    urgent D6 (horizontal sharding) and Phase 4's eviction work are
    relative to Phase 3.
+4. Whether `multicluster-provider`'s `Provider` reacts live to
+   `APIExportEndpointSlice.status.endpoints` changing (e.g. a shard
+   joining/leaving a `Partition`, or a workspace migrating between
+   shards), or requires a restart to pick up a new endpoint set — drives
+   whether D6's partition topology can change without a rollout.
