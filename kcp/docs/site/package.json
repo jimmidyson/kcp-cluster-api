@@ -1,0 +1,22 @@
+{
+  "name": "kcp-cluster-api-docs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hugo + Docsy documentation site for kcp-cluster-api",
+  "scripts": {
+    "serve": "hugo server --disableFastRender",
+    "build": "hugo --minify",
+    "postinstall": "hugo mod npm pack && npm install --ignore-scripts"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "postcss-cli": "^11.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "workspaces": [
+    "packages/hugoautogen"
+  ]
+}
