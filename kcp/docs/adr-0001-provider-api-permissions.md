@@ -1,12 +1,12 @@
 # ADR-0001: Provider API permissions for core CAPI controllers
 
-Status: **accepted** for the scope audited below (core's `cluster`,
-`machine`, `machineset`, `machinedeployment`, `machinepool` reconcilers),
-including the automatic-claim-acceptance mechanism (decision 3).
-**Not yet accepted** for `core/reconcilers/topology/cluster` (the
-ClusterClass/topology controller) — see "Known gap" below; do not treat
-this ADR as covering that controller's claim scope until it's audited the
-same way.
+Status: **accepted**, verb scope now audited across all six core
+reconciler packages that touch provider-owned objects — `cluster`,
+`machine`, `machineset`, `machinedeployment`, `machinepool`, and
+`topology/cluster` (ClusterClass) — plus the automatic-claim-acceptance
+mechanism (decision 3). No remaining known gaps in reconciler coverage;
+open items 2 (MachinePool mutating-verb citation) and 3/6
+(implementation-time design work) remain below.
 
 This covers the permission-claim portion of D3 and the identity-model
 portion of D5 in [`conversion-plan.md`](conversion-plan.md); it does not
@@ -198,55 +198,55 @@ isn't surprising in practice.
 ## Verb scoping (from `core/reconcilers/*` audit)
 
 Audited 2026-08-14 against `core/reconcilers/{cluster,machine,machineset,
-machinedeployment,machinepool}` and `controllers/external/`. Full findings
-in the audit transcript; summary below. **`core/reconcilers/topology/
-cluster` (ClusterClass) was not included — see "Known gap".**
+machinedeployment,machinepool,topology/cluster}` and
+`controllers/external/`. Full findings in the audit transcripts; summary
+below.
 
 Cross-cutting findings that apply to every role below:
 - **No reconciler ever calls `update`** against a provider object — all
   mutations are `patch` (JSON/strategic merge, or Server-Side-Apply) or
   the one SSA-based create path. `update` should not be claimed anywhere.
-- **No `deletecollection` usage anywhere.**
+  This holds even in the topology/ClusterClass controller, which patches
+  full provider-object *specs* (not just ownerRef/labels like the other
+  controllers) to keep them in sync with class definitions — it still
+  does so via SSA `PATCH`, never `PUT`/`update`. Since kcp (like
+  Kubernetes RBAC generally) scopes claims/rules by resource+verb, not by
+  field, a claim never needs to distinguish "patches only ownerRef" from
+  "patches full spec" — both are just the `patch` verb. Noted here only
+  so a future reader doesn't assume field-scoped least-privilege is
+  achievable through the claim/RBAC layer; it isn't.
+- **No `deletecollection` usage anywhere**, and **`list` against a
+  provider GVK is rare** — only MachineSet's orphan-cleanup pass uses it;
+  the topology controller's `list` calls are all against **native** CAPI
+  types (MachineDeployment/MachinePool lists), never provider GVKs, even
+  though it's the most create/delete-heavy controller of the six.
 - SSA-`Apply` of an object that doesn't yet exist is carried over HTTP
   `PATCH`, but Kubernetes RBAC additionally requires the `create` verb the
   first time the object is materialized — so create-capable paths need
   both `create` and `patch`, not `patch` alone.
 - Today's upstream `kubebuilder:rbac` markers
-  (`cluster_controller.go:72`, `machine_controller.go:90`,
+  (`cluster_controller.go:72,69` in both `core/reconcilers/cluster` and
+  `core/reconcilers/topology/cluster`, `machine_controller.go:90`,
   `machineset_controller.go:93`, `machinepool_controller.go:63`) request
   `resources=*,verbs=get;list;watch;create;update;patch;delete` per group —
-  broader than what's actually used (includes unused `update`, and
-  `list`/`watch` even on controllers that don't do either). Since kcp
-  claims can't use a `resources=*` glob within a group anyway (previous
-  section), translating these markers to claims requires enumerating each
-  concrete provider resource — a good opportunity to also drop `update`
-  and tighten `list`/`watch` to only where audited as used, rather than
-  copying the upstream marker's verb set 1:1.
+  broader than what's actually used (includes unused `update` everywhere
+  audited, and `list`/`watch` even on controllers that don't do either).
+  Since kcp claims can't use a `resources=*` glob within a group anyway
+  (previous section), translating these markers to claims requires
+  enumerating each concrete provider resource — a good opportunity to
+  also drop `update` and tighten `list`/`watch` to only where audited as
+  used, rather than copying the upstream marker's verb set 1:1.
 
-Per-role minimum claim verbs:
+Per-role minimum claim verbs (union across every controller that touches
+that role, since decision 2's single identity means the claim verb set
+must cover every controller's needs on that resource, not per-controller):
 
 | Role | Referenced via | Touched by | Verbs |
 |---|---|---|---|
-| InfraCluster / ControlPlane object | `Cluster.spec.infrastructureRef` / `.controlPlaneRef` | Cluster controller only (audited scope) | `get`, `watch`, `patch`, `delete` — no `create`/`list` seen; something else (user, clusterctl, or the topology controller) creates these today |
-| InfraMachine / BootstrapConfig object | `Machine.spec.infrastructureRef` / `.bootstrap.configRef` | Machine controller (get/watch/patch/delete) + MachineSet controller (get/list/create-via-SSA/patch/delete, for per-replica generated objects) | `get`, `list`, `watch`, `create`, `patch`, `delete` (union across both controllers — single identity per decision 2 means claim verbs are the union of every controller's needs on that resource, not per-controller) |
-| InfraMachineTemplate / BootstrapConfigTemplate | `MachineSet`/`MachineDeployment` `.spec.template.spec.*Ref` | MachineSet + MachineDeployment (`reconcileExternalTemplateReference`) | `get`, `patch` (ownerRef only) — never watched, never created/deleted here |
-| MachinePool's infra ref object | `MachinePool.spec.template.spec.infrastructureRef` | MachinePool controller | `get`, `watch` confirmed by audit; `patch`/`delete` presumed to mirror Machine's pattern but not individually cited — **verify before finalizing this row specifically** |
-
-## Known gap: `core/reconcilers/topology/cluster` not yet audited
-
-The ClusterClass/topology controller (`core/reconcilers/topology/cluster/
-{reconcile_state,current_state,status,cluster_controller}.go`) also reads
-and writes `infrastructureRef`/`controlPlaneRef`-style fields — it's the
-component that materializes a whole ClusterClass-based cluster's
-InfraCluster, ControlPlane, and MachineDeployment templates from class
-definitions. It almost certainly needs a verb set closer to MachineSet's
-(`get`, `list`, `create`, `patch`, `delete`) on the InfraCluster/
-ControlPlane role than the narrower `get, watch, patch, delete` shown
-above for the Cluster controller alone — but this is inference from
-general CAPI architecture, not confirmed against this fork's actual code.
-**Do not finalize the InfraCluster/ControlPlane claim's verb list for
-implementation until this controller gets the same file:line audit
-treatment the others got.** Tracked as open question 1 below.
+| InfraCluster / ControlPlane object | `Cluster.spec.infrastructureRef` / `.controlPlaneRef` | Cluster controller (get/watch/patch/delete) + topology controller (get/watch/create-and-patch via SSA/delete, when ClusterClass-based) | `get`, `watch`, `create`, `patch`, `delete` — no `list` (topology never lists provider GVKs, only native types; something outside core, e.g. clusterctl or a user, creates these for non-ClusterClass clusters) |
+| InfraMachine / BootstrapConfig object | `Machine.spec.infrastructureRef` / `.bootstrap.configRef` | Machine controller (get/watch/patch/delete) + MachineSet controller (get/list/create-via-SSA/patch/delete, for per-replica generated objects) | `get`, `list`, `watch`, `create`, `patch`, `delete` |
+| InfraMachineTemplate / BootstrapConfigTemplate / ControlPlane's InfrastructureMachineTemplate | `MachineSet`/`MachineDeployment` `.spec.template.spec.*Ref`, and topology's class-driven template management (create, rotate-on-change, delete-old-on-rotation) | MachineSet + MachineDeployment (get/patch, ownerRef only) + topology controller (get/create/patch-full-spec-via-SSA/delete) | `get`, `create`, `patch`, `delete` — **no `watch`**: confirmed unwatched by both the earlier audit and topology's controller, which explicitly watches only the current InfraCluster/ControlPlane objects (`cluster_controller.go:422-444`), not templates; template changes rely on periodic Cluster reconcile triggers |
+| MachinePool's infra ref object | `MachinePool.spec.template.spec.infrastructureRef` | MachinePool controller | `get`, `watch` confirmed by audit; `patch`/`delete` presumed to mirror Machine's pattern but not individually cited — **verify before finalizing this row specifically** (open question 2) |
 
 ## Options considered (retained for record)
 
@@ -290,10 +290,12 @@ rather than a true wildcard.
 
 ## Open questions before implementation
 
-1. **Audit `core/reconcilers/topology/cluster`** the same way the other
-   five packages were audited, and fold its verb requirements into the
-   InfraCluster/ControlPlane and Template rows above before those rows are
-   used to write actual `PermissionClaim` manifests or RBAC.
+1. ~~Audit `core/reconcilers/topology/cluster`~~ — **done** (2026-08-14);
+   folded into the verb table above. Notable result: topology is the only
+   controller that SSA-patches full provider-object specs (not just
+   ownerRef/labels), and the only one that creates InfraCluster/
+   ControlPlane objects directly (for ClusterClass-based clusters) — both
+   now reflected in the InfraCluster/ControlPlane row's verb set.
 2. **Confirm MachinePool's `patch`/`delete` behavior** against
    `machinepool_controller_phases.go` specifically (the audit confirmed
    `get`/`watch` but not the mutating verbs for this controller).
