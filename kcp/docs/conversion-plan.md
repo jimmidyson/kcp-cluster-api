@@ -60,9 +60,12 @@ upstream edits — just N managers instead of 1, supervised by our own
 process.
 
 This trades some memory/goroutine overhead (a cache + workqueues per
-workspace) for zero upstream coupling. Mitigations for that cost are in
-Phase 4 below; they're explicitly deferred so Phase 1–3 can prove
-correctness first.
+workspace) for zero upstream coupling — see "Scalability risks" below for
+how much, and D6 for the architectural choice (independent real caches vs.
+a shared wildcard cache behind per-workspace facades) that determines it.
+Phase 1's skeleton can start with real per-workspace managers regardless
+of that choice, since it's single-workspace either way; Phase 4 is where
+the chosen mitigation gets fully implemented.
 
 Webhooks are the one place a single shared process is cheaper than N: a
 `ValidatingWebhookConfiguration`/`ConversionWebhook` request is stateless
@@ -72,6 +75,75 @@ path/host kcp routes it through) and looks up the right workspace-scoped
 client on demand, rather than needing one webhook server per workspace.
 This needs a spike (G6 below) to pin down exactly how the target kcp
 version identifies the source workspace on an incoming webhook call.
+
+## Scalability risks: per-workspace cache multiplication
+
+The chosen model's central cost is that controller-runtime's `cache.Cache`
+is informer-based (one `Reflector` doing LIST+WATCH per GVK, storing
+deserialized objects in memory) with no built-in per-tenant partitioning —
+so N workspace-managers means N *fully independent* copies of that cost,
+not a partitioned share of one. KCP's workspace model makes this worse
+than generic multi-cluster fan-out would suggest:
+
+- **Watch/LIST multiplication lands on one physical shard.** KCP
+  workspaces are logical; many commonly share one physical shard (one
+  etcd, one apiserver-like process). N managers × N caches doesn't spread
+  load across N physical control planes — it can concentrate N× the
+  watch connections, LIST calls, and QPS onto the *same* backing shard.
+  Core alone watches a dozen+ GVKs; ×4 provider binaries ×W workspaces is
+  30–50×W persistent watch streams potentially against one shard. This is
+  exactly the problem kcp's wildcard-watch + `multicluster-provider` model
+  exists to solve, and it's what we give up by requiring unmodified
+  upstream `ctrl.Manager`s.
+- **Startup thundering herd.** Every informer full-LISTs on warm-up. If
+  the pool supervisor brings up W workspace-managers concurrently (cold
+  start, rolling restart, scale-up), that's a burst of simultaneous LISTs
+  across all types across all workspaces hitting one shard at once —
+  `core/main.go` already sets a 5m `CacheSyncTimeout` for *single-cluster*
+  reasons; multiplied by workspace count, sync timeouts and
+  crash-loop-induced retries (which add more LIST load) become a real
+  failure mode without staggered/concurrency-limited bring-up.
+- **Fixed per-manager overhead dominates at high tenant counts.** Even a
+  near-idle workspace still pays for a full set of informers, workqueues,
+  goroutines, client-go transport pools, and metrics registries per
+  provider binary. KCP's value proposition is cheap, numerous, often-idle
+  workspaces, so this fixed baseline (order: tens of MB per manager) times
+  W×4 binaries is likely where the model hits a wall before actual object
+  volume does.
+- **Leader-election lease traffic scales with W if done naively.** If
+  each workspace-manager independently enables `LeaderElection: true`
+  (needed for HA replicas), that's Lease-renewal writes roughly every 10s
+  *per workspace* — a coordination-only QPS floor that scales linearly
+  with tenant count. The pool supervisor should shard at the
+  replica/consistent-hash-ring level instead of letting every spun-up
+  manager run its own leader election.
+- **QPS/burst budgets don't compose.** `restConfigQPS`/`Burst` are tuned
+  today to protect one apiserver. Instantiated per workspace-manager, the
+  effective ceiling against a shared shard becomes W × the configured
+  value unless the pool supervisor centrally throttles — easy to blow past
+  shard capacity as tenant count grows.
+
+What does *not* have this problem: the shared webhook layer (G4) is one
+listener regardless of W. And upstream's existing cache tuning
+(`DisableFor` Secret/ConfigMap, `PartialObjectMetadata`-only Secret cache)
+already reduces the per-workspace multiplier for those types, since not
+every GVK gets a persistent informer.
+
+**Alternative worth prototyping before G2's design is locked:**
+AGENTS.md's extension point explicitly includes wrapping "the
+`client.Client` (and caches, REST config, etc.)" — the manager handed to
+upstream's unmodified `SetupWithManager` doesn't have to own N fully
+independent real caches. A shared wildcard-watching informer layer (one
+watch per GVK across all bound workspaces, demuxed client-side by
+workspace) could back lightweight per-workspace `ctrl.Manager`-shaped
+facades whose `GetCache()`/`GetClient()` return workspace-filtered views
+over the shared store. That collapses watch/LIST count back to O(types)
+instead of O(types × workspaces) while still satisfying "hand upstream's
+unmodified constructors a `ctrl.Manager`." It's effectively
+`multicluster-runtime`'s approach re-derived from the cache side instead
+of the reconciler-request side, and it changes G2's shape substantially —
+worth a spike comparison (D6 below) against the simple N-real-managers
+approach before committing.
 
 ## Phase 0 — decisions (groundwork, sequential, do first)
 
@@ -85,6 +157,7 @@ early and expensive to unwind later.
 | D3 | APIExport/APIBinding schema strategy | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. |
 | D4 | Workspace discovery mechanism | Use `kcp-dev/multicluster-provider`'s `Provider` purely as a discovery/lifecycle engine (workspace bound/unbound callbacks) driving our own manager-pool supervisor — not as the reconciler-facing API. |
 | D5 | Identity/RBAC model | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). |
+| D6 | Cache architecture: N independent real managers vs. shared-wildcard-cache manager facades | See "Scalability risks" above. This changes G2's shape, so decide before Phase 2 starts, not after. If the target deployment is only ever dozens of workspaces, N-real-managers is simpler and fine; if it needs to approach kcp's own scale (hundreds–thousands), the facade approach is likely required, not optional hardening. |
 
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.
@@ -173,7 +246,9 @@ once — same recipe, different source `main.go`.
 
 - Scale-out: shard workspaces across replicas (consistent hashing or
   leader-election-per-shard) so one pod isn't holding every workspace's
-  manager.
+  manager. If D6 chose the shared-wildcard-cache facade approach, this is
+  also where that gets built out fully (Phase 1–3 can run on the simpler
+  N-real-managers path in the meantime).
 - Idle eviction: stop (and later restart) managers for workspaces with no
   recent reconcile activity, to bound steady-state memory.
 - Upgrade/rebase drill: pull the next upstream cluster-api release through
@@ -212,4 +287,5 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
    their kubeconfig Secrets are already workspace-scoped by virtue of
    which manager is reading them).
 3. How many workspaces this needs to scale to in practice — determines
-   how urgent Phase 4's sharding/eviction work is relative to Phase 3.
+   D6 (cache architecture) and how urgent Phase 4's sharding/eviction work
+   is relative to Phase 3.
