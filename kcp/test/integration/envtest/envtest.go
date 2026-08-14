@@ -36,6 +36,20 @@ const DefaultWorkspace = "root"
 func Environment(t *testing.T, workspace string, opts ...kcptestingserver.Option) *rest.Config {
 	t.Helper()
 
+	cfg, _ := EnvironmentAndServer(t, workspace, opts...)
+	return cfg
+}
+
+// EnvironmentAndServer is Environment, but also returns the underlying
+// kcptestingserver.RunningServer. Use this instead of Environment when a
+// test needs the server handle itself - e.g. to build a
+// github.com/kcp-dev/sdk/testing cluster-aware clientset (via
+// server.BaseConfig(t)) for fixtures like kcptesting.NewWorkspaceFixture
+// that create workspaces dynamically, which a single workspace-scoped
+// *rest.Config can't do.
+func EnvironmentAndServer(t *testing.T, workspace string, opts ...kcptestingserver.Option) (*rest.Config, kcptestingserver.RunningServer) {
+	t.Helper()
+
 	if workspace == "" {
 		workspace = DefaultWorkspace
 	}
@@ -52,5 +66,5 @@ func Environment(t *testing.T, workspace string, opts ...kcptestingserver.Option
 	if err != nil {
 		t.Fatalf("failed to build REST config for workspace %q: %v", workspace, err)
 	}
-	return cfg
+	return cfg, server
 }
