@@ -7,8 +7,12 @@ on:
   pull_request:
     paths: ["kcp/**"]
 
-# Remove all permissions from GITHUB_TOKEN except metadata.
-permissions: {}
+# actions/checkout needs contents:read to authenticate the fetch against
+# this private repo; `permissions: {}` (this repo's other workflows,
+# inherited from public upstream cluster-api, where anonymous fetches
+# work) strips that and checkout fails with "Repository not found".
+permissions:
+  contents: read
 
 jobs:
   test-unit:
