@@ -20,8 +20,15 @@ names:
 - `kcp/client/` — workspace-aware `client.Client` / REST config wrapping.
 - `kcp/api/` — any KCP-specific API types (e.g. new CRDs), if needed.
 - `kcp/internal/` — implementation details not meant for external import.
-- `kcp/test/` — integration/e2e tests specific to KCP behavior.
+- `kcp/test/integration/` — integration tests specific to KCP behavior,
+  run against a real kcp server via `kcp/test/integration/envtest` (see
+  `kcp/docs/testing.md`).
 - `kcp/docs/` — design notes and docs specific to this fork.
+
+`kcp/` is its own Go module (`kcp/go.mod`), separate from the root
+`sigs.k8s.io/cluster-api` module, so it can depend on things like
+`github.com/kcp-dev/sdk` without touching root `go.mod` — see the
+"Manifest-style files" section of `AGENTS.md`.
 
 ## Ground rules (see `AGENTS.md` for full detail)
 
@@ -29,3 +36,6 @@ names:
 2. Integrate with upstream via its existing public extension points only.
 3. If that's not possible for something, stop and raise it rather than
    reaching into upstream code.
+4. All new behavior is developed test-first, with both unit tests and
+   KCP-envtest integration tests as applicable — see
+   [`kcp/docs/testing.md`](docs/testing.md).
