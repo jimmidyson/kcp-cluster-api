@@ -167,47 +167,68 @@ halves matter equally; see "Known gaps" below for the second one.
   skeleton doesn't itself reconcile, or disable the feature gate
   (`feature.MutableGates`) for ones it can.
 
-**Known gaps — architectural, not implementation bugs, and explicitly not
-worked around per AGENTS.md ("if upstream doesn't expose the hook you need,
-that's a blocker to raise, not a workaround to reach for"):**
+### Known gaps
 
-- **Core reconcilers cannot resolve contract-versioned cross-references
-  (`spec.infrastructureRef`, and by the same code path `spec.bootstrap.configRef`/
-  `controlPlaneRef`) against a type only available via `APIBinding`.**
-  `controllers/external.GetObjectFromContractVersionedRef` — used directly
-  by `cluster.Reconciler` and `machine.Reconciler`, with no pluggable hook
-  (unlike `core/webhooks/conversion`'s `SetAPIVersionGetter`) — calls
-  `internal/contract.GetGKMetadata`, which does a direct
-  `CustomResourceDefinition` object lookup by name. A workspace that only
-  consumes `DevCluster`/`DevMachine` via `APIBinding` has no such object:
-  the CRD-shaped source of truth (the `APIResourceSchema`) lives in the
-  *exporting* workspace instead, and this code path has no way to reach it.
-  Every `Cluster`/`Machine` reconcile against a cross-referenced
-  infrastructure type fails with `InternalError` as a result — confirmed
-  and asserted as a known-failure regression check in
-  `kcp/test/integration/coremanager`. This blocks Phase 1's literal exit
-  criterion (a `DevMachine` actually reaching `Ready`) in any environment
-  matching this walking skeleton's setup.
-  - This is not a narrow corner case: `infrastructureRef` is how *every*
-    infrastructure provider integrates with core Cluster API, so this
-    affects the core reconcile path broadly, not just this one field.
-  - No workaround was attempted that would touch upstream code or fake a
-    local CRD object to paper over the gap; per AGENTS.md, this needs a
-    maintainer decision on the resolution path before Phase 2/3 investment
-    continues. Options to weigh (not decided here): (a) get
-    `controllers/external`/`internal/contract` to accept a pluggable
-    resolver the way conversion already does (an upstream PR, not a
-    fork-local patch — this fork's invariant is that upstream stays
-    unmodified, so this would need to land in `kubernetes-sigs/cluster-api`
-    itself); (b) a kcp-native equivalent — e.g. mirroring contract-version
-    labels onto the `APIResourceSchema` and giving reconcilers a
-    cross-workspace client able to read the exporting workspace (this is
-    G3-shaped work, and clients crossing workspace boundaries inside a
-    single-workspace-scoped reconciler raises its own design questions);
-    (c) accept the limitation for infrastructure providers and scope this
-    fork to reconcilers that don't cross-reference (unlikely to be viable
-    given how central `infrastructureRef` is).
-  - This finding should be escalated and resolved (or at minimum
-    consciously accepted with a documented mitigation plan) before
-    Phase 2/3 fan-out, since P1–P3 (bootstrap/control-plane/docker-infra
-    provider ports) all depend on this exact mechanism working.
+**Core reconcilers couldn't resolve contract-versioned cross-references
+(`spec.infrastructureRef`, and by the same code path
+`spec.bootstrap.configRef`/`controlPlaneRef`) against a type only available
+via `APIBinding` — resolved via a declared upstream exception, not a
+workaround.**
+
+`controllers/external.GetObjectFromContractVersionedRef` and
+`internal/contract.GetContractVersion`/`GetAPIVersion` — used directly by
+`cluster.Reconciler`, `machine.Reconciler`, and most of `core/reconcilers`
+— all funnel through `internal/contract.GetGKMetadata`, which did a direct
+`CustomResourceDefinition` object lookup by name with no pluggable hook
+(unlike `core/webhooks/conversion`'s `SetAPIVersionGetter`). A workspace
+that only consumes `DevCluster`/`DevMachine` via `APIBinding` has no such
+object — the CRD-shaped source of truth (the `APIResourceSchema`) lives in
+the *exporting* workspace instead — so every `Cluster`/`Machine` reconcile
+against a cross-referenced infrastructure type failed with `InternalError`.
+This wasn't a narrow corner case: `infrastructureRef` is how *every*
+infrastructure provider integrates with core Cluster API, so it blocked the
+core reconcile path broadly, not just this one field — and by extension
+P1–P3 (bootstrap/control-plane/docker-infra provider ports), which all
+depend on the same mechanism.
+
+**Resolution (repo owner decision, not an agent's unilateral call):**
+rather than a local patch or a workaround that papers over the gap without
+touching upstream, `GetGKMetadata` was minimally factored into an
+overridable package var, `GetGKMetadataFunc` — the single, deliberate,
+tracked exception to this fork's upstream-is-read-only invariant, recorded
+in AGENTS.md itself (search "declared exception") so the exception is
+visible, not silent. The diff is exactly this indirection; default
+behavior for anyone not overriding it is unchanged and covered by
+upstream's own existing tests (`controllers/external`, `internal/contract`
+still pass unmodified). `kcp/internal/contractmetadata.Registry` supplies
+the override: a static `GroupKind -> labels` map built from the same CRD
+manifests `kcp/internal/kcpfixtures` already reads to publish
+`APIResourceSchema`s — no live lookup, no cross-workspace client, nothing
+G3-shaped needed. `kcp/internal/coremanager.SetupContractMetadata` wires it
+in for the docker/dev infrastructure provider types this skeleton
+reconciles, and a test (`TestDevInfraContractLabelsMatchKustomization`)
+guards the hardcoded labels against drifting from the real kustomize
+labels transformer they mirror.
+
+**Verified end to end**, in `kcp/test/integration/coremanager`: after this
+fix, `Cluster`/`DevCluster`/`Machine`/`DevMachine` reconciliation
+demonstrably runs unmodified upstream docker/dev-provider logic all the way
+to real Docker daemon calls (creating the load-balancer and machine
+containers) — the `InternalError` failure mode is gone entirely. The test
+stops short of asserting full `DevMachine` `Ready`, not because of
+anything KCP-related, but because that also requires pulling
+`kindest/node`/`kindest/haproxy` images from Docker Hub, which the
+sandbox this was developed in blocks at the network level (confirmed
+independently: even a bare `docker pull kindest/haproxy:...` there gets a
+403). In an environment with normal internet access — e.g. this repo's own
+`kcp-tests.yaml` CI runner — the same reconcile loop is expected to reach
+`Ready`; that remaining gap is a property of the sandbox, not the
+architecture.
+
+**Still worth doing, not urgent:** file the same fix upstream against
+`kubernetes-sigs/cluster-api` (a pluggable resolver, mirroring
+`SetAPIVersionGetter`) so this fork's local exception becomes deletable on
+a future rebase once it lands, rather than permanent drift. Until then,
+re-check `GetGKMetadataFunc`'s diff against `internal/contract/version.go`
+on every rebase — it's small, but it's the one file this invariant no
+longer holds for automatically.

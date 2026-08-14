@@ -171,6 +171,23 @@ func GetContractVersionForVersion(ctx context.Context, c client.Reader, gk schem
 //
 // This function is greatly more efficient than GetCRDWithContract and should be preferred in most cases.
 func GetGKMetadata(ctx context.Context, c client.Reader, gk schema.GroupKind) (*metav1.PartialObjectMetadata, error) {
+	return GetGKMetadataFunc(ctx, c, gk)
+}
+
+// GetGKMetadataFunc is GetGKMetadata's actual implementation, factored out
+// into an overridable package var.
+//
+// KCP fork exception (see AGENTS.md): this indirection is the one
+// deliberate, tracked exception to this repo's upstream-is-read-only
+// invariant. GetGKMetadata is the single root every contract-version lookup
+// in core/reconcilers and controllers/external funnels through (directly or
+// via GetContractVersion/GetAPIVersion below), so overriding it here - not
+// at each call site - covers all of them uniformly. Everything else in this
+// function is unchanged from upstream; overridable for environments where
+// the CustomResourceDefinition lookup has no equivalent (e.g. a KCP
+// workspace consuming the referenced type only via APIBinding, with no
+// local CRD object to read).
+var GetGKMetadataFunc = func(ctx context.Context, c client.Reader, gk schema.GroupKind) (*metav1.PartialObjectMetadata, error) {
 	meta := &metav1.PartialObjectMetadata{}
 	meta.SetName(contract.CalculateCRDName(gk.Group, gk.Kind))
 	meta.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))

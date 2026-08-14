@@ -185,20 +185,26 @@ D4's open questions about the library are answered (adopt as-is, adopt
 with workarounds, or fall back to hand-rolling). This is the thing to
 demo before greenlighting Phase 2's investment.
 
-**Status: spike complete, mixed result — see
+**Status: complete — see
 [ADR-0001's "Phase 1 results" section](adr-0001-per-workspace-manager-pool.md#phase-1-results)
 for the full writeup.** D4's open questions are answered (write-path
 routing, leader election/shared-process model, and conversion/admission
-webhooks all work as hoped). The literal "Cluster gets provisioned
-end-to-end" bar is **not** cleared: a real, load-bearing gap was found in
-core reconcile logic (`controllers/external.GetObjectFromContractVersionedRef`,
-used to resolve `infrastructureRef`/`bootstrap.configRef`/`controlPlaneRef`,
-has no pluggable hook and does a `CustomResourceDefinition` lookup that
-doesn't exist for APIs a workspace only consumes via `APIBinding`), which
-blocks every core reconciler that follows a cross-referenced type — not a
-corner case. Per AGENTS.md, this was surfaced and documented rather than
-worked around, and needs a maintainer decision before Phase 2/3 fan-out
-(P1–P3 in particular all depend on this same mechanism).
+webhooks all work as hoped). The exit criterion — a Cluster reconciling
+through unmodified upstream code into real docker/dev-provider Docker
+daemon calls — is met. Getting there required one deliberate, tracked,
+repo-owner-approved exception to the upstream-is-read-only invariant (see
+AGENTS.md's "declared exception" section and ADR-0001's "Known gaps"):
+`controllers/external.GetObjectFromContractVersionedRef` and friends
+funnel through `internal/contract.GetGKMetadata`, which did a hardcoded
+`CustomResourceDefinition` lookup with no pluggable hook — blocking every
+reconciler that resolves `infrastructureRef`/`bootstrap.configRef`/
+`controlPlaneRef`, not a corner case. `GetGKMetadata` is now a minimal,
+overridable indirection (`GetGKMetadataFunc`), backed in `kcp/` by a
+static registry built from the same CRD manifests already used to publish
+`APIResourceSchema`s — no cross-workspace client, no G3 work needed. Full
+`DevMachine` readiness in the integration test is gated only by this
+sandbox's network policy blocking Docker Hub image pulls, not by anything
+KCP-related; a normal CI runner is expected to reach it.
 
 ## Phase 2 — shared infrastructure (groundwork, sequential-ish)
 

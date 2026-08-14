@@ -150,6 +150,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	coremanager.SetupContractMetadata()
+
 	cfg := ctrl.GetConfigOrDie()
 
 	provider, err := apiexport.New(cfg, endpointSliceName, apiexport.Options{Scheme: scheme})
