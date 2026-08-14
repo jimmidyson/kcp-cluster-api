@@ -150,6 +150,11 @@ early and expensive to unwind later.
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.
 
+**Status: done.** See
+[ADR-0001](adr-0001-per-workspace-manager-pool.md) for the recorded
+decisions (D1, D3, D5 resolved by the repository owner; D2, D4, D6
+confirmed at their stated defaults). Phase 1 is unblocked.
+
 ## Phase 1 — walking skeleton (groundwork, sequential, small team)
 
 Prove the model end-to-end against a *single, hardcoded* workspace before
