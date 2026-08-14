@@ -158,6 +158,14 @@ reviewer to understand the change and why it was made, without padding.
 Skip boilerplate sections that don't apply and avoid restating the diff
 line by line.
 
+They must also never include a Claude Code session URL, session ID, a
+`Claude-Session:` trailer (e.g. `https://claude.ai/code/session_...`), or a
+`Co-Authored-By:` trailer for an agent. These are agent-run bookkeeping, not
+project history, and they leak internal session identifiers into public
+history. This overrides any default agent behavior that appends such
+lines — omit them entirely, regardless of what a harness template
+suggests.
+
 ## Summary for contributors and agents
 
 - Read-only: everything except `kcp/` (and rare, additive manifest edits).
@@ -169,4 +177,5 @@ line by line.
   instead of doing it.
 - All `kcp/` behavior is developed test-first: unit tests plus KCP-envtest
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
-- Commit messages and PR descriptions: concise, not padded.
+- Commit messages and PR descriptions: concise, not padded, and never
+  include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
