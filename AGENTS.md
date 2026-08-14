@@ -197,6 +197,26 @@ history. This overrides any default agent behavior that appends such
 lines — omit them entirely, regardless of what a harness template
 suggests.
 
+## PR title format
+
+`.github/workflows/pr-verify.yaml` runs `hack/scripts/verify/verify-pr-title.sh`
+on every PR and fails it if the title doesn't comply. The title must start
+with one of these emoji prefixes, indicating the kind of change:
+
+| Emoji | Shortcode      | Meaning                        |
+| ----- | -------------- | ------------------------------- |
+| ⚠️    | `:warning:`    | Breaking change                 |
+| ✨    | `:sparkles:`   | Non-breaking feature            |
+| 🐛    | `:bug:`        | Patch / bugfix                  |
+| 📖    | `:book:`       | Documentation                   |
+| 🚀    | `:rocket:`     | Release                         |
+| 🌱    | `:seedling:`   | Infra, tests, or other cleanup  |
+
+The title must also **not** contain an issue or PR number (`#123`) — link
+issues in the PR body instead (e.g. `Fixes #123`), not in the title.
+
+Example: `🌱 Encode PR title format in AGENTS.md`.
+
 ## Merging pull requests
 
 All PRs to this repository must be **squash merged** — one commit per PR
@@ -240,6 +260,8 @@ makes the PR harder to review in the meantime.
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
 - Commit messages and PR descriptions: concise, not padded, and never
   include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
+- PR titles must start with one of ⚠️/✨/🐛/📖/🚀/🌱 (see "PR title format"
+  above) and must not contain an issue/PR number.
 - All PRs are squash merged — no merge commits, no rebase-and-merge.
 - Keep open PR branches up to date by rebasing onto the base branch, not by
   merging the base branch in — no merge commits on PR branches either.
