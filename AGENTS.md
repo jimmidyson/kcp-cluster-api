@@ -151,6 +151,13 @@ whichever apply:
 A PR that adds or changes behavior under `kcp/` without accompanying tests
 at both applicable tiers is incomplete.
 
+## Commit and PR descriptions
+
+Keep commit messages and PR descriptions concise: enough context for a
+reviewer to understand the change and why it was made, without padding.
+Skip boilerplate sections that don't apply and avoid restating the diff
+line by line.
+
 ## Summary for contributors and agents
 
 - Read-only: everything except `kcp/` (and rare, additive manifest edits).
@@ -162,3 +169,4 @@ at both applicable tiers is incomplete.
   instead of doing it.
 - All `kcp/` behavior is developed test-first: unit tests plus KCP-envtest
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
+- Commit messages and PR descriptions: concise, not padded.
