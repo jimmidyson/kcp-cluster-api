@@ -296,3 +296,47 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
    joining/leaving a `Partition`, or a workspace migrating between
    shards), or requires a restart to pick up a new endpoint set — drives
    whether D6's partition topology can change without a rollout.
+
+## Executing this plan: what's dispatchable now vs. what needs a human first
+
+This doc is written to be handed to multiple contributors/agents, but not
+uniformly — some of it is ready for direct autonomous dispatch today, and
+some of it isn't, yet.
+
+**Needs a human decision before any agent touches it:** D1 (kcp version to
+pin), D3 (APIExport schema + permission-claim scope), and D5
+(RBAC/identity model) are written as options to weigh, not answers. An
+agent hand this without a resolved ADR either stalls or silently picks a
+default — and for D3/D5 specifically, a wrong silent default is a
+security decision made without review (permission-claim scope creep, an
+identity model that's more permissive than intended), not just a rework
+cost. Get these into the `kcp/docs/adr-0001-*.md` as actual decisions
+before dispatching Phase 1, and don't let an agent write that ADR
+unsupervised.
+
+**Keeps a human review checkpoint regardless of who writes the code:**
+G4 (webhook dispatch) and anything implementing D5. G4 is explicitly
+flagged above as "least well-understood," and Phase 4 separately flags it
+as the one component where a bug is a cross-tenant bleed, not an ordinary
+bug — don't let an agent's plausible-looking implementation of it merge
+without a human (or a dedicated security review pass) checking the
+workspace-resolution logic specifically, independent of normal code
+review.
+
+**Ready for dispatch now:** Phase 1, as one closely-watched session (it's
+the spike everything else depends on — don't parallelize it). Once Phase
+0's ADR and Phase 1 land: P1–P3 and P5 are the best-shaped tasks in this
+doc for parallel agent dispatch — "port `<provider>/main.go`'s wiring onto
+G2, same recipe as Phase 1's core-provider port" is concrete and bounded,
+and each track lives in its own `kcp/cmd/<name>/` directory, so agents
+working them simultaneously won't collide on files.
+
+**Before fanning Phase 2/3 out to multiple agents with no shared
+context:** pin G1–G3's behavioral descriptions into actual Go interface
+signatures first (a types-only skeleton, landed as its own small PR) —
+right now they're prose ("turns a workspace path + config into a
+`*rest.Config`"), which is fine for a human but leaves room for two
+agents to independently build incompatible shapes for the same seam. Add
+a one-line acceptance check per G/P item as each is concretized (a test
+or a minimal manual verification command), so an agent has an unambiguous
+done-condition instead of "compiles."
