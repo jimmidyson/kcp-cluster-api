@@ -55,6 +55,7 @@ import (
 
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/kcp/internal/coremanager"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
@@ -173,18 +174,18 @@ func main() {
 	<-mgr.Elected()
 
 	setupLog.Info("Waiting for the target workspace to be engaged", "clusterName", workspaceCluster)
-	wsMgr, err := waitForManager(ctx, mgr, multicluster.ClusterName(workspaceCluster), engagePollInterval, engageTimeout)
+	wsMgr, err := coremanager.WaitForManager(ctx, mgr, multicluster.ClusterName(workspaceCluster), engagePollInterval, engageTimeout)
 	if err != nil {
 		setupLog.Error(err, "Target workspace never became available")
 		os.Exit(1)
 	}
 
 	setupLog.Info("Wiring reconcilers and webhooks onto the engaged workspace", "clusterName", workspaceCluster)
-	if err := setupReconcilers(ctx, wsMgr); err != nil {
+	if err := coremanager.SetupReconcilers(ctx, wsMgr); err != nil {
 		setupLog.Error(err, "Unable to set up reconcilers")
 		os.Exit(1)
 	}
-	if err := setupWebhooks(wsMgr); err != nil {
+	if err := coremanager.SetupWebhooks(wsMgr); err != nil {
 		setupLog.Error(err, "Unable to set up webhooks")
 		os.Exit(1)
 	}

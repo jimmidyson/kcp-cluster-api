@@ -14,7 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+// Package coremanager holds the Phase 1 walking skeleton's reconciler and
+// webhook wiring, importable both by kcp/cmd/core-manager's thin main() and
+// by the Phase 1 integration test.
+package coremanager
 
 import (
 	"context"
@@ -62,7 +65,7 @@ func init() {
 	_ = policyv1.AddToScheme(inmemoryScheme)
 }
 
-// setupReconcilers wires the walking skeleton's reconciler set onto mgr: the
+// SetupReconcilers wires the walking skeleton's reconciler set onto mgr: the
 // core Cluster/Machine reconcilers and the docker/dev infrastructure
 // provider's DevCluster/DevMachine reconcilers, all unmodified upstream
 // exported types, per ADR-0001's D3 scope. Everything else core/main.go and
@@ -79,7 +82,7 @@ func init() {
 // CRD-shaped source of truth (the APIResourceSchema) lives in the exporting
 // workspace instead. Running it here would be reconciling a concept that
 // doesn't apply under kcp's APIBinding model.
-func setupReconcilers(ctx context.Context, mgr ctrl.Manager) error {
+func SetupReconcilers(ctx context.Context, mgr ctrl.Manager) error {
 	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
 		HTTPClient: mgr.GetHTTPClient(),
 		Cache:      &client.CacheOptions{Reader: mgr.GetCache()},
@@ -148,14 +151,14 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) error {
 	return nil
 }
 
-// setupWebhooks wires the core Cluster/Machine admission webhooks and the
+// SetupWebhooks wires the core Cluster/Machine admission webhooks and the
 // docker/dev infrastructure provider's DevCluster/DevMachine admission
 // webhooks onto mgr, which also registers the shared "/convert" endpoint
 // (see sigs.k8s.io/controller-runtime/pkg/builder's webhook builder) that
 // serves the core Cluster v1beta1<->v1beta2 conversion webhook - satisfying
 // Phase 1's "at least one admission webhook and the conversion webhook"
 // exit criterion without any extra wiring of our own.
-func setupWebhooks(mgr ctrl.Manager) error {
+func SetupWebhooks(mgr ctrl.Manager) error {
 	conversion.SetAPIVersionGetter(func(ctx context.Context, gk schema.GroupKind) (string, error) {
 		return contract.GetAPIVersion(ctx, mgr.GetClient(), gk)
 	})

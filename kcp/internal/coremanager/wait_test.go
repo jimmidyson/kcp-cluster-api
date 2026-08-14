@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package coremanager
 
 import (
 	"context"
@@ -52,12 +52,12 @@ func TestWaitForManagerSucceedsAfterRetries(t *testing.T) {
 	want := fakeManager{}
 	fg := &fakeManagerGetter{failuresBeforeSuccess: 3, result: want}
 
-	got, err := waitForManager(t.Context(), fg, multicluster.ClusterName("test-cluster"), time.Millisecond, time.Second)
+	got, err := WaitForManager(t.Context(), fg, multicluster.ClusterName("test-cluster"), time.Millisecond, time.Second)
 	if err != nil {
-		t.Fatalf("waitForManager() error = %v, want nil", err)
+		t.Fatalf("WaitForManager() error = %v, want nil", err)
 	}
 	if got != want {
-		t.Fatalf("waitForManager() = %v, want %v", got, want)
+		t.Fatalf("WaitForManager() = %v, want %v", got, want)
 	}
 	if calls := fg.calls.Load(); calls != 4 {
 		t.Fatalf("GetManager called %d times, want 4 (3 failures + 1 success)", calls)
@@ -67,9 +67,9 @@ func TestWaitForManagerSucceedsAfterRetries(t *testing.T) {
 func TestWaitForManagerTimesOut(t *testing.T) {
 	fg := &fakeManagerGetter{permanentErr: errors.New("never engaged")}
 
-	_, err := waitForManager(t.Context(), fg, multicluster.ClusterName("test-cluster"), time.Millisecond, 20*time.Millisecond)
+	_, err := WaitForManager(t.Context(), fg, multicluster.ClusterName("test-cluster"), time.Millisecond, 20*time.Millisecond)
 	if err == nil {
-		t.Fatal("waitForManager() error = nil, want a timeout error")
+		t.Fatal("WaitForManager() error = nil, want a timeout error")
 	}
 }
 
@@ -78,9 +78,9 @@ func TestWaitForManagerRespectsContextCancellation(t *testing.T) {
 	fg := &fakeManagerGetter{permanentErr: errors.New("never engaged")}
 
 	cancel()
-	_, err := waitForManager(ctx, fg, multicluster.ClusterName("test-cluster"), time.Millisecond, time.Minute)
+	_, err := WaitForManager(ctx, fg, multicluster.ClusterName("test-cluster"), time.Millisecond, time.Minute)
 	if err == nil {
-		t.Fatal("waitForManager() error = nil, want an error from the already-cancelled context")
+		t.Fatal("WaitForManager() error = nil, want an error from the already-cancelled context")
 	}
 }
 

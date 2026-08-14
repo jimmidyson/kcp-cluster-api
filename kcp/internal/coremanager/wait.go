@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package coremanager
 
 import (
 	"context"
@@ -27,14 +27,14 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
 
-// managerGetter is the subset of mcmanager.Manager that waitForManager needs.
-// It exists so waitForManager can be unit-tested with a fake, without having
+// ManagerGetter is the subset of mcmanager.Manager that WaitForManager needs.
+// It exists so WaitForManager can be unit-tested with a fake, without having
 // to implement the full mcmanager.Manager interface.
-type managerGetter interface {
+type ManagerGetter interface {
 	GetManager(ctx context.Context, clusterName multicluster.ClusterName) (manager.Manager, error)
 }
 
-// waitForManager polls mg.GetManager for clusterName until it succeeds, an
+// WaitForManager polls mg.GetManager for clusterName until it succeeds, an
 // unexpected error occurs, timeout elapses, or ctx is cancelled.
 //
 // The kcp APIExport provider engages a workspace asynchronously, some time
@@ -42,7 +42,7 @@ type managerGetter interface {
 // section of kcp/docs/conversion-plan.md); GetManager returns an error for
 // any not-yet-engaged cluster name, so a caller that needs a specific,
 // already-known workspace has to poll rather than call GetManager once.
-func waitForManager(ctx context.Context, mg managerGetter, clusterName multicluster.ClusterName, pollInterval, timeout time.Duration) (manager.Manager, error) {
+func WaitForManager(ctx context.Context, mg ManagerGetter, clusterName multicluster.ClusterName, pollInterval, timeout time.Duration) (manager.Manager, error) {
 	var result manager.Manager
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		mgr, err := mg.GetManager(ctx, clusterName)
