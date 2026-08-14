@@ -100,10 +100,114 @@ Unchanged from the plan's default: start with one `Partition` / one
 build out `PartitionSet`-driven multi-shard topology once a real kcp
 install runs multiple shards — not preemptively.
 
-## Next step
+## Phase 1 results
 
-Phase 0 is now complete. Phase 1 (walking skeleton: `kcp/cmd/core-manager`
-against one hardcoded workspace, core + docker-infrastructure CRDs, real
-unit + integration tests) is unblocked and ready for dispatch as one
-closely-watched session, per the conversion plan's "Executing this plan"
-section.
+Phase 1's walking skeleton (`kcp/cmd/core-manager`, `kcp/internal/coremanager`,
+`kcp/internal/kcpfixtures`) is implemented and has a passing integration test
+(`kcp/test/integration/coremanager`) against a real kcp server. It answers
+Phase 1's exit-criteria question — "do upstream's extension points really
+compose the way AGENTS.md assumes?" — with **yes for the mechanism, no for
+core reconcile logic that resolves contract-versioned cross-references**. Both
+halves matter equally; see "Known gaps" below for the second one.
+
+**Confirmed working, empirically, against a real kcp server:**
+
+- **Write-path routing** (D4's flagged open question): `mcmanager.Manager.GetManager(ctx, clusterName)`
+  returns a `scopedManager` whose `GetClient`/`GetCache`/etc. are scoped to
+  that one engaged workspace (backed by `cluster.Cluster`), while `Add`/
+  `Start` are shared with the local host manager. A reconciler's writes
+  provably land in that specific workspace, not a wildcard — proved via a
+  client built independently of the manager's own cache.
+- **Leader election / shared process model**: confirmed workable — a single
+  `mcmanager.Manager` runs every engaged workspace's controllers through one
+  shared `Start()`/workqueue loop; controllers can be `Add()`-ed after
+  `Start()` has already been called (needed since workspaces engage
+  asynchronously).
+- **Admission webhooks**: work unmodified. `coreadmission`/`infrawebhooks`
+  packages' `SetupWebhookWithManager` register against the engaged
+  workspace's manager exactly as they would against a normal
+  `ctrl.Manager`, and the generated `ValidatingWebhookConfiguration`/
+  `MutatingWebhookConfiguration` manifests work in a kcp workspace with only
+  their `clientConfig` patched from a `Service` ref to a direct URL
+  (`sigs.k8s.io/controller-runtime/pkg/envtest.WebhookInstallOptions`
+  already does exactly this patching).
+- **Conversion webhooks**: work unmodified for types with no
+  contract-versioned cross-references (e.g. `DevCluster`/`DevMachine`).
+  `multicluster-runtime`'s `scopedManager` implements `GetConverterRegistry`
+  specifically so the shared `/convert` endpoint
+  (`sigs.k8s.io/controller-runtime/pkg/builder`) works. kcp's
+  `APIResourceSchema.spec.conversion.webhook.clientConfig` requires a bare
+  `URL`, not a `Service` ref (kcp rejects `Service`-based client configs
+  outright).
+- **`APIExportEndpointSlice` activation is lazy**: kcp's
+  `apiexportendpointsliceurls` controller leaves `status.endpoints` empty
+  until at least one `APIBinding` consumes the export — publish the export,
+  bind a workspace, *then* wait for the endpoint slice, not before
+  (`kcpfixtures.PublishAPIExport`/`WaitForAPIExportEndpointSlice` are split
+  for exactly this reason).
+- **CRD → `APIResourceSchema` conversion has real constraints beyond
+  `CRDToAPIResourceSchema`'s own documented ones**: (a) this fork's
+  generated CRD manifests only carry a `spec.conversion` webhook strategy
+  via a kustomize patch applied at deploy time, not baked into
+  `config/crd/bases/*.yaml` — `kcpfixtures.PublishAPIExport` replicates that
+  patch at runtime; (b) `MachineDeployment`'s generated v1beta2 CRD declares
+  the `additionalPrinterColumns` entry `Available` twice, which vanilla CRD
+  admission tolerates but kcp's `APIResourceSchema` validation rejects
+  outright — worked around generically in `kcpfixtures.dedupeAdditionalPrinterColumns`
+  rather than upstream (per AGENTS.md, upstream CRD manifests stay
+  untouched).
+- **A reconciler's watches on types outside the bound API set aren't just
+  ignored.** `cluster.Reconciler`/`machine.Reconciler` unconditionally watch
+  `MachineSet`/`MachineDeployment` (always) and `MachinePool` (feature-gated,
+  **on by default** upstream) as event sources. If those CRDs aren't bound,
+  `controller-runtime`'s cache blocks that controller's startup for a long
+  time (order of a minute+) waiting on an informer that can never sync,
+  rather than degrading gracefully — so a workspace's bound API set has to
+  include every type a wired-in reconciler watches, even types this
+  skeleton doesn't itself reconcile, or disable the feature gate
+  (`feature.MutableGates`) for ones it can.
+
+**Known gaps — architectural, not implementation bugs, and explicitly not
+worked around per AGENTS.md ("if upstream doesn't expose the hook you need,
+that's a blocker to raise, not a workaround to reach for"):**
+
+- **Core reconcilers cannot resolve contract-versioned cross-references
+  (`spec.infrastructureRef`, and by the same code path `spec.bootstrap.configRef`/
+  `controlPlaneRef`) against a type only available via `APIBinding`.**
+  `controllers/external.GetObjectFromContractVersionedRef` — used directly
+  by `cluster.Reconciler` and `machine.Reconciler`, with no pluggable hook
+  (unlike `core/webhooks/conversion`'s `SetAPIVersionGetter`) — calls
+  `internal/contract.GetGKMetadata`, which does a direct
+  `CustomResourceDefinition` object lookup by name. A workspace that only
+  consumes `DevCluster`/`DevMachine` via `APIBinding` has no such object:
+  the CRD-shaped source of truth (the `APIResourceSchema`) lives in the
+  *exporting* workspace instead, and this code path has no way to reach it.
+  Every `Cluster`/`Machine` reconcile against a cross-referenced
+  infrastructure type fails with `InternalError` as a result — confirmed
+  and asserted as a known-failure regression check in
+  `kcp/test/integration/coremanager`. This blocks Phase 1's literal exit
+  criterion (a `DevMachine` actually reaching `Ready`) in any environment
+  matching this walking skeleton's setup.
+  - This is not a narrow corner case: `infrastructureRef` is how *every*
+    infrastructure provider integrates with core Cluster API, so this
+    affects the core reconcile path broadly, not just this one field.
+  - No workaround was attempted that would touch upstream code or fake a
+    local CRD object to paper over the gap; per AGENTS.md, this needs a
+    maintainer decision on the resolution path before Phase 2/3 investment
+    continues. Options to weigh (not decided here): (a) get
+    `controllers/external`/`internal/contract` to accept a pluggable
+    resolver the way conversion already does (an upstream PR, not a
+    fork-local patch — this fork's invariant is that upstream stays
+    unmodified, so this would need to land in `kubernetes-sigs/cluster-api`
+    itself); (b) a kcp-native equivalent — e.g. mirroring contract-version
+    labels onto the `APIResourceSchema` and giving reconcilers a
+    cross-workspace client able to read the exporting workspace (this is
+    G3-shaped work, and clients crossing workspace boundaries inside a
+    single-workspace-scoped reconciler raises its own design questions);
+    (c) accept the limitation for infrastructure providers and scope this
+    fork to reconcilers that don't cross-reference (unlikely to be viable
+    given how central `infrastructureRef` is).
+  - This finding should be escalated and resolved (or at minimum
+    consciously accepted with a documented mitigation plan) before
+    Phase 2/3 fan-out, since P1–P3 (bootstrap/control-plane/docker-infra
+    provider ports) all depend on this exact mechanism working.

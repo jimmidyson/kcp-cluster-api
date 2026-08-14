@@ -47,14 +47,15 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	"github.com/kcp-dev/multicluster-provider/apiexport"
+	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/kcp/internal/coremanager"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -111,6 +112,17 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "Webhook cert name.")
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key", "Webhook key name.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+
+	// cluster.Reconciler and machine.Reconciler unconditionally watch every
+	// core type gated by a feature flag they support (e.g. MachinePool,
+	// enabled by default upstream) as an event source that can trigger a
+	// reconcile - not just the types this walking skeleton's SetupReconcilers
+	// actually reconciles. Any such type has to be bound in the workspace's
+	// APIExport too, or that watch's cache sync stalls the whole controller
+	// (see kcp/test/integration/coremanager's crdPaths comment). Exposing
+	// these flags lets an operator disable a gate instead of also having to
+	// publish and bind that type's CRD.
+	feature.MutableGates.AddFlag(fs)
 }
 
 func main() {

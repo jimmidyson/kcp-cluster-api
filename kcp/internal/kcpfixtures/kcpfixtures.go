@@ -58,6 +58,31 @@ func LoadCRD(path string) (*apiextensionsv1.CustomResourceDefinition, error) {
 	return crd, nil
 }
 
+// dedupeAdditionalPrinterColumns drops any additionalPrinterColumns entry
+// (per version) whose name repeats an earlier one, keeping the first
+// occurrence. Some of this fork's own controller-gen-generated CRD manifests
+// carry duplicate-named columns (e.g. MachineDeployment's v1beta2 version
+// declares "Available" twice) that vanilla Kubernetes CRD admission
+// tolerates, but kcp's APIResourceSchema validation rejects outright
+// ("Duplicate value"). This is a real difference between the two, not a
+// CRDToAPIResourceSchema bug, so it's worked around here rather than
+// upstream (which stays untouched per AGENTS.md).
+func dedupeAdditionalPrinterColumns(crd *apiextensionsv1.CustomResourceDefinition) {
+	for i := range crd.Spec.Versions {
+		cols := crd.Spec.Versions[i].AdditionalPrinterColumns
+		seen := make(map[string]bool, len(cols))
+		deduped := cols[:0]
+		for _, c := range cols {
+			if seen[c.Name] {
+				continue
+			}
+			seen[c.Name] = true
+			deduped = append(deduped, c)
+		}
+		crd.Spec.Versions[i].AdditionalPrinterColumns = deduped
+	}
+}
+
 // PublishAPIExportOptions configures PublishAPIExport.
 type PublishAPIExportOptions struct {
 	// ExportName is the name of the APIExport (and, by convention, of the
@@ -72,11 +97,6 @@ type PublishAPIExportOptions struct {
 	// APIResourceSchemas.
 	CRDPaths []string
 
-	// EndpointSliceReadyTimeout bounds how long PublishAPIExport waits for
-	// the APIExportEndpointSlice to be populated with at least one shard
-	// endpoint. Defaults to 30s.
-	EndpointSliceReadyTimeout time.Duration
-
 	// ConversionWebhookClientConfig, if set, is injected as a Webhook
 	// conversion strategy into any loaded CRD that has more than one
 	// version (and doesn't already declare a conversion strategy) before
@@ -86,23 +106,40 @@ type PublishAPIExportOptions struct {
 	// ClientConfig to use URL, not Service (kcp doesn't resolve in-cluster
 	// Service references for this).
 	ConversionWebhookClientConfig *apiextensionsv1.WebhookClientConfig
+
+	// CRDTransform, if set, is called on each loaded CRD before conversion
+	// to an APIResourceSchema (and before the ConversionWebhookClientConfig
+	// injection above). Use it to work around CRDs whose conversion isn't
+	// viable under kcp's APIBinding model - e.g. dropping a non-storage
+	// version so no conversion strategy is required at all - by trimming
+	// crd.Spec.Versions down. See ADR-0001's "Known gaps" section.
+	CRDTransform func(crd *apiextensionsv1.CustomResourceDefinition)
 }
 
 // PublishAPIExport converts each of opts.CRDPaths to an APIResourceSchema,
-// creates an APIExport referencing them, and creates+waits for an
-// APIExportEndpointSlice for that export - all in the workspace cl is scoped
-// to. All creates are idempotent (AlreadyExists is treated as success) so
-// this is safe to call repeatedly against a long-lived dev-loop workspace.
+// creates an APIExport referencing them, and creates an APIExportEndpointSlice
+// for that export - all in the workspace cl is scoped to. All creates are
+// idempotent (AlreadyExists is treated as success) so this is safe to call
+// repeatedly against a long-lived dev-loop workspace.
+//
+// It deliberately does not wait for the APIExportEndpointSlice to be
+// populated: kcp's apiexportendpointsliceurls controller only fills in
+// status.endpoints once at least one APIBinding is consuming the export (see
+// updateEndpoints in kcp's apiexportendpointsliceurls_reconcile.go - a slice
+// with zero consumers is explicitly left/reset empty). Call
+// WaitForAPIExportEndpointSlice after binding at least one workspace to this
+// export via BindExport.
 func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExportOptions) error {
-	if opts.EndpointSliceReadyTimeout == 0 {
-		opts.EndpointSliceReadyTimeout = 30 * time.Second
-	}
-
 	schemaNames := make([]string, 0, len(opts.CRDPaths))
 	for _, path := range opts.CRDPaths {
 		crd, err := LoadCRD(path)
 		if err != nil {
 			return err
+		}
+		dedupeAdditionalPrinterColumns(crd)
+
+		if opts.CRDTransform != nil {
+			opts.CRDTransform(crd)
 		}
 
 		if crd.Spec.Conversion == nil && len(crd.Spec.Versions) > 1 && opts.ConversionWebhookClientConfig != nil {
@@ -144,9 +181,23 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 		return fmt.Errorf("creating APIExportEndpointSlice %s: %w", opts.ExportName, err)
 	}
 
-	return wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, opts.EndpointSliceReadyTimeout, true, func(ctx context.Context) (bool, error) {
+	return nil
+}
+
+// WaitForAPIExportEndpointSlice waits for the named APIExportEndpointSlice
+// (in the workspace cl is scoped to) to be populated with at least one shard
+// endpoint. Call this only after at least one workspace has bound to the
+// export (see PublishAPIExport's doc comment for why). Defaults to a 30s
+// timeout.
+func WaitForAPIExportEndpointSlice(ctx context.Context, cl client.Client, name string, timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
+	key := client.ObjectKey{Name: name}
+	return wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, timeout, true, func(ctx context.Context) (bool, error) {
 		got := &apisv1alpha1.APIExportEndpointSlice{}
-		if err := cl.Get(ctx, client.ObjectKeyFromObject(slice), got); err != nil {
+		if err := cl.Get(ctx, key, got); err != nil {
 			return false, nil //nolint:nilerr // transient; keep polling until timeout.
 		}
 		return len(got.Status.APIExportEndpoints) > 0, nil

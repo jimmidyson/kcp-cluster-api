@@ -113,3 +113,63 @@ func TestPublishAPIExportOptionsInjectsConversionForMultiVersionCRDs(t *testing.
 		t.Fatal("CRDToAPIResourceSchema() error = nil for a multi-version CRD with no conversion strategy, want an error")
 	}
 }
+
+func TestDedupeAdditionalPrinterColumns(t *testing.T) {
+	crd := &apiextensionsv1.CustomResourceDefinition{
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+				{
+					Name: "v1beta2",
+					AdditionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
+						{Name: "Available", Type: "string", JSONPath: ".status.a"},
+						{Name: "Phase", Type: "string", JSONPath: ".status.phase"},
+						{Name: "Available", Type: "string", JSONPath: ".status.b"},
+					},
+				},
+			},
+		},
+	}
+
+	dedupeAdditionalPrinterColumns(crd)
+
+	got := crd.Spec.Versions[0].AdditionalPrinterColumns
+	if len(got) != 2 {
+		t.Fatalf("AdditionalPrinterColumns = %+v, want 2 entries after dedup", got)
+	}
+	if got[0].Name != "Available" || got[0].JSONPath != ".status.a" {
+		t.Errorf("first entry = %+v, want the first \"Available\" column kept", got[0])
+	}
+	if got[1].Name != "Phase" {
+		t.Errorf("second entry = %+v, want \"Phase\"", got[1])
+	}
+}
+
+// MachineDeployment's real generated CRD is exactly the case
+// dedupeAdditionalPrinterColumns exists for: it declares "Available" twice
+// under its v1beta2 version. Guard against CRDToAPIResourceSchema starting
+// to accept - or the upstream generator starting to reject - duplicate
+// columns without this test noticing.
+func TestLoadCRDMachineDeploymentHasDuplicateColumnsBeforeDedupe(t *testing.T) {
+	const path = "../../../core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml"
+	crd, err := LoadCRD(path)
+	if err != nil {
+		t.Fatalf("LoadCRD(%q) error = %v", path, err)
+	}
+
+	seen := map[string]int{}
+	for _, v := range crd.Spec.Versions {
+		for _, c := range v.AdditionalPrinterColumns {
+			seen[v.Name+"/"+c.Name]++
+		}
+	}
+	dup := false
+	for k, n := range seen {
+		if n > 1 {
+			dup = true
+			t.Logf("duplicate additionalPrinterColumn %s appears %d times", k, n)
+		}
+	}
+	if !dup {
+		t.Skip("MachineDeployment's CRD no longer has duplicate additionalPrinterColumns; dedupeAdditionalPrinterColumns may be removable")
+	}
+}

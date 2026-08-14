@@ -185,6 +185,21 @@ D4's open questions about the library are answered (adopt as-is, adopt
 with workarounds, or fall back to hand-rolling). This is the thing to
 demo before greenlighting Phase 2's investment.
 
+**Status: spike complete, mixed result — see
+[ADR-0001's "Phase 1 results" section](adr-0001-per-workspace-manager-pool.md#phase-1-results)
+for the full writeup.** D4's open questions are answered (write-path
+routing, leader election/shared-process model, and conversion/admission
+webhooks all work as hoped). The literal "Cluster gets provisioned
+end-to-end" bar is **not** cleared: a real, load-bearing gap was found in
+core reconcile logic (`controllers/external.GetObjectFromContractVersionedRef`,
+used to resolve `infrastructureRef`/`bootstrap.configRef`/`controlPlaneRef`,
+has no pluggable hook and does a `CustomResourceDefinition` lookup that
+doesn't exist for APIs a workspace only consumes via `APIBinding`), which
+blocks every core reconciler that follows a cross-referenced type — not a
+corner case. Per AGENTS.md, this was surfaced and documented rather than
+worked around, and needs a maintainer decision before Phase 2/3 fan-out
+(P1–P3 in particular all depend on this same mechanism).
+
 ## Phase 2 — shared infrastructure (groundwork, sequential-ish)
 
 Everything Phase 3's parallel tracks import. Small surface, high fan-out —

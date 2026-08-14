@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
+	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
 	coreadmission "sigs.k8s.io/cluster-api/core/webhooks/admission"
@@ -48,6 +50,20 @@ import (
 	cloudv1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/cloud/api/v1alpha1"
 	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
 	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
+)
+
+const (
+	// controllerName identifies this binary's clients to the API server
+	// (e.g. in the User-Agent header), matching core/main.go and
+	// test/infrastructure/docker/main.go's own controllerName convention.
+	controllerName = "kcp-core-manager"
+
+	// defaultRemoteConnectionGracePeriod and defaultRemoteConditionsGracePeriod
+	// are core/main.go's own flag defaults (--remote-connection-grace-period,
+	// --remote-conditions-grace-period), hardcoded here since the walking
+	// skeleton doesn't expose the full flag surface core/main.go does.
+	defaultRemoteConnectionGracePeriod = 50 * time.Second
+	defaultRemoteConditionsGracePeriod = 5 * time.Minute
 )
 
 // inmemoryScheme is the scheme for the docker/dev infrastructure provider's
@@ -93,23 +109,28 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager) error {
 
 	clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
 		SecretClient: secretCachingClient,
+		Client: clustercache.ClientOptions{
+			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
+		},
 	}, concurrency(10))
 	if err != nil {
 		return fmt.Errorf("creating ClusterCache: %w", err)
 	}
 
 	if err := (&cluster.Reconciler{
-		Client:       mgr.GetClient(),
-		APIReader:    mgr.GetAPIReader(),
-		ClusterCache: clusterCache,
+		Client:                      mgr.GetClient(),
+		APIReader:                   mgr.GetAPIReader(),
+		ClusterCache:                clusterCache,
+		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
 	}).SetupWithManager(ctx, mgr, concurrency(10)); err != nil {
 		return fmt.Errorf("creating Cluster controller: %w", err)
 	}
 
 	if err := (&machine.Reconciler{
-		Client:       mgr.GetClient(),
-		APIReader:    mgr.GetAPIReader(),
-		ClusterCache: clusterCache,
+		Client:                      mgr.GetClient(),
+		APIReader:                   mgr.GetAPIReader(),
+		ClusterCache:                clusterCache,
+		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
 	}).SetupWithManager(ctx, mgr, concurrency(10)); err != nil {
 		return fmt.Errorf("creating Machine controller: %w", err)
 	}
