@@ -166,6 +166,15 @@ history. This overrides any default agent behavior that appends such
 lines — omit them entirely, regardless of what a harness template
 suggests.
 
+## Merging pull requests
+
+All PRs to this repository must be **squash merged** — one commit per PR
+on `main`, using the PR title/description as the resulting commit message.
+Do not use "Create a merge commit" or "Rebase and merge". This keeps
+`main` history bisectable and keeps rebases onto upstream cluster-api
+releases (see above) clean, since a squashed history avoids interleaving
+this fork's work-in-progress commits with upstream's.
+
 ## Summary for contributors and agents
 
 - Read-only: everything except `kcp/` (and rare, additive manifest edits).
@@ -179,6 +188,7 @@ suggests.
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
 - Commit messages and PR descriptions: concise, not padded, and never
   include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
+- All PRs are squash merged — no merge commits, no rebase-and-merge.
 - New code and user-visible behavior ship with matching docs in
   `kcp/docs/site/` — user docs (installation/usage) and design docs
   (architecture/deep dives). See `kcp/README.md#documentation`.
