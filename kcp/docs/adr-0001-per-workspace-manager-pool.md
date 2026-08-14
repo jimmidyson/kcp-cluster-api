@@ -35,11 +35,25 @@ the same change that adds the first such import, not preemptively.
 
 ## D3 — APIExport schema strategy
 
-**Scope:** the first APIExport publishes **core CRDs only** (v1beta2) —
-`Cluster`, `Machine`, `MachineSet`, `MachineDeployment`,
-`MachineHealthCheck`, and the other `core/` API group types. Bootstrap,
-control-plane, addon, and IPAM CRDs are out of scope until Phase 3 (P1/P2)
-port those providers onto the same pattern.
+**Scope:** the first APIExport publishes **core CRDs, plus the
+`test/infrastructure/docker` provider's CRDs** (v1beta2) — `Cluster`,
+`Machine`, `MachineSet`, `MachineDeployment`, `MachineHealthCheck` from
+`core/`, and `DockerCluster`/`DockerMachine`/`DockerClusterTemplate`/
+`DockerMachineTemplate` from `test/infrastructure/docker`. Bootstrap and
+control-plane CRDs (`kubeadm` provider) are **not** needed: a test can set
+`Machine.spec.bootstrap.dataSecretName` directly
+(`api/core/v1beta2/machine_types.go:794`) instead of going through a
+`KubeadmConfig`, so Phase 1 doesn't need the kubeadm bootstrap/
+control-plane providers to prove a real reconcile loop. Addon and IPAM
+CRDs are out of scope until later phases.
+
+The docker CRDs are included specifically because Phase 1's exit
+criterion is a *real* `Cluster` → `Machine` provisioning loop, not just
+object creation: without `DockerCluster`/`DockerMachine` bound in the
+test workspace, `Machine.spec.infrastructureRef` never resolves and the
+reconciler stalls before validating anything. Bootstrap/control-plane
+CRDs remain deferred to Phase 3 (P1/P2), since those providers aren't
+needed to clear Phase 1's bar.
 
 **Permission claims:** claim all `Secret` and `ConfigMap` objects in bound
 workspaces (no label-selector scoping yet). This is the simplest option
@@ -87,6 +101,7 @@ install runs multiple shards — not preemptively.
 ## Next step
 
 Phase 0 is now complete. Phase 1 (walking skeleton: `kcp/cmd/core-manager`
-against one hardcoded workspace, core CRDs only, real unit + integration
-tests) is unblocked and ready for dispatch as one closely-watched session,
-per the conversion plan's "Executing this plan" section.
+against one hardcoded workspace, core + docker-infrastructure CRDs, real
+unit + integration tests) is unblocked and ready for dispatch as one
+closely-watched session, per the conversion plan's "Executing this plan"
+section.
