@@ -14,8 +14,7 @@ lands — see [Design & architecture](../design/_index.md) for the integration p
 
 ## Prerequisites
 
-- Go (see [`go.mod`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/go.mod)
-  for the required version)
+- Go (see the repository's root `go.mod` for the required version)
 - [Docker](https://www.docker.com/) or another OCI-compatible container
   runtime, for building images and running the local
   [Tilt](https://tilt.dev/)-based development environment
@@ -57,7 +56,7 @@ make tilt-up
 ```
 
 See the upstream
-[Cluster API developer guide](https://cluster-api.sigs.k8s.io/developer/core/development)
+[Cluster API developer guide](https://cluster-api.sigs.k8s.io/developer/getting-started)
 for details — none of that tooling is modified by this fork.
 
 ## Installing with clusterctl

@@ -23,7 +23,7 @@ Once workspace-aware components exist, this page will cover:
 
 ## Reporting issues
 
-Because everything KCP-specific lives under [`kcp/`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/kcp),
-please file issues and feature requests against this repository rather than
+Because everything KCP-specific lives under `kcp/`, please file issues and
+feature requests against this repository rather than
 upstream Cluster API, unless the problem reproduces with unmodified upstream
 code.

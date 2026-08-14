@@ -10,13 +10,13 @@ the same way you'd treat a missing test.
 
 ## The two angles
 
-1. **User docs** — under [`content/en/docs/user/`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/kcp/docs/site/content/en/docs/user).
+1. **User docs** — under [`content/en/docs/user/`](../user/_index.md).
    Audience: someone installing and running kcp-cluster-api. Focus strictly
    on *installation* and *usage* — prerequisites, build/deploy steps,
    configuration, day-to-day operation, upgrade notes. Assume no interest in
    implementation details.
 
-2. **Design & architecture docs** — under [`content/en/docs/design/`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/kcp/docs/site/content/en/docs/design).
+2. **Design & architecture docs** — under [`content/en/docs/design/`](_index.md).
    Audience: developers and AI coding agents changing the code. This is
    technical reference: why a component is shaped the way it is, the
    invariants it must preserve, the extension points it relies on, and
@@ -68,7 +68,7 @@ repository's root `go.mod` and is unaffected by upstream rebases.
 ## Where this is enforced
 
 - This page is the canonical statement of the policy.
-- [`kcp/README.md`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/kcp/README.md)
+- `kcp/README.md` (the repository's own README, one level up from this site)
   carries a condensed pointer back here, so it's visible without opening the
   site.
 - CI builds this site on every PR that touches `kcp/docs/site/`, so a

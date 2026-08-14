@@ -6,8 +6,11 @@ on:
     paths:
       - 'kcp/docs/site/**'
 
-# Remove all permissions from GITHUB_TOKEN except metadata.
-permissions: {}
+# actions/checkout needs contents:read to authenticate against this
+# private repo; permissions: {} leaves it unable to fetch and checkout
+# fails with "Repository not found".
+permissions:
+  contents: read
 
 defaults:
   run:

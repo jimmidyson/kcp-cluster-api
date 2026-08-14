@@ -50,5 +50,4 @@ new docs.
 3. If that's not possible for something, stop and raise it rather than
    reaching into upstream code.
 
-See [`AGENTS.md`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/AGENTS.md)
-for the full, normative rules.
+See `AGENTS.md` at the repository root for the full, normative rules.

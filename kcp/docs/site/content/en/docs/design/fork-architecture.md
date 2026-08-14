@@ -9,9 +9,8 @@ kcp-cluster-api is a fork of
 whose entire purpose is to make Cluster API workspace-aware for
 [KCP](https://github.com/kcp-dev/kcp) (logical clusters / workspaces), while
 staying trivially rebaseable onto new upstream releases. The full, normative
-rules live in
-[`AGENTS.md`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/AGENTS.md)
-at the repository root; this page explains the reasoning behind them.
+rules live in `AGENTS.md` at the repository root; this page explains the
+reasoning behind them.
 
 ## The prime directive: upstream code is read-only
 

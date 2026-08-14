@@ -14,13 +14,8 @@ Making [Cluster API](https://cluster-api.sigs.k8s.io/) workspace-aware for
   <a class="btn btn-lg btn-primary me-3 mb-4" href="docs/user/">
     User docs
   </a>
-  <a class="btn btn-lg btn-secondary me-3 mb-4" href="docs/design/">
+  <a class="btn btn-lg btn-secondary mb-4" href="docs/design/">
     Design &amp; architecture
-  </a>
-  <a class="btn btn-lg btn-secondary mb-4"
-    href="https://github.com/jimmidyson/kcp-cluster-api"
-    target="_blank" rel="noopener noreferrer">
-    Get the code <i class="fab fa-github ms-1"></i>
   </a>
 </div>
 
@@ -53,9 +48,10 @@ integration model, and deep dives into how it's built.
 
 {{% /blocks/feature %}}
 
-{{% blocks/feature title="Contributions welcome" icon="fab fa-github" url="https://github.com/jimmidyson/kcp-cluster-api" %}}
+{{% blocks/feature title="Contributions welcome" icon="fab fa-github" %}}
 
 All new code, tests, and docs live under `kcp/` — see
+<!-- markdown-link-check-disable-next-line -->
 [AGENTS.md](https://github.com/jimmidyson/kcp-cluster-api/blob/main/AGENTS.md)
 for the rules governing contributions.
 
