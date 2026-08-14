@@ -1,11 +1,16 @@
 # ADR-0001: Provider API permissions for core CAPI controllers
 
-Status: **proposed** — needs explicit human sign-off before Phase 1/3 work
-that depends on it starts. This covers the permission-claim portion of D3
-and the identity-model portion of D5 in
-[`conversion-plan.md`](conversion-plan.md); it does not cover D3's schema
-versioning question or D5's non-permission identity concerns, which can be
-split into follow-up ADRs if needed.
+Status: **accepted** for the scope audited below (core's `cluster`,
+`machine`, `machineset`, `machinedeployment`, `machinepool` reconcilers).
+**Not yet accepted** for `core/reconcilers/topology/cluster` (the
+ClusterClass/topology controller) — see "Known gap" below; do not treat
+this ADR as covering that controller's claim scope until it's audited the
+same way.
+
+This covers the permission-claim portion of D3 and the identity-model
+portion of D5 in [`conversion-plan.md`](conversion-plan.md); it does not
+cover D3's schema versioning question or D5's non-permission identity
+concerns, which can be split into follow-up ADRs if needed.
 
 ## Context
 
@@ -20,155 +25,210 @@ etc.) are unmodified upstream code (AGENTS.md), and they already read and
 write provider-owned objects dynamically — `Cluster.spec.infrastructureRef`,
 `Machine.spec.bootstrap.configRef`, `Machine.spec.infrastructureRef`, and
 similar `ObjectReference` fields point at arbitrary GVKs resolved at
-runtime, not statically known to core. The cluster controller creates the
-InfraCluster from a template, sets ownerRefs on it, and deletes it on
-teardown; it isn't just reading status. So core's manager identity needs
+runtime, not statically known to core. So core's manager identity needs
 read/write on GVKs it can't enumerate ahead of time, scoped per-workspace
 to whatever that workspace actually bound — and it needs this without
 core's own code or manifests naming those providers, or the "separate API
 binding" extensibility goal breaks.
 
 kcp's mechanism for this is **permission claims**: an `APIExport` declares
-a claim on other resources/groups, and a workspace that binds the export
-must separately accept the claim before those resources become
+a claim on other resources, and a workspace that binds the export must
+separately accept the claim before those resources become
 visible/writable to the exporting identity.
 
-## Decision drivers
+## Decisions made
 
-- **Extensibility** — adding a provider shouldn't require editing core's
-  own manifests or redeploying core-manager.
-- **Least privilege** — core shouldn't get access to resources a
-  workspace hasn't opted into, or to types unrelated to Cluster API.
-- **Auditability** — a tenant workspace owner accepting a claim should be
-  able to tell what they're granting and why.
-- **Consistency with Phase 2's architecture** — G1 (WildcardCache,
-  "one system identity via APIExport virtual workspace") is already the
-  direction the conversion plan leans; an identity model that fights that
-  shape adds cost elsewhere in the plan, not just here.
-- **Upstream invariant** — whatever mechanism is chosen has to work by
-  configuring the client/discovery layer (G1/G3), not by changing what
-  core's reconcilers ask for.
+Resolved by explicit sign-off (2026-08-14), not silently picked by an
+agent, per AGENTS.md's requirement for D3/D5:
 
-## Options considered
+1. **Extensibility scope: third-party providers must work day one**, not
+   just in-repo providers. This is the swing factor that was originally
+   framed as choosing between option A (wildcard claims) and option D
+   (named claims, in-repo only, escalate later). See "Revised mechanism"
+   below for why the literal reading of option A turned out not to be
+   implementable, and what was chosen instead to still satisfy this
+   requirement.
+2. **Identity model (D5): single system identity via the core `APIExport`'s
+   virtual workspace**, not per-workspace impersonation. Consistent with
+   Phase 2's G1 (`WildcardCache`) design already committed to in the
+   conversion plan. Option E (per-workspace impersonation + ordinary RBAC)
+   is ruled out unless Phase 1's spike finds a reason G1's assumptions
+   don't hold.
+
+## Technical finding that revises the original option set
+
+The original draft of this ADR posed option A as "core's `APIExport`
+claims broadly (e.g. every resource, or every resource in a
+`*.cluster.x-k8s.io`-style group)". Checking the actual API
+(`github.com/kcp-dev/sdk@v0.32.3`, `apis/apis/v1alpha2/types_apiexport.go`,
+already pinned in `kcp/go.mod`) shows this isn't representable:
+
+```go
+type PermissionClaim struct {
+    GroupResource `json:",inline"`  // Resource is +required, pattern
+                                     // ^[a-z][-a-z0-9]*[a-z0-9]$ — no "*"
+    Verbs []string `json:"verbs"`   // "*" IS allowed here
+    IdentityHash string
+}
+```
+
+`GroupResource.Resource`'s doc comment: *"you can not ask for permissions
+for resource provided by a CRD not provided by an api export."* And the
+accept-side `APIBinding` selector supports `MatchAll: true` for object
+*instances* of an already-claimed resource, but that's orthogonal — it
+doesn't let a claim's resource field itself be a wildcard.
+
+So: **verbs can wildcard, instance scope can wildcard at accept-time, but
+the claimed resource cannot** — every claim in
+`APIExport.spec.permissionClaims` must name one concrete, already-exported
+group+resource. A single static "claim everything" entry is not an option
+kcp exposes.
+
+### Revised mechanism: self-maintaining claim list
+
+To still deliver "third-party providers work day one" (decision 1) without
+a human editing core's `APIExport` manifest per provider, core's claim
+list must be **maintained by a small controller, not hand-written**:
+
+- A discovery component (naturally sits alongside G1's discovery/cache
+  engine, or as its own small reconciler) watches for provider
+  `APIExport`s matching a provider-contract convention — e.g. a label such
+  as `cluster.x-k8s.io/provider-contract: infrastructure` (exact
+  convention TBD, not blocking this ADR) — and reconciles matching
+  resources into core's `APIExport.spec.permissionClaims`.
+- Each entry it adds is still a concrete, named `GroupResource` — this
+  satisfies kcp's API shape and keeps every individual claim auditable —
+  but the *list* grows automatically as new providers are discovered, so
+  no core-manager redeploy or manifest edit is needed per provider.
+- Tenants still explicitly accept each claim per kcp's normal UX. That's
+  unavoidable and arguably desirable: a workspace owner should see and
+  approve exactly which provider resources core gains access to in their
+  workspace, even though core's own onboarding of the claim is automatic.
+
+This folds the original options A and D into one: A's goal (zero-touch
+onboarding) achieved through D's mechanism (concrete, named,
+per-resource claims), automated instead of hand-maintained. It does not
+change decision 2 (single virtual-workspace identity) — the
+claim-maintaining controller can itself run under a narrower, separate
+identity if desired (it only needs read access to provider `APIExport`
+objects and patch access to core's own `APIExport`), which is worth
+scoping as its own small decision when this is implemented, but doesn't
+block accepting this ADR.
+
+## Verb scoping (from `core/reconcilers/*` audit)
+
+Audited 2026-08-14 against `core/reconcilers/{cluster,machine,machineset,
+machinedeployment,machinepool}` and `controllers/external/`. Full findings
+in the audit transcript; summary below. **`core/reconcilers/topology/
+cluster` (ClusterClass) was not included — see "Known gap".**
+
+Cross-cutting findings that apply to every role below:
+- **No reconciler ever calls `update`** against a provider object — all
+  mutations are `patch` (JSON/strategic merge, or Server-Side-Apply) or
+  the one SSA-based create path. `update` should not be claimed anywhere.
+- **No `deletecollection` usage anywhere.**
+- SSA-`Apply` of an object that doesn't yet exist is carried over HTTP
+  `PATCH`, but Kubernetes RBAC additionally requires the `create` verb the
+  first time the object is materialized — so create-capable paths need
+  both `create` and `patch`, not `patch` alone.
+- Today's upstream `kubebuilder:rbac` markers
+  (`cluster_controller.go:72`, `machine_controller.go:90`,
+  `machineset_controller.go:93`, `machinepool_controller.go:63`) request
+  `resources=*,verbs=get;list;watch;create;update;patch;delete` per group —
+  broader than what's actually used (includes unused `update`, and
+  `list`/`watch` even on controllers that don't do either). Since kcp
+  claims can't use a `resources=*` glob within a group anyway (previous
+  section), translating these markers to claims requires enumerating each
+  concrete provider resource — a good opportunity to also drop `update`
+  and tighten `list`/`watch` to only where audited as used, rather than
+  copying the upstream marker's verb set 1:1.
+
+Per-role minimum claim verbs:
+
+| Role | Referenced via | Touched by | Verbs |
+|---|---|---|---|
+| InfraCluster / ControlPlane object | `Cluster.spec.infrastructureRef` / `.controlPlaneRef` | Cluster controller only (audited scope) | `get`, `watch`, `patch`, `delete` — no `create`/`list` seen; something else (user, clusterctl, or the topology controller) creates these today |
+| InfraMachine / BootstrapConfig object | `Machine.spec.infrastructureRef` / `.bootstrap.configRef` | Machine controller (get/watch/patch/delete) + MachineSet controller (get/list/create-via-SSA/patch/delete, for per-replica generated objects) | `get`, `list`, `watch`, `create`, `patch`, `delete` (union across both controllers — single identity per decision 2 means claim verbs are the union of every controller's needs on that resource, not per-controller) |
+| InfraMachineTemplate / BootstrapConfigTemplate | `MachineSet`/`MachineDeployment` `.spec.template.spec.*Ref` | MachineSet + MachineDeployment (`reconcileExternalTemplateReference`) | `get`, `patch` (ownerRef only) — never watched, never created/deleted here |
+| MachinePool's infra ref object | `MachinePool.spec.template.spec.infrastructureRef` | MachinePool controller | `get`, `watch` confirmed by audit; `patch`/`delete` presumed to mirror Machine's pattern but not individually cited — **verify before finalizing this row specifically** |
+
+## Known gap: `core/reconcilers/topology/cluster` not yet audited
+
+The ClusterClass/topology controller (`core/reconcilers/topology/cluster/
+{reconcile_state,current_state,status,cluster_controller}.go`) also reads
+and writes `infrastructureRef`/`controlPlaneRef`-style fields — it's the
+component that materializes a whole ClusterClass-based cluster's
+InfraCluster, ControlPlane, and MachineDeployment templates from class
+definitions. It almost certainly needs a verb set closer to MachineSet's
+(`get`, `list`, `create`, `patch`, `delete`) on the InfraCluster/
+ControlPlane role than the narrower `get, watch, patch, delete` shown
+above for the Cluster controller alone — but this is inference from
+general CAPI architecture, not confirmed against this fork's actual code.
+**Do not finalize the InfraCluster/ControlPlane claim's verb list for
+implementation until this controller gets the same file:line audit
+treatment the others got.** Tracked as open question 1 below.
+
+## Options considered (retained for record)
 
 ### A — Wildcard/group-level permission claims from core's `APIExport`
 
-Core's export claims broadly (e.g. every resource, or every resource in
-`*.cluster.x-k8s.io`-style groups) instead of naming individual provider
-CRDs. Any provider CRD present in a workspace that accepts the claim
-becomes visible to core automatically.
+Superseded — see "Technical finding" above. What survives from this
+option's *goal* (zero-touch third-party onboarding) is folded into the
+"Revised mechanism" section as an automated, per-resource claim list
+rather than a true wildcard.
 
-- **Pros:** zero-touch extensibility — a new provider ships, a tenant
-  binds it, core already has access; no core-manager change per provider.
-- **Cons:** broadest possible grant per accepting workspace; kcp's
-  claim-acceptance UX becomes an "accept access to everything" prompt,
-  which is a weak audit trail and a scary consent screen for workspace
-  owners.
-
-### B — Explicit named claims per provider CRD, maintained in core's `APIExport`
-
-Core's export lists individual claims — one per known provider
-group/resource (e.g. `infrastructure.cluster.x-k8s.io/dockerclusters`,
-`bootstrap.cluster.x-k8s.io/kubeadmconfigs`,
-`controlplane.cluster.x-k8s.io/kubeadmcontrolplanes`) — kept in sync with
-the providers this repo ships or has explicitly onboarded.
+### B — Explicit named claims per provider CRD, maintained by hand in core's `APIExport`
 
 - **Pros:** tenant sees exactly what's claimed and why; least-privilege by
-  construction.
-- **Cons:** onboarding a provider — including a third-party one nobody on
-  this repo controls — means editing and redeploying core's `APIExport`.
-  That cuts against the "separate API bindings for extensibility" premise
-  and gives core an ongoing maintenance coupling to every provider's CRD
-  list, which core wasn't otherwise going to have.
+  construction; no extra controller to build.
+- **Cons:** onboarding a provider — including a third-party one — means
+  editing and redeploying core's `APIExport`. Rejected by decision 1
+  (third-party providers must work day one) as the sole mechanism, but its
+  claim-shape (concrete, named, verb-scoped entries) is exactly what the
+  automated reconciler in "Revised mechanism" produces — B's output, not
+  B's process.
 
 ### C — Redraw the boundary so core doesn't need provider-CRD writes at all
 
-Re-scope core's responsibilities so provider managers own all writes to
-their own CRDs, and core only reads status/conditions synced back onto
-`Cluster`/`Machine`.
+- **Cons:** doesn't hold. The audit confirms core creates (via MachineSet),
+  ownerRef-patches, and deletes provider objects today — real write
+  coupling to arbitrary provider GVKs that can't be redrawn away without
+  patching upstream reconcile logic, which AGENTS.md forbids.
 
-- **Pros:** would sidestep the permission-claims problem for writes
-  entirely.
-- **Cons:** doesn't actually hold — core's reconcilers create the
-  InfraCluster from a template, set ownerRefs, and delete it on teardown
-  today; that's real write coupling to arbitrary provider GVKs that can't
-  be redrawn away without patching upstream reconcile logic, which
-  AGENTS.md forbids. At best this narrows *what* needs claiming
-  (create/delete/ownerRef-patch vs. full read/write on status too) — worth
-  scoping precisely, but not a standalone alternative to A/B/D.
+### D — Hybrid: named claims for in-repo providers now, revisit A later
 
-### D — Hybrid: named claims (B) for in-repo providers now, revisit A later if needed
-
-Ship core's `APIExport` with named claims for the providers `kcp/` builds
-and tests against today — kubeadm bootstrap, kubeadm control plane, docker
-infra (e2e) — per Phase 3's P1–P3. Treat unbounded third-party provider
-support as a later, explicit escalation to option A, made only if that
-turns out to be a real near-term requirement rather than a hypothetical.
-
-- **Pros:** matches what Phase 3 is actually building; least-privilege by
-  default while the permission surface is small and known; keeps A on the
-  table as a documented escalation path instead of ruling it out.
-- **Cons:** depends on confirming that "extensibility" in the original
-  framing means "providers can version/ship independently of core," not
-  "arbitrary third-party providers must work with zero core changes." If
-  the latter is actually a near-term goal, D understates the requirement
-  and A should be picked directly instead.
+- Superseded by decision 1 (day-one third-party support was chosen over
+  deferring it) — but its "always use concrete, named claims" mechanic is
+  exactly what the automated reconciler still does; only the "who
+  maintains the list, and how often" question changed.
 
 ### E — Skip permission claims: per-workspace impersonation + ordinary RBAC
 
-Core assumes a distinct credential/impersonated identity per tenant
-workspace, and each workspace grants ordinary `ClusterRole`/
-`ClusterRoleBinding` RBAC to that identity for the provider GVKs present —
-the same mechanism a human operator would use, no kcp-specific concept
-involved.
+- **Cons:** conflicts with decision 2 (single virtual-workspace identity)
+  and the WildcardCache shape G1 already commits to. Ruled out per
+  decision 2 unless Phase 1's spike overturns those assumptions.
 
-- **Pros:** doesn't depend on kcp's permission-claim semantics/maturity;
-  reuses plain k8s RBAC, which already needs to exist for other reasons
-  (upstream's `kubebuilder:rbac` markers, aggregated in P9).
-- **Cons:** conflicts with the single-system-identity/WildcardCache shape
-  Phase 2's G1 already commits to — per-workspace impersonation
-  reintroduces the per-workspace auth/credential overhead that the
-  wildcard-cache design exists to avoid. It also doesn't solve
-  *discovery*: core still needs to learn a provider CRD exists in a given
-  workspace, which permission-claim acceptance gives for free as part of
-  the binding flow, and plain RBAC does not. Treat this as the option to
-  explicitly rule out unless Phase 1's spike overturns G1's assumptions,
-  not a live alternative alongside A–D.
+## Open questions before implementation
 
-## Recommendation
-
-Lean toward **D**: start with named, explicit permission claims (B) scoped
-to the providers this repo actually ships and tests — kubeadm bootstrap,
-kubeadm control plane, docker infra — and treat broad/wildcard claims (A)
-as a deliberate future escalation, not the default. Pair this with **one
-system identity via the core `APIExport`'s virtual workspace** for D5
-(consistent with G1/G1's WildcardCache), explicitly ruling out E's
-per-workspace impersonation model unless Phase 1's spike finds a reason
-G1's assumptions don't hold.
-
-This is a judgment call on how far "extensibility" is meant to reach, not
-a technical constraint — flag for explicit sign-off rather than treating
-as decided.
-
-## Open questions before this can move from proposed to accepted
-
-1. Does "separate API bindings for extensibility" need to support
-   out-of-repo/third-party providers in the near term, or only independent
-   versioning/lifecycle of the providers `kcp/` itself ships? This is the
-   swing factor between D and A.
-2. Under option C's framing: precisely which provider-CRD operations does
-   core's *unmodified* reconcile code perform — full read/write, or a
-   narrower create/delete/ownerRef-patch/status-read split? Worth an
-   actual audit of `core/reconcilers/*` against `infrastructureRef`/
-   `configRef` usage before finalizing claim scope, independent of which
-   option is picked.
-3. Does kcp (at the version pinned in D1) support group-level permission
-   claims, or only claims against specific resources? If only the latter,
-   option A's "claim a whole API group" framing needs restating as
-   "claim every known resource in the group," which changes its
-   maintenance-burden comparison against B.
-4. Confirm in the Phase 1 spike that permission-claim acceptance actually
-   surfaces newly-claimed provider resources through
-   `kcp-dev/multicluster-provider`'s discovery watch promptly (no manual
-   re-sync step) — this is load-bearing for D's "revisit A only if needed"
-   framing, since D's cost model assumes claim updates propagate live.
+1. **Audit `core/reconcilers/topology/cluster`** the same way the other
+   five packages were audited, and fold its verb requirements into the
+   InfraCluster/ControlPlane and Template rows above before those rows are
+   used to write actual `PermissionClaim` manifests or RBAC.
+2. **Confirm MachinePool's `patch`/`delete` behavior** against
+   `machinepool_controller_phases.go` specifically (the audit confirmed
+   `get`/`watch` but not the mutating verbs for this controller).
+3. **Design the provider-discovery convention** the claim-maintaining
+   controller uses to recognize a provider `APIExport` (label, annotation,
+   or something else) — not blocking this ADR, but needed before the
+   "Revised mechanism" is buildable.
+4. **Confirm claim-acceptance propagation timing**: in the Phase 1 spike,
+   verify that once a tenant accepts a newly-added claim, the resource
+   becomes visible through `kcp-dev/multicluster-provider`'s discovery
+   watch promptly (no manual re-sync) — load-bearing for the "day-one"
+   framing, since a slow/manual propagation path would undercut the
+   automated claim list's value.
+5. Still tangled with **D1** (target kcp version to pin): the SDK version
+   audited here is v0.32.3, already pinned in `kcp/go.mod`; if D1 lands on
+   a materially different kcp version, re-check `PermissionClaim`'s shape
+   hasn't changed before relying on the "resource field cannot wildcard"
+   finding above.
