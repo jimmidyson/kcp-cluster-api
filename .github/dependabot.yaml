@@ -23,6 +23,7 @@ updates:
   - "/api"
   - "/test"
   - "/hack/tools"
+  - "/kcp"
   schedule:
     interval: "weekly"
     day: "monday"
