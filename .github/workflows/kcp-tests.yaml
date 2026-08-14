@@ -1,0 +1,44 @@
+name: kcp tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["kcp/**"]
+  pull_request:
+    paths: ["kcp/**"]
+
+# actions/checkout needs contents:read to authenticate the fetch against
+# this private repo; `permissions: {}` (this repo's other workflows,
+# inherited from public upstream cluster-api, where anonymous fetches
+# work) strips that and checkout fails with "Repository not found".
+permissions:
+  contents: read
+
+jobs:
+  test-unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # tag=v7.0.0
+        with:
+          go-version-file: kcp/go.mod
+      - name: Unit tests
+        working-directory: kcp
+        run: make test-unit
+
+  test-integration:
+    name: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # tag=v7.0.0
+        with:
+          go-version-file: kcp/go.mod
+      - name: Integration tests
+        working-directory: kcp
+        run: make test-integration

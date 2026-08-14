@@ -8,8 +8,11 @@ on:
     # Cron for every day at 12:00 UTC.
     - cron: "0 12 * * *"
 
-# Remove all permissions from GITHUB_TOKEN except metadata.
-permissions: {}
+# actions/checkout needs contents:read to authenticate against this
+# private repo; permissions: {} leaves it unable to fetch and checkout
+# fails with "Repository not found".
+permissions:
+  contents: read
 
 jobs:
   weekly-test-release:
