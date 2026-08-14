@@ -23,7 +23,26 @@ names:
 - `kcp/test/integration/` — integration tests specific to KCP behavior,
   run against a real kcp server via `kcp/test/integration/envtest` (see
   `kcp/docs/testing.md`).
-- `kcp/docs/` — design notes and docs specific to this fork.
+- `kcp/docs/` — design notes and docs specific to this fork, including the
+  documentation site described below.
+
+## Documentation
+
+Everything this fork adds must be documented for two audiences, in the
+[Hugo](https://gohugo.io/) + [Docsy](https://www.docsy.dev/) site under
+`kcp/docs/site/`:
+
+- **User docs** (`content/en/docs/user/`) — installation and usage, for
+  people running kcp-cluster-api.
+- **Design docs** (`content/en/docs/design/`) — architecture and deep dives,
+  technical reference for developers and agents changing the code.
+
+A feature isn't done until both are updated (or a no-op is genuinely
+correct, e.g. an internal change with no user-visible behavior still needs
+a design write-up but not a user-docs change). See
+[Documentation policy](docs/site/content/en/docs/design/documentation-policy.md)
+for the full policy, and `kcp/docs/site/README.md` for how to build/preview
+the site.
 
 `kcp/` is its own Go module (`kcp/go.mod`), separate from the root
 `sigs.k8s.io/cluster-api` module, so it can depend on things like
@@ -39,3 +58,5 @@ names:
 4. All new behavior is developed test-first, with both unit tests and
    KCP-envtest integration tests as applicable — see
    [`kcp/docs/testing.md`](docs/testing.md).
+5. New code and user-visible behavior ship with matching user and design
+   docs — see [Documentation](#documentation) above.

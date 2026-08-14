@@ -1,0 +1,25 @@
+{{/*
+  Resolves relative links to sibling *.md source files (the GitHub-compatible
+  convention used throughout this site's content) to their rendered
+  permalinks, so the same link works both when browsing raw markdown on
+  GitHub and in the built Hugo site. External/absolute links pass through
+  unchanged.
+*/}}
+{{- $url := .Destination -}}
+{{- $fragment := "" -}}
+{{- if strings.Contains $url "#" -}}
+  {{- $parts := split $url "#" -}}
+  {{- $url = index $parts 0 -}}
+  {{- $fragment = printf "#%s" (index $parts 1) -}}
+{{- end -}}
+{{- $href := .Destination -}}
+{{- $isRelative := not (or (strings.HasPrefix $url "http://") (strings.HasPrefix $url "https://") (strings.HasPrefix $url "//")) -}}
+{{- if and $isRelative (strings.HasSuffix $url ".md") -}}
+  {{- $target := path.Join (path.Dir .Page.File.Path) $url -}}
+  {{- with .Page.Site.GetPage $target -}}
+    {{- $href = printf "%s%s" .RelPermalink $fragment -}}
+  {{- else -}}
+    {{- errorf "render-link: could not resolve %q (from %q) to a page" $url .Page.File.Path -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $href | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if strings.HasPrefix $href "http" }} target="_blank" rel="noopener noreferrer"{{ end }}>{{ .Text | safeHTML }}</a>

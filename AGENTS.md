@@ -179,3 +179,6 @@ suggests.
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
 - Commit messages and PR descriptions: concise, not padded, and never
   include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
+- New code and user-visible behavior ship with matching docs in
+  `kcp/docs/site/` — user docs (installation/usage) and design docs
+  (architecture/deep dives). See `kcp/README.md#documentation`.

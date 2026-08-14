@@ -83,3 +83,9 @@ tmp
 
 # Claude's configuration
 .claude/
+
+# kcp/docs/site: Hugo build artifacts and npm dependencies
+kcp/docs/site/public/
+kcp/docs/site/resources/
+kcp/docs/site/node_modules/
+kcp/docs/site/.hugo_build.lock
