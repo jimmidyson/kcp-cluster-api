@@ -132,6 +132,25 @@ If this ever produces a conflict **outside `kcp/`**, that is a strong
 signal that a past change violated the invariant above — find and fix the
 offending commit rather than resolving the conflict in place.
 
+## Testing: TDD is required for all `kcp/` work
+
+All new behavior under `kcp/` is developed test-first (red: write a
+failing test, green: write the minimal code to make it pass, refactor).
+See [`kcp/docs/testing.md`](kcp/docs/testing.md) for the concrete
+workflow and tooling. In short, every change needs tests at both tiers,
+whichever apply:
+
+- **Unit tests** — colocated `_test.go` files, no real processes, run via
+  `make -C kcp test-unit`.
+- **Integration tests** — exercise real behavior against a real kcp
+  server, not a vanilla envtest apiserver (which has no logical
+  cluster/workspace support and so cannot validate anything KCP-specific),
+  using the `kcp/test/integration/envtest` helper, run via
+  `make -C kcp test-integration`.
+
+A PR that adds or changes behavior under `kcp/` without accompanying tests
+at both applicable tiers is incomplete.
+
 ## Summary for contributors and agents
 
 - Read-only: everything except `kcp/` (and rare, additive manifest edits).
@@ -141,3 +160,5 @@ offending commit rather than resolving the conflict in place.
   new one to upstream code to make integration easier.
 - If a task seems to require editing upstream code, stop and flag it
   instead of doing it.
+- All `kcp/` behavior is developed test-first: unit tests plus KCP-envtest
+  integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
