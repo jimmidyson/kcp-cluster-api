@@ -38,19 +38,21 @@ the same change that adds the first such import, not preemptively.
 **Scope:** the first APIExport publishes **core CRDs, plus the
 `test/infrastructure/docker` provider's CRDs** (v1beta2) — `Cluster`,
 `Machine`, `MachineSet`, `MachineDeployment`, `MachineHealthCheck` from
-`core/`, and `DockerCluster`/`DockerMachine`/`DockerClusterTemplate`/
-`DockerMachineTemplate` from `test/infrastructure/docker`. Bootstrap and
-control-plane CRDs (`kubeadm` provider) are **not** needed: a test can set
+`core/`, and `DevCluster`/`DevMachine`/`DevClusterTemplate`/
+`DevMachineTemplate` (this fork point's naming for the docker/in-memory
+infra provider's CRDs, group `infrastructure.cluster.x-k8s.io`) from
+`test/infrastructure/docker`. Bootstrap and control-plane CRDs (`kubeadm`
+provider) are **not** needed: a test can set
 `Machine.spec.bootstrap.dataSecretName` directly
 (`api/core/v1beta2/machine_types.go:794`) instead of going through a
 `KubeadmConfig`, so Phase 1 doesn't need the kubeadm bootstrap/
 control-plane providers to prove a real reconcile loop. Addon and IPAM
 CRDs are out of scope until later phases.
 
-The docker CRDs are included specifically because Phase 1's exit
-criterion is a *real* `Cluster` → `Machine` provisioning loop, not just
-object creation: without `DockerCluster`/`DockerMachine` bound in the
-test workspace, `Machine.spec.infrastructureRef` never resolves and the
+The docker/dev-infra CRDs are included specifically because Phase 1's
+exit criterion is a *real* `Cluster` → `Machine` provisioning loop, not
+just object creation: without `DevCluster`/`DevMachine` bound in the test
+workspace, `Machine.spec.infrastructureRef` never resolves and the
 reconciler stalls before validating anything. Bootstrap/control-plane
 CRDs remain deferred to Phase 3 (P1/P2), since those providers aren't
 needed to clear Phase 1's bar.
