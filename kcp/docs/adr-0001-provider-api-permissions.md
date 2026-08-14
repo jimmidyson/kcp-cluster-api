@@ -1,7 +1,8 @@
 # ADR-0001: Provider API permissions for core CAPI controllers
 
 Status: **accepted** for the scope audited below (core's `cluster`,
-`machine`, `machineset`, `machinedeployment`, `machinepool` reconcilers).
+`machine`, `machineset`, `machinedeployment`, `machinepool` reconcilers),
+including the automatic-claim-acceptance mechanism (decision 3).
 **Not yet accepted** for `core/reconcilers/topology/cluster` (the
 ClusterClass/topology controller) — see "Known gap" below; do not treat
 this ADR as covering that controller's claim scope until it's audited the
@@ -54,6 +55,11 @@ agent, per AGENTS.md's requirement for D3/D5:
    conversion plan. Option E (per-workspace impersonation + ordinary RBAC)
    is ruled out unless Phase 1's spike finds a reason G1's assumptions
    don't hold.
+3. **Claim acceptance is automatic on provider bind, not a manual tenant
+   step.** When a tenant binds a provider's `APIExport`, core's access to
+   that provider's resources must become active without the tenant
+   separately accepting a permission claim by hand. See "Automatic claim
+   acceptance" below for the confirmed kcp-native mechanism this rides on.
 
 ## Technical finding that revises the original option set
 
@@ -100,10 +106,10 @@ list must be **maintained by a small controller, not hand-written**:
   satisfies kcp's API shape and keeps every individual claim auditable —
   but the *list* grows automatically as new providers are discovered, so
   no core-manager redeploy or manifest edit is needed per provider.
-- Tenants still explicitly accept each claim per kcp's normal UX. That's
-  unavoidable and arguably desirable: a workspace owner should see and
-  approve exactly which provider resources core gains access to in their
-  workspace, even though core's own onboarding of the claim is automatic.
+- Claim *acceptance* inside each tenant workspace does not need a manual
+  per-tenant step either — see "Automatic claim acceptance" below, which
+  supersedes the earlier assumption (in this ADR's first draft) that a
+  workspace owner would explicitly accept each claim by hand.
 
 This folds the original options A and D into one: A's goal (zero-touch
 onboarding) achieved through D's mechanism (concrete, named,
@@ -114,6 +120,80 @@ identity if desired (it only needs read access to provider `APIExport`
 objects and patch access to core's own `APIExport`), which is worth
 scoping as its own small decision when this is implemented, but doesn't
 block accepting this ADR.
+
+### Automatic claim acceptance: `WorkspaceType` `Maintain` lifecycle
+
+Decision 3 (claim acceptance is automatic on provider bind) is achievable
+entirely with an existing, built-in kcp mechanism — no bespoke
+tenant-side controller needed. Verified by reading the actual reconciler
+in `kcp-dev/kcp` (cloned read-only for this ADR; not vendored into this
+repo), not just the SDK's type comments:
+
+`pkg/reconciler/tenancy/defaultapibindinglifecycle/
+default_apibinding_lifecycle_reconcile.go` implements the
+`WorkspaceType.spec.defaultAPIBindingLifecycle: Maintain` behavior. For
+every `WorkspaceType` (transitively) applied to a workspace with
+`DefaultAPIBindingLifecycle == Maintain`, its reconcile loop (function
+`reconcile`, lines 94–190):
+
+1. Iterates **every** `PermissionClaim` currently declared on the
+   referenced `APIExport` (`apiExport.Spec.PermissionClaims`, line 134) —
+   not a fixed snapshot from when the binding was first created.
+2. Builds an `AcceptablePermissionClaim` for each one with
+   `State: ClaimAccepted` (line 157), using the claim's own
+   `DefaultSelector` if set, else `MatchAll: true` (lines 135–141).
+3. **Unconditionally overwrites** the managed `APIBinding`'s
+   `spec.permissionClaims` with this freshly-built list on every
+   reconcile (line 181: `apiBinding.Spec = apiBindingSpec`, followed by a
+   commit) — a full replace, not a merge.
+4. Is triggered by an informer watch on `APIExport` update events
+   (`default_apibinding_lifecycle_controller.go`, lines 135–140:
+   `apiExportsInformer.Informer().AddEventHandler(...enqueueAPIExport...)`),
+   which re-enqueues every workspace referencing that export — so this
+   isn't poll-based or restart-required; a change to core's
+   `APIExport.spec.permissionClaims` (e.g. the self-maintaining discovery
+   controller adding a newly-onboarded provider's resource) propagates to
+   every `Maintain`-mode tenant workspace's accepted-claims list on the
+   next reconcile after that change.
+
+Combined with decision 1's self-maintaining claim-list controller (which
+keeps core's `APIExport.spec.permissionClaims` itself in sync with
+discovered providers), this closes the loop with **zero additional code**
+on the acceptance side: onboard a provider once → its claim lands on
+core's `APIExport` → kcp's own `DefaultAPIBindingController` propagates
+acceptance into every tenant workspace that uses a `Maintain`-mode
+`WorkspaceType` for its core binding. A tenant binding a provider's own
+`APIExport` afterward just makes the (already dormantly-accepted) claim
+functionally relevant, since there's nothing to access until the
+provider's CRDs actually exist in that workspace.
+
+**Requirements this imposes on implementation** (tracked as open question
+6 below):
+
+- kcp-cluster-api must ship (or document) a `WorkspaceType` that tenants
+  use to create CAPI-enabled workspaces, with `spec.defaultAPIBindings`
+  referencing core's `APIExport` and
+  `spec.defaultAPIBindingLifecycle: Maintain`. A tenant who instead
+  hand-creates their own `APIBinding` to core (bypassing this
+  `WorkspaceType`) opts out of automatic propagation and must maintain
+  their own `spec.permissionClaims` by hand — worth flagging in user docs
+  (P10), not just assumed.
+- Each claim on core's `APIExport` should leave `DefaultSelector` unset
+  (or set explicitly to `MatchAll: true`, which is the fallback anyway)
+  so acceptance covers all instances of that resource type per workspace.
+
+**Trade-off to flag explicitly, not implement silently:** this removes
+the tenant's per-claim consent step kcp's permission-claim model is
+otherwise built around — decision 3 deliberately chooses automatic
+propagation over that friction, but it means (a) a tenant on the managed
+`WorkspaceType` cannot selectively reject one provider's claim while
+accepting others (it's all claims on core's `APIExport`, or none, via
+this path — a narrower opt-out means bypassing the managed binding
+entirely per the point above), and (b) any manual edit to the *managed*
+`APIBinding`'s `spec.permissionClaims` is silently reverted on the next
+reconcile (full overwrite, not merge). Both are consequences of decision 3
+as stated, not implementation bugs — call this out in user docs so it
+isn't surprising in practice.
 
 ## Verb scoping (from `core/reconcilers/*` audit)
 
@@ -221,14 +301,23 @@ rather than a true wildcard.
    controller uses to recognize a provider `APIExport` (label, annotation,
    or something else) — not blocking this ADR, but needed before the
    "Revised mechanism" is buildable.
-4. **Confirm claim-acceptance propagation timing**: in the Phase 1 spike,
-   verify that once a tenant accepts a newly-added claim, the resource
-   becomes visible through `kcp-dev/multicluster-provider`'s discovery
-   watch promptly (no manual re-sync) — load-bearing for the "day-one"
-   framing, since a slow/manual propagation path would undercut the
-   automated claim list's value.
-5. Still tangled with **D1** (target kcp version to pin): the SDK version
-   audited here is v0.32.3, already pinned in `kcp/go.mod`; if D1 lands on
-   a materially different kcp version, re-check `PermissionClaim`'s shape
-   hasn't changed before relying on the "resource field cannot wildcard"
-   finding above.
+4. ~~Confirm claim-acceptance propagation timing~~ — **mechanism confirmed**
+   against `kcp-dev/kcp` source (see "Automatic claim acceptance" above):
+   propagation is informer-event-driven, not poll-based. Still worth an
+   empirical end-to-end timing check in the Phase 1 spike (claim added →
+   `DefaultAPIBindingController` reconcile → resource visible through
+   `kcp-dev/multicluster-provider`'s discovery watch), but this is now a
+   "measure the latency" task, not an open design question.
+5. Still tangled with **D1** (target kcp version to pin): the SDK/server
+   version audited here is v0.32.3 (SDK) — `pkg/reconciler/tenancy/
+   defaultapibindinglifecycle` was read from a fresh clone of
+   `kcp-dev/kcp`'s default branch, so pin the exact server version
+   alongside D1 and re-check this reconciler's behavior hasn't changed if
+   D1 lands on a materially different version.
+6. **Ship the `Maintain`-mode `WorkspaceType`** tenants use to onboard to
+   CAPI (see "Requirements this imposes on implementation" above) — this
+   is new, concrete manifest work that should be folded into P6
+   (APIExport/APIBinding manifests) in `conversion-plan.md`, and its
+   existence/behavior documented in P10 (user docs), including the
+   opt-out trade-off (hand-created `APIBinding`s don't get automatic
+   propagation).
