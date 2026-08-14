@@ -3,7 +3,7 @@
 This directory contains everything specific to making Cluster API
 workspace-aware for [KCP](https://github.com/kcp-dev/kcp). It is the **only**
 place new code, tests, and docs for this fork should live — see the root
-[`CLAUDE.md`](../CLAUDE.md) for the invariants this exists to protect
+[`AGENTS.md`](../AGENTS.md) for the invariants this exists to protect
 (short version: everything outside `kcp/` is unmodified upstream
 cluster-api and must stay that way).
 
@@ -23,7 +23,7 @@ names:
 - `kcp/test/` — integration/e2e tests specific to KCP behavior.
 - `kcp/docs/` — design notes and docs specific to this fork.
 
-## Ground rules (see `CLAUDE.md` for full detail)
+## Ground rules (see `AGENTS.md` for full detail)
 
 1. Nothing in here edits a file outside `kcp/`.
 2. Integrate with upstream via its existing public extension points only.
