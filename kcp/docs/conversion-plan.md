@@ -150,6 +150,11 @@ early and expensive to unwind later.
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.
 
+**Status: done.** See
+[ADR-0001](adr-0001-per-workspace-manager-pool.md) for the recorded
+decisions (D1, D3, D5 resolved by the repository owner; D2, D4, D6
+confirmed at their stated defaults). Phase 1 is unblocked.
+
 ## Phase 1 — walking skeleton (groundwork, sequential, small team)
 
 Prove the model end-to-end against a *single, hardcoded* workspace before
@@ -179,6 +184,27 @@ workspace using entirely unmodified upstream reconciler/webhook code, and
 D4's open questions about the library are answered (adopt as-is, adopt
 with workarounds, or fall back to hand-rolling). This is the thing to
 demo before greenlighting Phase 2's investment.
+
+**Status: complete — see
+[ADR-0001's "Phase 1 results" section](adr-0001-per-workspace-manager-pool.md#phase-1-results)
+for the full writeup.** D4's open questions are answered (write-path
+routing, leader election/shared-process model, and conversion/admission
+webhooks all work as hoped). The exit criterion — a Cluster reconciling
+through unmodified upstream code into real docker/dev-provider Docker
+daemon calls — is met. Getting there required one deliberate, tracked,
+repo-owner-approved exception to the upstream-is-read-only invariant (see
+AGENTS.md's "declared exception" section and ADR-0001's "Known gaps"):
+`controllers/external.GetObjectFromContractVersionedRef` and friends
+funnel through `internal/contract.GetGKMetadata`, which did a hardcoded
+`CustomResourceDefinition` lookup with no pluggable hook — blocking every
+reconciler that resolves `infrastructureRef`/`bootstrap.configRef`/
+`controlPlaneRef`, not a corner case. `GetGKMetadata` is now a minimal,
+overridable indirection (`GetGKMetadataFunc`), backed in `kcp/` by a
+static registry built from the same CRD manifests already used to publish
+`APIResourceSchema`s — no cross-workspace client, no G3 work needed. Full
+`DevMachine` readiness in the integration test is gated only by this
+sandbox's network policy blocking Docker Hub image pulls, not by anything
+KCP-related; a normal CI runner is expected to reach it.
 
 ## Phase 2 — shared infrastructure (groundwork, sequential-ish)
 

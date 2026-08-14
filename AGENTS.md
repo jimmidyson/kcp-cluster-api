@@ -39,6 +39,36 @@ a signal to find a different integration point (see below), not to make the
 edit. If no such point exists yet, stop and raise it (open an issue, ask a
 maintainer) rather than compromising the invariant.
 
+#### The one declared exception: `internal/contract.GetGKMetadataFunc`
+
+`internal/contract/version.go`'s `GetGKMetadata` is the sole upstream file
+with a deliberate, repo-owner-approved edit: its lookup was factored out
+into an overridable package var, `GetGKMetadataFunc`, defaulting to the
+original behavior verbatim. Every reconciler resolving a
+contract-versioned cross-reference (`infrastructureRef`,
+`bootstrap.configRef`, `controlPlaneRef` — via
+`controllers/external.GetObjectFromContractVersionedRef`,
+`contract.GetContractVersion`, `contract.GetAPIVersion`) funnels through
+this one function, and it does a direct `CustomResourceDefinition` object
+lookup with no other pluggable hook — unlike
+`core/webhooks/conversion`'s `SetAPIVersionGetter`. A KCP workspace
+consuming a type only via `APIBinding` has no such object (the CRD-shaped
+source of truth is the `APIResourceSchema` in the *exporting* workspace),
+so every such reconcile failed outright — see
+[ADR-0001](kcp/docs/adr-0001-per-workspace-manager-pool.md#known-gaps)
+for the full writeup and the alternatives weighed before taking this
+exception.
+
+`kcp/internal/contractmetadata` + `kcp/internal/coremanager.SetupContractMetadata`
+supply the override — a static registry read from the same CRD manifests
+`kcp/internal/kcpfixtures` already publishes as `APIResourceSchema`s,
+no live lookup. This is the **only** upstream file this invariant permits
+touching; do not extend the pattern to other files without the same
+explicit repo-owner sign-off this one got. If you find another spot with
+the same shape (a hardcoded call with no injectable hook, blocking KCP
+compatibility), stop and raise it rather than assuming this precedent
+covers it too.
+
 ## All new work lives under `kcp/`
 
 Every line of code, config, docs, and tests this project adds goes under the
@@ -114,9 +144,10 @@ additive manifest lines above). A quick sanity check:
 git diff --name-only <upstream-base>..HEAD -- . ':!kcp'
 ```
 
-This should print nothing (or only the manifest files you deliberately and
-additively touched). If it prints anything else, undo it and re-implement
-inside `kcp/`.
+This should print nothing but the manifest files you deliberately and
+additively touched, plus (as of this writing) exactly one line:
+`internal/contract/version.go`, the one declared exception above. Anything
+else means undo it and re-implement inside `kcp/`.
 
 ## Rebasing onto newer cluster-api releases
 
@@ -194,7 +225,11 @@ makes the PR harder to review in the meantime.
 
 ## Summary for contributors and agents
 
-- Read-only: everything except `kcp/` (and rare, additive manifest edits).
+- Read-only: everything except `kcp/` (and rare, additive manifest edits),
+  with exactly one declared exception —
+  `internal/contract/version.go`'s `GetGKMetadataFunc` indirection, see
+  "The one declared exception" above. Don't extend this pattern elsewhere
+  without the same explicit repo-owner sign-off.
 - All new code, tests, docs, and config: under `kcp/`.
 - No new code inside upstream directories, even if it's KCP-specific.
 - Integrate via upstream's existing public extension points; never add a
