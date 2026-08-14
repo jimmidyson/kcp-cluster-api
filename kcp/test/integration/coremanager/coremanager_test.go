@@ -34,7 +34,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/go-logr/logr/testr"
+	dockerclient "github.com/moby/moby/client"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -106,6 +108,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	if _, err := os.Stat("/var/run/docker.sock"); err != nil {
 		t.Skipf("docker is not available in this environment: %v", err)
 	}
+	ensureKindDockerNetwork(t)
 
 	// MachinePool defaults to enabled upstream, and cluster.Reconciler/
 	// machine.Reconciler unconditionally watch it as an event source when
@@ -411,6 +414,31 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("scheme registration failed: %v", err)
+	}
+}
+
+// ensureKindDockerNetwork creates the "kind" docker network the docker/dev
+// infrastructure provider's load balancer and machine containers attach to
+// (test/infrastructure/docker/internal/docker.DefaultNetwork - unexported,
+// so duplicated here as a literal; it's a stable convention shared with the
+// kind project, not an implementation detail of that package). Normally
+// `kind create cluster` creates this as a side effect of setting up a local
+// management cluster; this walking skeleton doesn't use kind, so nothing
+// else creates it.
+func ensureKindDockerNetwork(t *testing.T) {
+	t.Helper()
+
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		t.Fatalf("failed to create docker client: %v", err)
+	}
+	if _, err := cli.NetworkInspect(t.Context(), "kind", dockerclient.NetworkInspectOptions{}); err == nil {
+		return // already exists.
+	} else if !errdefs.IsNotFound(err) {
+		t.Fatalf("failed to inspect the \"kind\" docker network: %v", err)
+	}
+	if _, err := cli.NetworkCreate(t.Context(), "kind", dockerclient.NetworkCreateOptions{}); err != nil {
+		t.Fatalf("failed to create the \"kind\" docker network: %v", err)
 	}
 }
 
