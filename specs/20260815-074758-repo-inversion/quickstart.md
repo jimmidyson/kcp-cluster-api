@@ -41,10 +41,17 @@ Expect: exit 0.
 **No internal upstream package is imported** (FR-004):
 
 ```sh
-go list -deps ./... | grep 'sigs.k8s.io/cluster-api/internal'
+go list -f '{{range .Imports}}{{.}}
+{{end}}' ./... | grep 'sigs.k8s.io/cluster-api/internal'
 ```
 
 Expect: no output.
+
+Note this checks the project's **direct** imports, deliberately. `go list
+-deps` would report internal packages and always fail: upstream's own public
+packages use their internal packages internally, as any Go library does. The
+requirement is that *this project* does not reach into them, not that no such
+package exists anywhere in the graph.
 
 **The dependency resolves to an immutable fork tag** (FR-003):
 

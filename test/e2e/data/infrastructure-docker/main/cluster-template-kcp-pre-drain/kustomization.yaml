@@ -1,4 +1,0 @@
-resources:
-  - ../cluster-template-topology
-patches:
-- path: cluster.yaml

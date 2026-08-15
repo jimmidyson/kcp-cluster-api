@@ -81,7 +81,7 @@ story work can begin.
 Cluster API as a version-pinned dependency.
 
 **Independent Test**: Fresh clone builds with no Cluster API tree present;
-`git ls-files` shows no upstream file; `go list -deps` shows no upstream
+`git ls-files` shows no upstream file; no direct import of an upstream
 internal package. Quickstart Scenario 1.
 
 - [ ] T009 [US1] Move every file under `kcp/` to the repository root, preserving history, so `kcp/cmd/`, `kcp/internal/`, `kcp/test/`, `kcp/docs/` become `cmd/`, `internal/`, `test/`, `docs/`
@@ -94,7 +94,7 @@ internal package. Quickstart Scenario 1.
 - [ ] T016 [US1] Replace the relative webhook manifest paths in the same file with resolution from the pinned dependency's module directory (FR-005)
 - [ ] T017 [US1] Implement the manifest resolution helper in `internal/kcpfixtures/`, failing with an identifiable error naming the expected location when the definitions are absent, with no fallback search (FR-006)
 - [ ] T018 [P] [US1] Unit-test the resolution helper's failure path in `internal/kcpfixtures/`: an unexpected layout must produce the named error, not an empty result
-- [ ] T019 [US1] Verify `go build ./...` succeeds and `go list -deps ./... | grep sigs.k8s.io/cluster-api/internal` is empty (FR-004, Quickstart Scenario 1)
+- [ ] T019 [US1] Verify `go build ./...` succeeds and that no package in this project **directly** imports an upstream internal package, using the direct-import check in Quickstart Scenario 1. Do not use `go list -deps`: it reports transitive internal packages, which upstream's own public packages legitimately use, and would fail against a correct implementation (FR-004)
 - [ ] T020 [US1] Verify no tracked file belongs to upstream by running the `git ls-files` check from Quickstart Scenario 1 and confirming it returns nothing — US1's own independent test, not deferred to Phase 7 (SC-001, FR-001)
 - [ ] T021 [US1] Verify the dependency resolves to an immutable fork tag, not a branch or filesystem path, using the `go list -m` check from Quickstart Scenario 1 (FR-002, FR-003, SC-003 in part — full verification of SC-003 requires an actual upstream version bump and happens the first time one is done, not within this feature)
 - [ ] T022 [US1] Verify the existing unit tests pass unchanged, with no assertion weakened to accommodate the move (spec: Behavioural equivalence)
