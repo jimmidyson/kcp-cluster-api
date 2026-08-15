@@ -6,7 +6,7 @@ weight: 10
 
 {{% pageinfo color="info" %}}
 kcp-cluster-api is early-stage: the KCP-aware manager entrypoint under
-`kcp/cmd/` has not landed yet, so today this repository builds and behaves
+The workspace-aware manager is still a walking skeleton, so today this repository builds and behaves
 like standard upstream [Cluster API](https://cluster-api.sigs.k8s.io/). This
 page will grow a dedicated "install the KCP-aware manager" section once that
 lands — see [Design & architecture](../design/_index.md) for the integration plan.
@@ -65,4 +65,4 @@ Because upstream code is unmodified, `clusterctl` and the standard Cluster API
 manifests work exactly as they do upstream. See the
 [Cluster API quickstart](https://cluster-api.sigs.k8s.io/user/quick-start)
 for the general flow; KCP-specific installation steps will be documented here
-once the `kcp/` integration components exist.
+once the workspace-aware components are complete.

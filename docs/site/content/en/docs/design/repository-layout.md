@@ -1,53 +1,55 @@
 ---
 title: Repository Layout
-description: What lives where, and conventions for adding new code under kcp/.
+description: What lives where.
 weight: 20
 ---
 
-## Top level
+Everything in this repository is this project's own code. Upstream Cluster
+API is a pinned dependency, not a tree here — see
+[Dependency architecture](fork-architecture.md).
 
-Everything outside `kcp/` is unmodified upstream Cluster API — treat it as
-read-only (see [Fork architecture](fork-architecture.md)). `kcp/` is the
-only place new code, tests, and docs for this fork live.
-
-## Inside `kcp/`
-
-Structure mirrors upstream's top-level layout where it makes sense, so it's
-obvious what a piece of KCP-aware code corresponds to. Subdirectories are
-created as they're actually needed rather than pre-scaffolded empty —
-today only `kcp/docs/` exists. Suggested names, as new code arrives:
-
-| Directory | Purpose |
+| Path | Purpose |
 |---|---|
-| `kcp/cmd/` | Our own manager/binary entrypoints — we do not run upstream's `main.go` directly, since wiring in workspace-awareness happens here. |
-| `kcp/controllers/` | KCP-aware controllers/reconcilers. |
-| `kcp/client/` | Workspace-aware `client.Client` / REST config wrapping. |
-| `kcp/api/` | Any KCP-specific API types (e.g. new CRDs), if needed. |
-| `kcp/internal/` | Implementation details not meant for external import. |
-| `kcp/test/` | Integration/e2e tests specific to KCP behavior. |
-| `kcp/docs/` | This documentation site, plus any design notes that don't belong in it. |
+| `Taskfile.yaml` | The named operations. `task --list` shows them. |
+| `DRIFT.md` | What this project carries against upstream, and why. |
+| `cmd/core-manager/` | The KCP-aware manager entrypoint. We do not run upstream's `main.go`: wiring in workspace-awareness happens here. |
+| `cmd/verify/` | The verification harness behind `task verify`. |
+| `cmd/drift/` | The drift check behind `task drift`. |
+| `internal/` | Implementation packages, not for external import. |
+| `test/integration/` | Integration tests against a real kcp server. |
+| `docs/` | ADRs, design notes and this site. |
+| `specs/` | Spec-driven feature specifications. |
+| `.specify/` | Spec Kit state, the project constitution, and extensions. |
+
+Directories are created as they are needed rather than pre-scaffolded.
 
 ## The docs site
 
-This Hugo + Docsy site lives at `kcp/docs/site/`. It's a self-contained Hugo
-module (its own `go.mod`, not the repository's root `go.mod`) plus a small
-npm toolchain for Docsy's CSS pipeline:
+This Hugo + Docsy site lives at `docs/site/`. It is a self-contained Hugo
+module — its own `go.mod`, separate from the repository's — plus a small npm
+toolchain for Docsy's CSS pipeline:
 
 ```sh
-cd kcp/docs/site
-npm install     # first time only, or after theme updates
-npm run serve   # local preview with live reload
-npm run build   # production build into public/
+task docs:build   # production build into public/
+
+cd docs/site
+npm run serve     # local preview with live reload
 ```
 
-See [Documentation policy](documentation-policy.md) for what's expected of
+Keeping it as its own module means theme updates move independently of the
+project's Go dependencies.
+
+See [Documentation policy](documentation-policy.md) for what is expected of
 new docs.
 
 ## Ground rules
 
-1. Nothing in `kcp/` edits a file outside `kcp/`.
-2. Integrate with upstream via its existing public extension points only.
-3. If that's not possible for something, stop and raise it rather than
-   reaching into upstream code.
+1. Integrate with upstream via its existing public extension points only.
+2. If that is not possible, stop and raise it rather than patching around
+   it. A patch in the fork is the last resort and costs a `DRIFT.md` entry
+   with a deadline.
+3. New behaviour is developed test-first, with integration tests against a
+   real kcp server.
 
-See `AGENTS.md` at the repository root for the full, normative rules.
+See `AGENTS.md` for the working rules and
+`.specify/memory/constitution.md` for the governing principles.

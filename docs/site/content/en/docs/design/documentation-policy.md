@@ -55,21 +55,21 @@ nav label should differ from the page title.
 ## Building and previewing
 
 ```sh
-cd kcp/docs/site
+cd docs/site
 npm install     # first time only, or after theme updates
 npm run serve   # local preview at http://localhost:1313 with live reload
 npm run build   # production build into public/, used in CI
 ```
 
-The site is a self-contained Hugo module under `kcp/docs/site/` (see
+The site is a self-contained Hugo module under `docs/site/` (see
 [Repository layout](repository-layout.md)) — it does not touch the
 repository's root `go.mod` and is unaffected by upstream rebases.
 
 ## Where this is enforced
 
 - This page is the canonical statement of the policy.
-- `kcp/README.md` (the repository's own README, one level up from this site)
+- `README.md` (the repository's own README)
   carries a condensed pointer back here, so it's visible without opening the
   site.
-- CI builds this site on every PR that touches `kcp/docs/site/`, so a
+- CI builds this site on every PR that touches `docs/site/`, so a
   content or config mistake fails the PR rather than shipping broken docs.

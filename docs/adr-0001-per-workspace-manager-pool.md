@@ -1,5 +1,13 @@
 # ADR-0001: Per-workspace manager pool — Phase 0 decisions
 
+> **Note on paths.** This document was written while the project was
+> arranged as a fork of the Cluster API tree, with its own code under a
+> `kcp/` subdirectory. That subdirectory is now the repository root, and
+> upstream is a pinned dependency — so read `kcp/internal/...` as
+> `internal/...`, `kcp/docs/...` as `docs/...`, and so on. The decisions
+> recorded here stand; only their locations moved. See
+> [`docs/site/content/en/docs/design/fork-architecture.md`](site/content/en/docs/design/fork-architecture.md).
+
 Status: accepted. Resolves the Phase 0 decision table (D1, D3, D5) from
 [`conversion-plan.md`](conversion-plan.md); D2, D4, D6 are recorded here
 too for completeness since the plan already resolved them to a default.

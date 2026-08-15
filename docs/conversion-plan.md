@@ -1,5 +1,13 @@
 # Plan of attack: making Cluster API KCP-workspace-aware
 
+> **Note on paths.** This document was written while the project was
+> arranged as a fork of the Cluster API tree, with its own code under a
+> `kcp/` subdirectory. That subdirectory is now the repository root, and
+> upstream is a pinned dependency — so read `kcp/internal/...` as
+> `internal/...`, `kcp/docs/...` as `docs/...`, and so on. The decisions
+> recorded here stand; only their locations moved. See
+> [`docs/site/content/en/docs/design/fork-architecture.md`](site/content/en/docs/design/fork-architecture.md).
+
 Status: draft, for discussion. Owner: none yet — this is a coordination
 document for splitting the work across contributors/agents.
 

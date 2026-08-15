@@ -1,186 +1,120 @@
 # kcp-cluster-api
 
-This repository is a **fork of [kubernetes-sigs/cluster-api](https://github.com/kubernetes-sigs/cluster-api)**
-whose purpose is to make Cluster API workspace-aware for
+This repository makes Cluster API workspace-aware for
 [KCP](https://github.com/kcp-dev/kcp) (logical clusters / workspaces).
 
-Fork point: `281e4e3` on upstream `main` (cluster-api v1.14 series, contract `v1beta2`).
+It is **not** a fork of the Cluster API tree. Upstream is an ordinary
+version-pinned dependency, resolved to a small patched fork that carries the
+changes we cannot yet get upstream. Everything in this repository is this
+project's own code.
 
-## The prime directive: upstream code is read-only
+## Divergence from upstream is counted, and temporary
 
-**Every file that exists in upstream cluster-api must remain byte-for-byte
-identical to upstream, forever**, except when it changes because of an
-explicit upstream merge/rebase. This is not a style preference — it is the
-entire point of this fork. The easier it is to rebase onto new cluster-api
-releases, the more valuable this project is. A single unnecessary edit to an
-upstream file turns every future rebase into a manual conflict to resolve,
-compounding release after release.
+The whole point is that adopting a new Cluster API release stays cheap. Every
+change carried against upstream makes the next adoption more expensive, so:
 
-This applies to **all existing top-level directories and files** as of the
-fork point: `api/`, `bootstrap/`, `cmd/`, `controllers/`, `controlplane/`,
-`core/`, `docs/`, `exp/`, `feature/`, `internal/`, `test/`, `util/`,
-`version/`, `Makefile`, `Dockerfile`, `Tiltfile`, `go.mod`, `go.sum`,
-`README.md`, `CONTRIBUTING.md`, etc. — and to any new files/directories that
-arrive in those locations via future upstream rebases.
+- Changes to upstream code are exceptional and individually justified. Not
+  for a typo, a tidied import, or a bugfix noticed in passing — those belong
+  upstream.
+- Every carried change is recorded in [`DRIFT.md`](DRIFT.md), with the base
+  commit it applies to and the upstream proposal that will retire it.
+- A change may be carried before its proposal is filed, but only with a
+  filing date recorded in `DRIFT.md`, no more than 90 days out. Once that
+  date passes, the patch is a defect: file it, remove it, or amend the
+  constitution — never extend the date quietly.
+- `task drift` checks the record against reality and fails on any path that
+  diverges without an entry.
 
-**Do not touch these files. Not to fix a typo, not to reformat, not to add a
-"harmless" comment, not to reorder an import, not for a "small" bugfix you
-noticed in passing. If it lives outside `kcp/`, treat it as read-only.**
+This used to be a rule about not editing a co-located tree. It is now a
+property of the repository: there is no upstream tree here to edit.
 
-If upstream code genuinely needs a bugfix, that fix belongs upstream
-(open an issue/PR against `kubernetes-sigs/cluster-api`), not here.
+### Integrate through public extension points only
 
-### No exceptions, no patch mechanism
+Layer KCP-awareness onto upstream using what upstream already exposes: own
+manager entrypoints, injected clients and caches, controller-runtime's
+manager options, sources, handlers, predicates, webhook chains.
 
-There is deliberately no sanctioned way to modify upstream files in this
-repo — no patch files, no `// KCP-PATCH` markers, no build-tag overlays on
-existing files. If a feature seems to require editing upstream code, that is
-a signal to find a different integration point (see below), not to make the
-edit. If no such point exists yet, stop and raise it (open an issue, ask a
-maintainer) rather than compromising the invariant.
+If something appears to need an upstream internal, or a hook upstream does
+not have, **stop and raise it** rather than working around it. The options
+are: find another integration point, propose the hook upstream, or accept
+the limitation. Adding the hook to the fork is the last resort and requires
+a `DRIFT.md` entry.
 
-#### The one declared exception: `internal/contract.GetGKMetadataFunc`
+## The patched fork
 
-`internal/contract/version.go`'s `GetGKMetadata` is the sole upstream file
-with a deliberate, repo-owner-approved edit: its lookup was factored out
-into an overridable package var, `GetGKMetadataFunc`, defaulting to the
-original behavior verbatim. Every reconciler resolving a
-contract-versioned cross-reference (`infrastructureRef`,
-`bootstrap.configRef`, `controlPlaneRef` — via
-`controllers/external.GetObjectFromContractVersionedRef`,
-`contract.GetContractVersion`, `contract.GetAPIVersion`) funnels through
-this one function, and it does a direct `CustomResourceDefinition` object
-lookup with no other pluggable hook — unlike
-`core/webhooks/conversion`'s `SetAPIVersionGetter`. A KCP workspace
-consuming a type only via `APIBinding` has no such object (the CRD-shaped
-source of truth is the `APIResourceSchema` in the *exporting* workspace),
-so every such reconcile failed outright — see
-[ADR-0001](kcp/docs/adr-0001-per-workspace-manager-pool.md#known-gaps)
-for the full writeup and the alternatives weighed before taking this
-exception.
+[`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api)
+carries this project's patches and nothing else — no specifications, no
+tooling, no process of its own. Its contract:
 
-`kcp/internal/contractmetadata` + `kcp/internal/coremanager.SetupContractMetadata`
-supply the override — a static registry read from the same CRD manifests
-`kcp/internal/kcpfixtures` already publishes as `APIResourceSchema`s,
-no live lookup. This is the **only** upstream file this invariant permits
-touching; do not extend the pattern to other files without the same
-explicit repo-owner sign-off this one got. If you find another spot with
-the same shape (a hardcoded call with no injectable hook, blocking KCP
-compatibility), stop and raise it rather than assuming this precedent
-covers it too.
+- One branch per upstream release line (`kcp/v1.15`), cut from the exact
+  upstream commit this project builds against, not from the fork's own
+  default branch.
+- One commit per carried patch, each referencing its upstream proposal.
+- Immutable tags this project pins to. **Three tags per release**:
+  `vX.Y.Z-kcp.N`, `api/vX.Y.Z-kcp.N` and `test/vX.Y.Z-kcp.N` — `api/` and
+  `test/` are separate Go modules inside the Cluster API repository,
+  resolved by tag prefix, and a partial tag set fails at dependency
+  resolution with a confusing "unknown revision" error.
 
-## All new work lives under `kcp/`
+## Repository layout
 
-Every line of code, config, docs, and tests this project adds goes under the
-top-level `kcp/` directory. Nothing under `kcp/` exists in upstream, so it
-can never conflict with an upstream rebase. See `kcp/README.md` for the
-internal layout.
-
-Corollary: never add KCP-specific files inside upstream directories either
-(no `controllers/cluster_kcp_controller.go`, no `internal/kcp/...`). Even
-though such a file is technically "new," putting it inside an upstream
-directory risks future upstream files landing at the same path, invites
-accidental edits to neighboring upstream files in the same PR, and blurs the
-`kcp/` vs. upstream boundary that makes rebases mechanically checkable.
-
-### Integration is extension-point-only
-
-Because upstream files can't be edited, KCP-awareness must be layered on
-top using integration points upstream already exposes as public API —
-things like:
-
-- Building our own `main`/manager entrypoint under `kcp/cmd/` that imports
-  upstream's reconcilers/webhooks and wires them together ourselves, rather
-  than running upstream's `main.go`.
-- Wrapping/decorating the `client.Client` (and caches, REST config, etc.)
-  passed into upstream constructors so it becomes workspace-aware, if
-  upstream's constructors accept an injected client rather than hardcoding
-  one.
-- Using controller-runtime's own extension surfaces (manager options,
-  webhook chains, custom `Source`/`Handler`/`Predicate` implementations,
-  field indexers) rather than modifying upstream registration code.
-- Running KCP-aware components (e.g. an APIExport/virtual-workspace proxy)
-  as separate processes/binaries under `kcp/cmd/` that sit in front of or
-  alongside unmodified upstream controllers.
-
-If, while implementing something, you find upstream doesn't expose the hook
-you need (e.g. a constructor hardcodes `mgr.GetClient()` instead of taking
-a client), do not "just" add the parameter upstream — treat that as a
-blocker to raise (open an issue, ask a maintainer) rather than work around.
-Options at that point are: find a different approach (e.g. operate on a
-wrapped `Manager`), or accept the limitation until it's solved upstream.
-
-### Manifest-style files: additive-only, and rare
-
-A very small set of root files are mechanical manifests rather than logic,
-and changing them is sometimes unavoidable to build/wire `kcp/` code in:
-
-- `go.mod` — adding new `require` lines for `kcp/`'s own dependencies.
-- `.gitignore` — appending new ignore patterns for `kcp/` build artifacts.
-- `.github/workflows/` — adding **new** workflow files for `kcp/` CI, never
-  editing existing upstream workflow files.
-
-Rules for these:
-1. Only ever **append**. Never reorder, reformat, or edit an existing line.
-2. Never remove or modify an existing upstream entry.
-3. Prefer a new file over touching an existing one wherever the tooling
-   allows it (e.g. a second `go.work`/separate go module under `kcp/` is
-   preferable to editing the root `go.mod`, if feasible).
-4. When in doubt, ask before touching a manifest file — it's the one place
-   the "never touch it" rule has any give, so treat every instance as
-   worth double-checking rather than assumed-fine.
-
-Do **not** treat `Makefile`, `Dockerfile`, `Tiltfile`, or `README.md` as
-manifest-style — they contain real logic/prose and fall under the strict
-read-only rule. Give `kcp/` its own `Makefile`/docs instead, included from
-the root only via an additive one-line `include` if absolutely necessary.
-
-## Verifying the invariant
-
-Before committing, changes should be confined to `kcp/` (plus, rarely, the
-additive manifest lines above). A quick sanity check:
-
-```sh
-git diff --name-only <upstream-base>..HEAD -- . ':!kcp'
+```
+Taskfile.yaml     the named operations; `task --list` to see them
+DRIFT.md          what we carry against upstream, and why
+cmd/              binaries: core-manager, verify, drift
+internal/         implementation packages
+test/integration/ integration tests against a real kcp server
+docs/             ADRs, design notes, and the documentation site
+specs/            spec-driven feature specifications
+.specify/         Spec Kit state, constitution and extensions
 ```
 
-This should print nothing but the manifest files you deliberately and
-additively touched, plus (as of this writing) exactly one line:
-`internal/contract/version.go`, the one declared exception above. Anything
-else means undo it and re-implement inside `kcp/`.
+## Adopting a newer Cluster API release
 
-## Rebasing onto newer cluster-api releases
+An upgrade is a dependency bump, not a merge:
 
-Because `kcp/` is disjoint from every upstream path, pulling in new
-upstream releases should almost always be a clean merge:
+1. Cut a new branch in the fork from the new upstream ref, replay the
+   carried patches, and tag all three modules.
+2. Update the `replace` pins in `go.mod` and the base commit in `DRIFT.md`.
+3. Run `task verify` and `task drift`.
 
-```sh
-git fetch origin main                     # or the upstream remote, if configured
-git merge origin/main                     # or rebase, per team preference
-```
+If a carried patch no longer applies, that is a signal to check whether its
+upstream proposal landed — in which case delete it from both the fork and
+`DRIFT.md` rather than forward-porting it.
 
-If this ever produces a conflict **outside `kcp/`**, that is a strong
-signal that a past change violated the invariant above — find and fix the
-offending commit rather than resolving the conflict in place.
+## Testing: TDD is required
 
-## Testing: TDD is required for all `kcp/` work
+New behaviour is developed test-first: a failing test, then the minimum code
+to pass it, then refactoring. See [`docs/testing.md`](docs/testing.md) for
+the concrete workflow. Every change needs tests at both tiers that apply:
 
-All new behavior under `kcp/` is developed test-first (red: write a
-failing test, green: write the minimal code to make it pass, refactor).
-See [`kcp/docs/testing.md`](kcp/docs/testing.md) for the concrete
-workflow and tooling. In short, every change needs tests at both tiers,
-whichever apply:
+- **Unit tests** — colocated `_test.go` files, no real processes:
+  `task test:unit`.
+- **Integration tests** — against a real kcp server, never a vanilla envtest
+  apiserver, which has no logical cluster or workspace support and so cannot
+  validate anything this project exists to do: `task test:integration`.
 
-- **Unit tests** — colocated `_test.go` files, no real processes, run via
-  `make -C kcp test-unit`.
-- **Integration tests** — exercise real behavior against a real kcp
-  server, not a vanilla envtest apiserver (which has no logical
-  cluster/workspace support and so cannot validate anything KCP-specific),
-  using the `kcp/test/integration/envtest` helper, run via
-  `make -C kcp test-integration`.
+A change that adds or alters behaviour without tests at both applicable
+tiers is incomplete, however obviously correct it looks.
 
-A PR that adds or changes behavior under `kcp/` without accompanying tests
-at both applicable tiers is incomplete.
+## Done is a command
+
+`task verify` is the project's done-condition. It reports **three** outcomes,
+not two:
+
+| Outcome | Meaning |
+|---|---|
+| pass | every step in scope ran and succeeded |
+| fail | a step ran and failed |
+| could not run | a step was skipped: the environment lacks a capability |
+
+A step that could not run is **never** a pass. Read the outcome from
+`bin/verify-result.json` rather than the exit status: task runners collapse
+every failure to one code, so the distinction does not survive `task`.
+
+Weakening an assertion to get a green run is a failure of the work, not a
+workaround. If the original assertion cannot be met, that is the finding to
+report.
 
 ## Commit and PR descriptions
 
@@ -272,27 +206,32 @@ makes the PR harder to review in the meantime.
 
 ## Summary for contributors and agents
 
-- Read-only: everything except `kcp/` (and rare, additive manifest edits),
-  with exactly one declared exception —
-  `internal/contract/version.go`'s `GetGKMetadataFunc` indirection, see
-  "The one declared exception" above. Don't extend this pattern elsewhere
-  without the same explicit repo-owner sign-off.
-- All new code, tests, docs, and config: under `kcp/`.
-- No new code inside upstream directories, even if it's KCP-specific.
-- Integrate via upstream's existing public extension points; never add a
-  new one to upstream code to make integration easier.
-- If a task seems to require editing upstream code, stop and flag it
-  instead of doing it.
-- All `kcp/` behavior is developed test-first: unit tests plus KCP-envtest
-  integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
-- Commit messages and PR descriptions: concise, not padded, and never
-  include a Claude session URL/ID or a `Co-Authored-By:` agent trailer;
-  an `Assisted-By:` trailer is welcome.
-- PR titles must start with one of ⚠️/✨/🐛/📖/🚀/🌱 (see "PR title format"
-  above) and must not contain an issue/PR number.
+- Upstream Cluster API is a pinned dependency, not a tree in this
+  repository. Changes to it live in the patched fork and are recorded in
+  [`DRIFT.md`](DRIFT.md) with a filing deadline for their upstream proposal.
+- Integrate via upstream's existing public extension points. If something
+  needs an upstream internal or a hook that does not exist, stop and raise
+  it rather than working around it.
+- `task verify` is the done-condition. Three outcomes, not two: a step that
+  could not run is never a pass. Read the result from
+  `bin/verify-result.json`, not the exit status.
+- All new behaviour is developed test-first: unit tests plus integration
+  tests against a real kcp server, as applicable — see
+  [`docs/testing.md`](docs/testing.md).
+- Do not weaken an assertion to get a green run. If the assertion cannot be
+  met, that is the finding.
+- Commit messages and PR descriptions: concise, not padded, never containing
+  a session URL/ID or a `Co-Authored-By:` agent trailer; an `Assisted-By:`
+  trailer is welcome.
+- PR titles follow Conventional Commits and must not contain an issue or PR
+  number. The title becomes the commit on `main` and drives release
+  automation.
 - All PRs are squash merged — no merge commits, no rebase-and-merge.
-- Keep open PR branches up to date by rebasing onto the base branch, not by
-  merging the base branch in — no merge commits on PR branches either.
-- New code and user-visible behavior ship with matching docs in
-  `kcp/docs/site/` — user docs (installation/usage) and design docs
-  (architecture/deep dives). See `kcp/README.md#documentation`.
+- Keep open PR branches current by rebasing onto the base branch, not by
+  merging it in.
+- New code and user-visible behaviour ship with matching docs in
+  `docs/site/` — user docs (installation/usage) and design docs
+  (architecture/deep dives). See [`README.md`](README.md).
+- The full governing principles are in
+  [`.specify/memory/constitution.md`](.specify/memory/constitution.md); this
+  file is the working summary of how they apply day to day.

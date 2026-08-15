@@ -1,62 +1,86 @@
-# kcp/
+# kcp-cluster-api
 
-This directory contains everything specific to making Cluster API
-workspace-aware for [KCP](https://github.com/kcp-dev/kcp). It is the **only**
-place new code, tests, and docs for this fork should live — see the root
-[`AGENTS.md`](../AGENTS.md) for the invariants this exists to protect
-(short version: everything outside `kcp/` is unmodified upstream
-cluster-api and must stay that way).
+Makes [Cluster API](https://github.com/kubernetes-sigs/cluster-api)
+workspace-aware for [kcp](https://github.com/kcp-dev/kcp), so a single
+control plane can reconcile Cluster API resources across many logical
+clusters.
+
+Upstream Cluster API is consumed as a version-pinned dependency, not vendored
+or forked wholesale. The handful of changes we cannot yet get upstream live
+in a small patched fork and are recorded in [`DRIFT.md`](DRIFT.md) with the
+date each one's upstream proposal is due.
+
+> **Status: early.** A walking skeleton reconciles `Cluster` → `Machine`
+> against a real kcp server through unmodified upstream reconcilers. Known
+> design corrections for multi-workspace operation are outstanding — see
+> [`docs/conversion-plan.md`](docs/conversion-plan.md).
+
+## Getting started
+
+You need a Go toolchain and, for the integration tests, a container runtime.
+Nothing else: tooling installs itself at pinned versions.
+
+```sh
+go install github.com/go-task/task/v3/cmd/task@latest
+
+task --list      # what you can run
+task check       # the fast subset: build, lint, unit tests
+task verify      # everything, including integration tests
+```
+
+### `task verify` reports three outcomes, not two
+
+| Outcome | Meaning |
+|---|---|
+| pass | every step in scope ran and succeeded |
+| fail | a step ran and failed |
+| could not run | a step was skipped: the environment lacks a capability |
+
+A step that could not run is **never** reported as a pass. Read the outcome
+from `bin/verify-result.json`, which is also what CI reads — task runners
+collapse every failure to a single exit code, so the distinction does not
+survive the runner.
 
 ## Layout
 
-Structure mirrors upstream's top-level layout where it makes sense, so it's
-obvious what a piece of KCP-aware code corresponds to. Create subdirectories
-as they're actually needed rather than pre-scaffolding empty ones; suggested
-names:
-
-- `kcp/cmd/` — our own manager/binary entrypoints (we do not run upstream's
-  `main.go` directly, since wiring in workspace-awareness happens here).
-- `kcp/controllers/` — KCP-aware controllers/reconcilers.
-- `kcp/client/` — workspace-aware `client.Client` / REST config wrapping.
-- `kcp/api/` — any KCP-specific API types (e.g. new CRDs), if needed.
-- `kcp/internal/` — implementation details not meant for external import.
-- `kcp/test/integration/` — integration tests specific to KCP behavior,
-  run against a real kcp server via `kcp/test/integration/envtest` (see
-  `kcp/docs/testing.md`).
-- `kcp/docs/` — design notes and docs specific to this fork, including the
-  documentation site described below.
+```
+Taskfile.yaml     the named operations
+DRIFT.md          what we carry against upstream, and why
+cmd/              binaries: core-manager, verify, drift
+internal/         implementation packages
+test/integration/ integration tests against a real kcp server
+docs/             ADRs, design notes and the documentation site
+specs/            spec-driven feature specifications
+```
 
 ## Documentation
 
-Everything this fork adds must be documented for two audiences, in the
+Everything this project adds is documented for two audiences, in the
 [Hugo](https://gohugo.io/) + [Docsy](https://www.docsy.dev/) site under
-`kcp/docs/site/`:
+[`docs/site/`](docs/site/):
 
-- **User docs** (`content/en/docs/user/`) — installation and usage, for
-  people running kcp-cluster-api.
+- **User docs** (`content/en/docs/user/`) — installing and running it.
 - **Design docs** (`content/en/docs/design/`) — architecture and deep dives,
-  technical reference for developers and agents changing the code.
+  for developers and agents changing the code.
 
-A feature isn't done until both are updated (or a no-op is genuinely
-correct, e.g. an internal change with no user-visible behavior still needs
-a design write-up but not a user-docs change). See
-[Documentation policy](docs/site/content/en/docs/design/documentation-policy.md)
-for the full policy, and `kcp/docs/site/README.md` for how to build/preview
-the site.
+A feature is not done until both are updated, or a no-op is genuinely
+correct: an internal change with no user-visible behaviour still needs a
+design write-up. Build the site with `task docs:build`.
 
-`kcp/` is its own Go module (`kcp/go.mod`), separate from the root
-`sigs.k8s.io/cluster-api` module, so it can depend on things like
-`github.com/kcp-dev/sdk` without touching root `go.mod` — see the
-"Manifest-style files" section of `AGENTS.md`.
+## Contributing
 
-## Ground rules (see `AGENTS.md` for full detail)
+Read [`AGENTS.md`](AGENTS.md) first — it applies equally to people and to
+agents. The short version:
 
-1. Nothing in here edits a file outside `kcp/`.
-2. Integrate with upstream via its existing public extension points only.
-3. If that's not possible for something, stop and raise it rather than
-   reaching into upstream code.
-4. All new behavior is developed test-first, with both unit tests and
-   KCP-envtest integration tests as applicable — see
-   [`kcp/docs/testing.md`](docs/testing.md).
-5. New code and user-visible behavior ship with matching user and design
-   docs — see [Documentation](#documentation) above.
+- Upstream is a dependency. Changes to it go in the patched fork and get an
+  entry in `DRIFT.md`, with an upstream proposal due within 90 days.
+- Integrate through upstream's public extension points. If something needs
+  an internal, stop and raise it rather than working around it.
+- New behaviour is developed test-first, with integration tests against a
+  real kcp server.
+- PR titles follow [Conventional Commits](https://www.conventionalcommits.org);
+  PRs are squash merged, so the title becomes the commit on `main` and drives
+  releases.
+
+The governing principles are in
+[`.specify/memory/constitution.md`](.specify/memory/constitution.md).

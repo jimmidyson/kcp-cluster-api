@@ -50,7 +50,8 @@ integration model, and deep dives into how it's built.
 
 {{% blocks/feature title="Contributions welcome" icon="fab fa-github" %}}
 
-All new code, tests, and docs live under `kcp/` — see
+Upstream Cluster API is a pinned dependency, not a tree in this
+repository — see
 <!-- markdown-link-check-disable-next-line -->
 [AGENTS.md](https://github.com/jimmidyson/kcp-cluster-api/blob/main/AGENTS.md)
 for the rules governing contributions.

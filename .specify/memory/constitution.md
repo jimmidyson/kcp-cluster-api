@@ -134,10 +134,10 @@ justified, and expected to disappear.
 - The permitted set MUST be checked automatically. Divergence discovered by
   review rather than by a check is a failure of the check.
 
-The mechanism enforcing this changes over time — a read-only rule over a
-co-located tree today, a separate patched fork after the repository
-inversion. The principle does not: divergence is counted, justified, and
-trending to zero.
+The mechanism enforcing this has changed over time — first a read-only rule
+over a co-located upstream tree, now a separate patched fork with the
+divergence recorded and checked. The principle has not: divergence is
+counted, justified, and trending to zero.
 
 ### II. Integrate Through Public Extension Points
 

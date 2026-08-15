@@ -5,7 +5,7 @@ weight: 20
 ---
 
 {{% pageinfo color="info" %}}
-This page will fill in as KCP-aware functionality lands under `kcp/`. Until
+This page will fill in as KCP-aware functionality lands. Until
 then, day-to-day usage matches upstream Cluster API — see the
 [Cluster API user documentation](https://cluster-api.sigs.k8s.io/user/quick-start)
 for managing clusters, machines, and providers.
@@ -23,7 +23,7 @@ Once workspace-aware components exist, this page will cover:
 
 ## Reporting issues
 
-Because everything KCP-specific lives under `kcp/`, please file issues and
+Please file issues and
 feature requests against this repository rather than
 upstream Cluster API, unless the problem reproduces with unmodified upstream
 code.

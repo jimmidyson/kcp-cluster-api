@@ -1,5 +1,13 @@
 # ADR-0001: Provider API permissions for core CAPI controllers
 
+> **Note on paths.** This document was written while the project was
+> arranged as a fork of the Cluster API tree, with its own code under a
+> `kcp/` subdirectory. That subdirectory is now the repository root, and
+> upstream is a pinned dependency — so read `kcp/internal/...` as
+> `internal/...`, `kcp/docs/...` as `docs/...`, and so on. The decisions
+> recorded here stand; only their locations moved. See
+> [`docs/site/content/en/docs/design/fork-architecture.md`](site/content/en/docs/design/fork-architecture.md).
+
 Status: **accepted**, verb scope now audited across all six core
 reconciler packages that touch provider-owned objects — `cluster`,
 `machine`, `machineset`, `machinedeployment`, `machinepool`, and

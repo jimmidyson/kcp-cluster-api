@@ -186,14 +186,14 @@ when an unrecorded change is added to the fork. Quickstart Scenario 5.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T046 Rewrite `AGENTS.md`: replace the read-only-tree prohibition with the rules that now apply — how the fork is maintained, how patches are added and retired, how `DRIFT.md` is kept, and the upgrade procedure for adopting a newer Cluster API release, which is the documented form of SC-003 (FR-020)
-- [ ] T047 [P] Rewrite `README.md` for the new layout and the `task` entry points, including the recorded verification budget (FR-019, NFR-001)
-- [ ] T048 [P] Update `docs/site/content/en/docs/design/` pages describing the fork architecture, repository layout and rebasing, all of which describe the arrangement this feature removes (FR-019)
-- [ ] T049 [P] Update `docs/conversion-plan.md` and the two ADRs where they reference the `kcp/` subdirectory layout or the read-only invariant (FR-019)
-- [ ] T050 Update `CLAUDE.md` if it still points at guidance that has moved (FR-019)
+- [x] T046 Rewrite `AGENTS.md`: replace the read-only-tree prohibition with the rules that now apply — how the fork is maintained, how patches are added and retired, how `DRIFT.md` is kept, and the upgrade procedure for adopting a newer Cluster API release, which is the documented form of SC-003 (FR-020)
+- [x] T047 [P] Rewrite `README.md` for the new layout and the `task` entry points, including the recorded verification budget (FR-019, NFR-001)
+- [x] T048 [P] Update `docs/site/content/en/docs/design/` pages describing the fork architecture, repository layout and rebasing, all of which describe the arrangement this feature removes (FR-019)
+- [x] T049 [P] Update `docs/conversion-plan.md` and the two ADRs where they reference the `kcp/` subdirectory layout or the read-only invariant (FR-019)
+- [x] T050 Update `CLAUDE.md` if it still points at guidance that has moved (FR-019)
 - [ ] T051 Run the full quickstart: all six scenarios on a machine with a container runtime, and Scenario 3 on one without (SC-006, SC-009, Quickstart: What "done" means)
 - [ ] T052 Record the measured full-run duration from the first green CI run into the project documentation as the verification budget — this cannot be done in a development container and must come from a real run (NFR-001, SC-008, research R4)
-- [ ] T053 Confirm no contributor or governance document instructs a reader to do something the repository no longer supports — human review, since the automated check is deferred (SC-007)
+- [x] T053 Confirm no contributor or governance document instructs a reader to do something the repository no longer supports — human review, since the automated check is deferred (SC-007)
 
 ---
 
