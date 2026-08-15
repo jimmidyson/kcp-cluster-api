@@ -8,6 +8,33 @@ upstream proposal is accepted.
 `task drift` checks this file against reality and fails on any path that
 diverges without an entry here.
 
+## Where the check runs, and why not on every pull request
+
+The check runs on a daily schedule, on demand, and on pull requests that
+touch the pin, this record, or the checker itself — not on every pull
+request, and not in the fork.
+
+**Not on every pull request here**, because the thing being measured lives
+in another repository. Gating every change on it means an unrelated pull
+request goes red because somebody pushed to the fork: a failure its author
+can neither fix nor merge past. The scheduled run surfaces the same problem
+within a day, without holding anyone's work hostage. The path filter keeps
+it blocking exactly where a pull request in this repository *is* the right
+place to fix it — when the pinned version or this record changes.
+
+**Not in the fork**, though that is where drift is introduced, because the
+checker would become drift. The fork's contract is "upstream at base commit
+plus recorded patches, nothing else", which is what makes
+`git diff upstream..kcp/v1.15` mean something without mental subtraction.
+Adding a workflow and a copy of this record there would add two more
+differing paths and require the check to exempt its own infrastructure. It
+would also need a second implementation: the checker is Go in this module,
+and the fork is the Cluster API module, which cannot import it without a
+cycle.
+
+If push-time rejection on the fork is wanted, branch protection on `kcp/*`
+is the honest mechanism, not a workflow the fork has to carry.
+
 Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.1`
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`

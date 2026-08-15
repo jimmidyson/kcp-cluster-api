@@ -178,7 +178,7 @@ when an unrecorded change is added to the fork. Quickstart Scenario 5.
 
 - [x] T043 [US4] Create `DRIFT.md` recording the fork base commit `281e4e3`, the fork tag `v1.15.0-kcp.1`, and the single carried patch from T005 across its two paths (`internal/contract/version.go`, `controllers/external/metadata.go`). Its upstream proposal is not yet filed, so record the filing deadline **2026-11-13** — 90 days from the patch landing, the maximum Constitution Principle I allows for a pending proposal (FR-016)
 - [x] T044 [US4] Implement the `drift` target comparing the fork's actual differences against `DRIFT.md` and failing on any unrecorded path (FR-017)
-- [x] T045 [US4] Add `task drift` to `pr.yaml` so divergence is reported on every change (SC-005)
+- [x] T045 [US4] Run `task drift` from a dedicated `drift.yaml`: on a daily schedule, on demand, and blocking on pull requests touching `go.mod`, `DRIFT.md` or the checker. Not on every pull request — the fork is a different repository, so gating unrelated work on it yields failures the author cannot fix — and not in the fork, where the checker would itself become drift (SC-005)
 
 **Checkpoint**: Drift is measured rather than trusted.
 

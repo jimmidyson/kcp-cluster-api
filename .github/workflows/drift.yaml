@@ -1,0 +1,46 @@
+name: drift
+
+# Divergence from upstream is measured rather than trusted (Constitution I),
+# but not on every pull request.
+#
+# The thing being measured lives in another repository. Gating every PR here
+# on it means an unrelated change goes red because someone pushed to the
+# fork — a failure its author can neither fix nor merge past. And it detects
+# late: drift is introduced by a push to the fork's branch, not by a PR here.
+#
+# So: scheduled, so fork-side drift surfaces within a day with nobody
+# opening anything; on demand, for when you want to know now; and blocking
+# only on pull requests that change the pin or the record, which is exactly
+# when a PR here is the right place to fix it.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'DRIFT.md'
+      - 'cmd/drift/**'
+      - 'internal/drift/**'
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+
+      - name: Check drift against DRIFT.md
+        run: task drift
