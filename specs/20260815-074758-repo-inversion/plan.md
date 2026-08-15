@@ -53,6 +53,27 @@ task
 **Scale/Scope**: 13 Go files, ~3.4k lines moving; 11 workflows replaced by 2;
 1 carried upstream patch
 
+## Global Constraints
+
+Every task inherits these. Values are copied verbatim from the spec,
+research, and the existing module; a task that needs one of them must use
+these exact values rather than choosing its own.
+
+| Constraint | Value | Source |
+|---|---|---|
+| Go version floor | 1.26.3 | existing `kcp/go.mod` |
+| Module path | `github.com/jimmidyson/kcp-cluster-api` | spec: Repository identity |
+| Fork repository | `github.com/jimmidyson/cluster-api` | spec: The patched fork |
+| Fork base commit | `281e4e3` | research R2 |
+| Fork tag consumed | `v1.15.0-kcp.1` | research R2 |
+| kcp server version | v0.32.3 | existing `kcp/Makefile` |
+| multicluster-provider | v0.8.0 | ADR-0001 D1 |
+| multicluster-runtime | v0.24.1 | ADR-0001 D1 |
+| Tooling install method | `go install` at pinned versions into repo-local `bin/` | spec FR-009 |
+| Fast-subset budget | ≤ 60 s warm | contract: task surface |
+| Full-run budget | measured from first green CI run; 15 min inherited ceiling until then | research R4 |
+| Initial drift set | exactly one path | spec: Patch set at the start |
+
 ## Constitution Check
 
 *GATE: evaluated before Phase 0 and re-evaluated after Phase 1 design.*
@@ -156,6 +177,12 @@ serial; the rest is mostly parallel once it lands.
 
 Steps 3–5 can proceed in parallel once step 2 lands. Step 6 depends on step 4
 and is the only task that cannot be completed in a development container.
+
+**Scope note (advisory)**: step 1 is arguably a separate plan — it lives in a
+different repository, produces its own release artifact, and shares no files
+with the rest. It is kept here because it is six tasks, strictly blocking, and
+meaningless on its own: the fork tag exists only to be consumed by step 2. If
+the carried patch set ever grows beyond one, the fork should get its own plan.
 
 ## Complexity Tracking
 
