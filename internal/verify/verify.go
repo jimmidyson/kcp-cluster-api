@@ -140,7 +140,18 @@ func Run(w io.Writer, steps []Step) ([]Result, int) {
 			continue
 		}
 
-		if err := s.Run(); err != nil {
+		// Tell the step which capabilities were confirmed for it. Child
+		// processes inherit this, so a test can refuse to skip over a
+		// capability the harness has just asserted is present.
+		if err := os.Setenv(EnvCapabilitiesAsserted, assertedNames(s)); err != nil {
+			results = append(results, Result{Step: s.Name, Outcome: OutcomeFail, Err: err})
+			continue
+		}
+
+		err := s.Run()
+		os.Unsetenv(EnvCapabilitiesAsserted)
+
+		if err != nil {
 			results = append(results, Result{Step: s.Name, Outcome: OutcomeFail, Err: err})
 			continue
 		}

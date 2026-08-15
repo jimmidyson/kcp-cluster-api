@@ -47,7 +47,7 @@ func main() {
 	if !*fast {
 		steps = append(steps, verify.Step{
 			Name:  "test:integration",
-			Needs: []verify.Capability{containerRuntime()},
+			Needs: []verify.Capability{verify.ContainerRuntime()},
 			Run:   taskTarget("test:integration"),
 		})
 	}
@@ -73,23 +73,3 @@ func taskTarget(name string) func() error {
 		return cmd.Run()
 	}
 }
-
-// containerRuntime reports whether a container runtime is reachable. The
-// integration suite provisions real containers, so without one it cannot run
-// at all - which is a different thing from failing.
-func containerRuntime() verify.Capability {
-	return verify.Capability{
-		Name: "container runtime",
-		Check: func() error {
-			if host := os.Getenv("DOCKER_HOST"); host != "" {
-				return nil
-			}
-			const sock = "/var/run/docker.sock"
-			if _, err := os.Stat(sock); err != nil {
-				return fmt.Errorf("%s is not present and DOCKER_HOST is unset", sock)
-			}
-			return nil
-		},
-	}
-}
-

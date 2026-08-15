@@ -29,7 +29,6 @@ package coremanager_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -61,12 +60,13 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/verify"
+	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
-	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
-	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
@@ -135,8 +135,16 @@ func resolveManifests(t *testing.T) (crdPaths, webhookPaths []string) {
 }
 
 func TestCoreManagerClusterToMachine(t *testing.T) {
-	if _, err := os.Stat("/var/run/docker.sock"); err != nil {
-		t.Skipf("docker is not available in this environment: %v", err)
+	// Skipping is reasonable on a developer machine with no container
+	// runtime. It is a defect under `task verify`, which checks for one
+	// before starting this step: there, a skip would report the project's
+	// only end-to-end reconcile as passing without having run it, and the
+	// only trace would be the step finishing in a fraction of a second.
+	if err := verify.ContainerRuntimeAvailable(); err != nil {
+		if verify.CapabilityAsserted(verify.CapabilityContainerRuntime) {
+			t.Fatalf("verification asserted a container runtime is available, but this test cannot reach one: %v", err)
+		}
+		t.Skipf("no container runtime in this environment: %v", err)
 	}
 	ensureKindDockerNetwork(t)
 

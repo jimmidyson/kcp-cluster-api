@@ -141,8 +141,11 @@ specs/                   # spec-driven feature specifications
 bin/                     # gitignored: pinned tooling installed here
 
 .github/workflows/
-├── pr.yaml              # build, lint, test, drift check, PR title
-└── docs.yaml            # documentation site build
+├── pr.yaml              # task verify
+├── pr-title.yaml        # Conventional Commits title check (needs `edited`)
+├── drift.yaml           # fork divergence, scheduled and path-triggered
+├── docs.yaml            # documentation site build
+└── release-please.yaml  # release automation
 ```
 
 **Structure Decision**: promote `kcp/*` to the repository root rather than

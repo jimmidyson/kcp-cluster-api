@@ -13,39 +13,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-jobs:
-  title:
-    # Conventional Commits, because PRs are squash merged: the title becomes
-    # the commit on main and is what release-please parses. An unparseable
-    # title produces a wrong release, not an untidy log.
-    name: pr title
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      # Needs to read the pull request it is validating. Without this the
-      # action fails with "Resource not accessible by integration" before it
-      # ever looks at the title — failing every title, valid or not.
-      pull-requests: read
-    steps:
-      - uses: amannn/action-semantic-pull-request@0723387faaf9b38adef4775cd42cfd5155ed6017 # v5.5.3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            docs
-            test
-            refactor
-            build
-            ci
-            chore
-          # Constitution VII: link issues in the body, never the title.
-          subjectPattern: '^(?![^\s].*#\d+).+$'
-          subjectPatternError: |
-            The title must not contain an issue or PR number. Link issues in
-            the body instead (for example "Fixes #123").
+# The pull request title check lives in `pr-title.yaml`, because it needs to
+# fire on `edited` and nothing in this workflow should.
 
+jobs:
   verify:
     # Invokes named task targets and nothing else (FR-014). Any logic here
     # that a contributor cannot reproduce with `task <name>` is a violation.

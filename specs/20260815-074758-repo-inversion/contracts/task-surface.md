@@ -97,6 +97,24 @@ gates the step whose own setup would install it.
 |---|---|---|
 | Container runtime | `test:integration`, `verify` | socket present, or `DOCKER_HOST` set |
 
+A capability has exactly **one** definition, and a test may not carry its own
+copy. The harness and the integration test each used to decide "is there a
+container runtime?" separately — the harness accepted a socket *or*
+`DOCKER_HOST`, the test accepted only a socket. On a machine with a remote or
+rootless daemon the two disagreed: the harness declared the capability
+present and started the step, the test skipped itself, `go test` printed
+`ok`, and the step reported **pass**. The three-outcome contract was intact
+and useless, because the same failure had reappeared one level below it.
+
+So, in addition to the rules above:
+
+5. A test MUST NOT skip over a capability the harness has asserted is
+   present. `verify.Run` exports the confirmed capabilities to each step in
+   `KCP_CAPI_CAPABILITIES_ASSERTED`; a guard that finds the capability
+   missing while that variable claims it MUST fail, naming the
+   contradiction. Skipping remains correct when nothing was asserted — that
+   is a developer running `go test` directly.
+
 Deliberately **not** capabilities:
 
 - **The kcp server binary.** `task tools` downloads it, and `test:integration`
