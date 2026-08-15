@@ -1,18 +1,22 @@
-<!-- Thanks for sending a pull request! Here are some tips for you:
-    1. If this is your first time, please read our contributor guidelines: https://github.com/kubernetes-sigs/cluster-api/blob/main/CONTRIBUTING.md#contributing-a-patch and developer guide https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/book/src/developer/getting-started.md
+<!--
+The title must follow Conventional Commits: `type(scope): description`.
+Because PRs are squash merged, the title becomes the commit on main and is
+what release automation parses — an unparseable title produces a wrong
+release. See AGENTS.md, "PR title format".
 
-    2. Please add an icon to the title of this PR (see https://sigs.k8s.io/cluster-api/CONTRIBUTING.md#contributing-a-patch), and delete this line and similar ones
-    the icon will be either ⚠️ (:warning:, major or breaking changes), ✨ (:sparkles:, feature additions), 🐛 (:bug:, patch and bugfixes), 📖 (:book:, documentation or proposals), or 🌱 (:seedling:, minor or other) 
+Do not put an issue number in the title; link it below instead.
 -->
 
-**What this PR does / why we need it**:
+## What this changes, and why
 
-**Which issue(s) this PR fixes** *(optional, in `fixes #<issue number>(, fixes #<issue_number>, ...)` format, will close the issue(s) when PR gets merged)*:
-Fixes #
+## How it was verified
 
-<!-- 
-Please label this pull request according to what area(s) you are addressing. For reference on PR/issue labels, see: https://github.com/kubernetes-sigs/cluster-api/labels?q=area+
-
-Area example:
-/area runtime-sdk
+<!--
+`task verify` is the project's done-condition. Paste the outcome, or say
+which steps could not run and why — a step that could not run is its own
+outcome, never a pass.
 -->
+
+## Related issues
+
+<!-- e.g. Fixes #123 -->

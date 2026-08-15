@@ -1,0 +1,70 @@
+name: pr
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default; jobs that need more say so.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The pull request title check lives in `pr-title.yaml`, because it needs to
+# fire on `edited` and nothing in this workflow should.
+
+jobs:
+  verify:
+    # Invokes named task targets and nothing else (FR-014). Any logic here
+    # that a contributor cannot reproduce with `task <name>` is a violation.
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+
+      - name: Verify
+        run: task verify
+
+      - name: Report outcome
+        # Runs even when the previous step failed, because the distinction
+        # this project cares about is not visible in an exit status: go-task
+        # collapses every failure to 201. The machine-readable report is the
+        # only place "could not run" is distinguishable from "failed".
+        if: always()
+        run: |
+          set -euo pipefail
+          report=bin/verify-result.json
+          if [ ! -f "$report" ]; then
+            echo "::error::$report was not produced; verification did not run to completion"
+            exit 1
+          fi
+          cat "$report"
+          status=$(jq -r '.status' "$report")
+          echo "verification status: $status" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.steps[] | "- \(.step): \(.outcome)\(if .missingCapability != null then " (\(.missingCapability) unavailable)" else "" end)"' \
+            "$report" >> "$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            pass) ;;
+            could-not-run)
+              echo "::error::Verification is INCOMPLETE: a step could not run. This is not a pass."
+              jq -r '.steps[] | select(.outcome == "could not run") | "::error::\(.step): \(.missingCapability) unavailable — \(.reason)"' "$report"
+              exit 1
+              ;;
+            *)
+              echo "::error::Verification FAILED"
+              exit 1
+              ;;
+          esac
+

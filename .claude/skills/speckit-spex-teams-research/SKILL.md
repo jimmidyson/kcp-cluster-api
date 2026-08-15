@@ -1,0 +1,1 @@
+../../../.specify/extensions/spex-teams/.specify-dev/agent-commands/claude/speckit-spex-teams-research/SKILL.md

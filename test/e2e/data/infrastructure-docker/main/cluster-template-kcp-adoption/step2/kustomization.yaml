@@ -1,7 +1,0 @@
-labels:
-- includeSelectors: true
-  pairs:
-    kcp-adoption.step2: ""
-
-resources:
-- ../../bases/cluster-with-kcp.yaml

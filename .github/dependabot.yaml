@@ -11,7 +11,7 @@ updates:
     all-github-actions:
       patterns: [ "*" ]
   commit-message:
-      prefix: ":seedling:"
+      prefix: "build"
   labels:
     - "area/ci"
     - "ok-to-test"
@@ -20,10 +20,6 @@ updates:
 - package-ecosystem: "gomod"
   directories:
   - "/"
-  - "/api"
-  - "/test"
-  - "/hack/tools"
-  - "/kcp"
   schedule:
     interval: "weekly"
     day: "monday"
@@ -55,7 +51,7 @@ updates:
   - dependency-name: "sigs.k8s.io/kustomize/api"
     update-types: [ "version-update:semver-major", "version-update:semver-minor" ]
   commit-message:
-    prefix: ":seedling:"
+    prefix: "build"
   labels:
     - "area/dependency"
     - "ok-to-test"

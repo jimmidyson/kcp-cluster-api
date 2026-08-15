@@ -1,0 +1,107 @@
+version: '3'
+
+# Fail loudly: an unset variable or a failing pipe stage must not be mistaken
+# for success (FR-011).
+set: [errexit, nounset, pipefail]
+
+vars:
+  BIN: '{{.ROOT_DIR}}/bin'
+  # Pinned. Tooling is installed at fixed versions with the Go toolchain only:
+  # no package manager, no environment manager, nothing on the critical path
+  # that an ephemeral container has to materialise first (FR-009).
+  KCP_VERSION: v0.32.3
+  GOOS_:
+    sh: go env GOOS
+  GOARCH_:
+    sh: go env GOARCH
+
+tasks:
+  default:
+    desc: List available targets
+    cmds:
+      - task --list
+    silent: true
+
+  verify:
+    desc: The done-condition. Every step, with three outcomes — see contracts/task-surface.md
+    deps: [build:verify]
+    cmds:
+      # Runs the built binary, not `go run`: `go run` exits 1 for any non-zero
+      # program status, which collapses "could not run" (2) into "failed" (1)
+      # and destroys the distinction FR-012 requires.
+      - '{{.BIN}}/verify'
+
+  check:
+    desc: The fast subset — everything needing no container runtime or external service
+    deps: [build:verify]
+    cmds:
+      - '{{.BIN}}/verify --fast'
+
+  build:verify:
+    desc: Build the verification harness into bin/
+    cmds:
+      - go build -o {{.BIN}}/verify ./cmd/verify
+
+  build:
+    desc: Compile all binaries
+    cmds:
+      - go build ./...
+
+  lint:
+    desc: Static analysis
+    cmds:
+      - go vet ./...
+
+  test:unit:
+    desc: Unit tests
+    cmds:
+      - go test ./...
+
+  test:integration:
+    desc: Integration tests against a real kcp server
+    deps: [tools]
+    cmds:
+      # PATH is set on the command, not in a top-level `env:` block: go-task
+      # silently ignores `env: PATH:`, so bin/ never reached the test process
+      # and the kcp fixture failed with "kcp: executable file not found in
+      # $PATH" on a runner where the binary had just been downloaded into it.
+      #
+      # PATH is the right mechanism despite what the fixture's failure hint
+      # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
+      # fixture resolves the server as a bare "kcp" and relies on lookup.
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/...
+
+  tools:
+    desc: Install pinned tooling into bin/
+    deps: [tools:kcp]
+
+  tools:kcp:
+    desc: Download the pinned kcp server binary into bin/
+    status:
+      - test -x {{.BIN}}/kcp
+    cmds:
+      - mkdir -p {{.BIN}}
+      # `go install github.com/kcp-dev/kcp/cmd/kcp@version` does not work: kcp's
+      # go.mod carries replace directives, and `go install pkg@version` refuses
+      # any module whose go.mod has them. The release archive sidesteps that.
+      - >-
+        curl -sSfL
+        "https://github.com/kcp-dev/kcp/releases/download/{{.KCP_VERSION}}/kcp_{{trimPrefix "v" .KCP_VERSION}}_{{.GOOS_}}_{{.GOARCH_}}.tar.gz"
+        | tar -xzf - -C {{.BIN}} --strip-components=1 bin/kcp
+
+  drift:
+    desc: Report the fork's divergence from its base and check it against DRIFT.md
+    cmds:
+      - go run ./cmd/drift
+
+  docs:build:
+    desc: Build the documentation site
+    dir: docs/site
+    cmds:
+      - npm install
+      - npm run build
+
+  clean:
+    desc: Remove installed tooling
+    cmds:
+      - rm -rf {{.BIN}}

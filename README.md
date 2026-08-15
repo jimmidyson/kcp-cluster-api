@@ -1,65 +1,101 @@
-<a href="https://cluster-api.sigs.k8s.io"><img alt="capi" src="./docs/logos/kubernetes-cluster-logos_final-02.svg" width="160x" /></a>
-<p>
-<a href="https://godoc.org/sigs.k8s.io/cluster-api"><img src="https://godoc.org/sigs.k8s.io/cluster-api?status.svg"></a>
-<!-- join kubernetes slack channel for cluster-api -->
-<a href="http://slack.k8s.io/">
-<img src="https://img.shields.io/badge/join%20slack-%23cluster--api-brightgreen"></a>
-<!-- latest stable release badge -->
-<img alt="GitHub release (latest SemVer)" src="https://img.shields.io/github/v/release/kubernetes-sigs/cluster-api">
-</p>
+# kcp-cluster-api
 
-# Cluster API
+Makes [Cluster API](https://github.com/kubernetes-sigs/cluster-api)
+workspace-aware for [kcp](https://github.com/kcp-dev/kcp), so a single
+control plane can reconcile Cluster API resources across many logical
+clusters.
 
-### 👋 Welcome to our project! Our [Book](https://cluster-api.sigs.k8s.io) can help you get started and provides lots of in-depth information.
+Upstream Cluster API is consumed as a version-pinned dependency, not vendored
+or forked wholesale. The handful of changes we cannot yet get upstream live
+in a small patched fork and are recorded in [`DRIFT.md`](DRIFT.md) with the
+date each one's upstream proposal is due.
 
-#### Useful links
-- [Feature proposals](./docs/proposals)
-- [Quick Start](https://cluster-api.sigs.k8s.io/user/quick-start.html)
+> **Status: early.** A walking skeleton reconciles `Cluster` → `Machine`
+> against a real kcp server through unmodified upstream reconcilers. Known
+> design corrections for multi-workspace operation are outstanding — see
+> [`docs/conversion-plan.md`](docs/conversion-plan.md).
 
-## ✨ What is the Cluster API?
+## Getting started
 
-Cluster API is a Kubernetes subproject focused on providing declarative APIs and tooling to simplify provisioning, upgrading, and operating multiple Kubernetes clusters.
+You need a Go toolchain and, for the integration tests, a container runtime.
+Nothing else: tooling installs itself at pinned versions.
 
-Started by the Kubernetes Special Interest Group (SIG) Cluster Lifecycle, the Cluster API project uses Kubernetes-style APIs and patterns to automate cluster lifecycle management for platform operators. The supporting infrastructure, like virtual machines, networks, load balancers, and VPCs, as well as the Kubernetes cluster configuration are all defined in the same way that application developers operate deploying and managing their workloads. This enables consistent and repeatable cluster deployments across a wide variety of infrastructure environments.
+```sh
+go install github.com/go-task/task/v3/cmd/task@latest
 
-### ⚙️ Providers
+task --list      # what you can run
+task check       # the fast subset: build, lint, unit tests
+task verify      # everything, including integration tests
+```
 
-Cluster API can be extended to support any infrastructure (AWS, Azure, vSphere, etc.), bootstrap or control plane (kubeadm is built-in) provider. There is a growing list of [supported providers](https://cluster-api.sigs.k8s.io/reference/providers.html) available.
+### `task verify` reports three outcomes, not two
 
-<!-- ANCHOR: Community -->
+| Outcome | Meaning |
+|---|---|
+| pass | every step in scope ran and succeeded |
+| fail | a step ran and failed |
+| could not run | a step was skipped: the environment lacks a capability |
 
-## 🤗 Community, discussion, contribution, and support
+A step that could not run is **never** reported as a pass. Read the outcome
+from `bin/verify-result.json`, which is also what CI reads — task runners
+collapse every failure to a single exit code, so the distinction does not
+survive the runner.
 
-Cluster API is developed in the open, and is constantly being improved by our users, contributors, and maintainers. It is because of you that we are able to automate cluster lifecycle management for the community. Join us!
+### How long it takes
 
-If you have questions or want to get the latest project news, you can connect with us in the following ways:
+**`task verify`: 5 min 13 s.** Measured, not estimated — that is the first
+green CI run of the full suite on a GitHub-hosted `ubuntu-latest` runner
+([run 31891936950][first-green], commit `30ee953`), timed from the start of
+the `task verify` step to its end, so it includes downloading the pinned kcp
+server and starting a real one.
 
-- Chat with us on the Kubernetes [Slack](http://slack.k8s.io/) in the [#cluster-api][#cluster-api slack] channel
-- Subscribe to the [SIG Cluster Lifecycle](https://groups.google.com/a/kubernetes.io/g/sig-cluster-lifecycle) Google Group for access to documents and calendars
-- Join our Cluster API working group sessions where we share the latest project news, demos, answer questions, and triage issues
-    - Weekly on Wednesdays @ 10:00 PT on [Zoom][zoomMeeting]
-    - Previous meetings: \[ [notes][notes] | [recordings][recordings] \]
+That figure is the budget. A change that pushes it materially higher is a
+change to be argued for, not absorbed: verification has to stay inside the
+feedback loop of writing code, or it gets deferred to CI and stops being a
+done-condition. `task check` is the sub-minute subset for the inner loop.
 
-Pull Requests and feedback on issues are very welcome!
-See the [issue tracker] if you're unsure where to start, especially the [Good first issue] and [Help wanted] tags, and
-also feel free to reach out to discuss.
+[first-green]: https://github.com/jimmidyson/kcp-cluster-api/actions/runs/31891936950
 
-See also our [contributor guide](CONTRIBUTING.md) and the Kubernetes [community page] for more details on how to get involved.
+## Layout
 
-### Code of conduct
+```
+Taskfile.yaml     the named operations
+DRIFT.md          what we carry against upstream, and why
+cmd/              binaries: core-manager, verify, drift
+internal/         implementation packages
+test/integration/ integration tests against a real kcp server
+docs/             ADRs, design notes and the documentation site
+specs/            spec-driven feature specifications
+```
 
-Participation in the Kubernetes community is governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
+## Documentation
 
-[community page]: https://kubernetes.io/community
-[notes]: https://cluster-api.sigs.k8s.io/agenda
-[recordings]: https://www.youtube.com/playlist?list=PL69nYSiGNLP29D0nYgAGWt1ZFqS9Z7lw4
-[zoomMeeting]: https://zoom.us/j/861487554
-[implementerNotes]: https://docs.google.com/document/d/1IZ2-AZhe4r3CYiJuttyciS7bGZTTx4iMppcA8_Pr3xE/edit
-[providerZoomMeetingTues]: https://zoom.us/j/140808484
-[providerZoomMeetingWed]: https://zoom.us/j/424743530
-[issue tracker]: https://github.com/kubernetes-sigs/cluster-api/issues
-[#cluster-api slack]: https://kubernetes.slack.com/archives/C8TSNPY4T
-[Good first issue]: https://github.com/kubernetes-sigs/cluster-api/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
-[Help wanted]: https://github.com/kubernetes-sigs/cluster-api/issues?utf8=%E2%9C%93&q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22+
+Everything this project adds is documented for two audiences, in the
+[Hugo](https://gohugo.io/) + [Docsy](https://www.docsy.dev/) site under
+[`docs/site/`](docs/site/):
 
-<!-- ANCHOR_END: Community -->
+- **User docs** (`content/en/docs/user/`) — installing and running it.
+- **Design docs** (`content/en/docs/design/`) — architecture and deep dives,
+  for developers and agents changing the code.
+
+A feature is not done until both are updated, or a no-op is genuinely
+correct: an internal change with no user-visible behaviour still needs a
+design write-up. Build the site with `task docs:build`.
+
+## Contributing
+
+Read [`AGENTS.md`](AGENTS.md) first — it applies equally to people and to
+agents. The short version:
+
+- Upstream is a dependency. Changes to it go in the patched fork and get an
+  entry in `DRIFT.md`, with an upstream proposal due within 90 days.
+- Integrate through upstream's public extension points. If something needs
+  an internal, stop and raise it rather than working around it.
+- New behaviour is developed test-first, with integration tests against a
+  real kcp server.
+- PR titles follow [Conventional Commits](https://www.conventionalcommits.org);
+  PRs are squash merged, so the title becomes the commit on `main` and drives
+  releases.
+
+The governing principles are in
+[`.specify/memory/constitution.md`](.specify/memory/constitution.md).

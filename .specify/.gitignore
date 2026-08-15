@@ -1,0 +1,16 @@
+# Machine-local Spec Kit state — not meant to be shared.
+# Managed by the Specify CLI; safe to edit (your changes are preserved on refresh).
+
+# Local pointer to the current feature directory. Rewritten every time you
+# switch features, so it is per-checkout state rather than something to share.
+feature.json
+
+# Per-machine extension config overrides.
+extensions/*/local-config.yml
+
+# Downloaded catalog caches — machine-local, refetched on demand.
+extensions/.cache/
+
+# Per-feature flow state (gate progress for the checkout you are on).
+# Same category as feature.json above: machine-local, not shared.
+.spex-state

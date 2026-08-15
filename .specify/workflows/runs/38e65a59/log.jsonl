@@ -1,0 +1,20 @@
+{"event": "step_started", "step_id": "check-version", "type": "shell", "timestamp": "2026-08-15T07:40:59.077202+00:00"}
+{"event": "step_completed", "step_id": "check-version", "status": "completed", "timestamp": "2026-08-15T07:40:59.312691+00:00"}
+{"event": "step_started", "step_id": "validate-source", "type": "shell", "timestamp": "2026-08-15T07:40:59.313454+00:00"}
+{"event": "step_completed", "step_id": "validate-source", "status": "completed", "timestamp": "2026-08-15T07:40:59.315962+00:00"}
+{"event": "step_started", "step_id": "resolve-request", "type": "shell", "timestamp": "2026-08-15T07:40:59.316436+00:00"}
+{"event": "step_completed", "step_id": "resolve-request", "status": "completed", "timestamp": "2026-08-15T07:40:59.362722+00:00"}
+{"event": "step_started", "step_id": "detect-agent", "type": "shell", "timestamp": "2026-08-15T07:40:59.363424+00:00"}
+{"event": "step_completed", "step_id": "detect-agent", "status": "completed", "timestamp": "2026-08-15T07:40:59.365617+00:00"}
+{"event": "step_started", "step_id": "migrate-commands", "type": "shell", "timestamp": "2026-08-15T07:40:59.366113+00:00"}
+{"event": "step_completed", "step_id": "migrate-commands", "status": "completed", "timestamp": "2026-08-15T07:40:59.368051+00:00"}
+{"event": "step_started", "step_id": "init-project", "type": "shell", "timestamp": "2026-08-15T07:40:59.368498+00:00"}
+{"event": "step_completed", "step_id": "init-project", "status": "completed", "timestamp": "2026-08-15T07:40:59.672920+00:00"}
+{"event": "step_started", "step_id": "install-ext-spex", "type": "shell", "timestamp": "2026-08-15T07:40:59.673685+00:00"}
+{"event": "step_completed", "step_id": "install-ext-spex", "status": "failed", "timestamp": "2026-08-15T07:41:00.725463+00:00"}
+{"event": "step_failed", "step_id": "install-ext-spex", "error": "Shell command exited with code 1.", "timestamp": "2026-08-15T07:41:00.725654+00:00"}
+{"event": "workflow_finished", "status": "failed", "timestamp": "2026-08-15T07:41:00.726387+00:00"}
+{"event": "step_started", "step_id": "install-ext-spex", "type": "shell", "timestamp": "2026-08-15T07:41:43.495079+00:00"}
+{"event": "step_completed", "step_id": "install-ext-spex", "status": "failed", "timestamp": "2026-08-15T07:41:44.030320+00:00"}
+{"event": "step_failed", "step_id": "install-ext-spex", "error": "Shell command exited with code 1.", "timestamp": "2026-08-15T07:41:44.030530+00:00"}
+{"event": "workflow_finished", "status": "failed", "timestamp": "2026-08-15T07:41:44.031428+00:00"}

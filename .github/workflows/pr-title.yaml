@@ -1,0 +1,61 @@
+name: pr title
+
+# Its own workflow, not a job in `pr`, because it needs a trigger the other
+# jobs must not have. A bare `pull_request:` fires on opened, synchronize and
+# reopened — not on `edited`. The title check is the one thing here that a
+# contributor fixes by editing the pull request rather than by pushing a
+# commit, so without `edited` a corrected title never re-runs the check and
+# the pull request stays blocked on a verdict about a title that no longer
+# exists. The converse is worse: a compliant title edited into a
+# non-compliant one keeps its stale green check.
+#
+# Adding `edited` to `pr.yaml` instead would re-run the full verification —
+# five minutes of it — every time somebody touched the description.
+#
+# `synchronize` has to stay in the list even though a push cannot change a
+# title. Check runs attach to a head commit, so a required check that does
+# not fire on push simply does not exist on the new head, and the pull
+# request waits forever for a verdict that can never arrive. This was caught
+# by auto-merge sitting on a commit with no title check at all.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    # Conventional Commits, because PRs are squash merged: the title becomes
+    # the commit on main and is what release-please parses. An unparseable
+    # title produces a wrong release, not an untidy log.
+    name: pr title
+    runs-on: ubuntu-latest
+    permissions:
+      # Needs to read the pull request it is validating. Without this the
+      # action fails with "Resource not accessible by integration" before it
+      # ever looks at the title — failing every title, valid or not.
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@0723387faaf9b38adef4775cd42cfd5155ed6017 # v5.5.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            test
+            refactor
+            build
+            ci
+            chore
+          # Constitution VII: link issues in the body, never the title.
+          subjectPattern: '^(?![^\s].*#\d+).+$'
+          subjectPatternError: |
+            The title must not contain an issue or PR number. Link issues in
+            the body instead (for example "Fixes #123").

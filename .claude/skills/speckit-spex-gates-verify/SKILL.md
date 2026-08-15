@@ -1,0 +1,1 @@
+../../../.specify/extensions/spex-gates/.specify-dev/agent-commands/claude/speckit-spex-gates-verify/SKILL.md

@@ -1,0 +1,1 @@
+../../../.specify/extensions/spex-worktrees/.specify-dev/agent-commands/claude/speckit-spex-worktrees-manage/SKILL.md
