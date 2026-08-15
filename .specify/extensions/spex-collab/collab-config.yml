@@ -1,0 +1,32 @@
+pr_base_branch: "main"
+auto_generate_reviewers: true
+
+# GitHub PR labels applied automatically during PR creation.
+# Set enabled to false to skip labeling entirely (e.g., if the repo
+# doesn't have these labels and you can't create them).
+# Label names are configurable; the defaults use a "spex/" prefix.
+labels:
+  enabled: true
+  spec: "spex/spec"
+  spec_approved: "spex/spec-approved"
+  implement: "spex/implement"
+  brainstorm: "brainstorm"
+
+# Bot reviewer profiles for PR comment triage.
+# Override built-in profiles (CodeRabbit, Copilot) or add custom bots.
+phases:
+  file_threshold: 20     # minimum estimated files to propose multi-phase split
+
+triage:
+  split_threshold: 100   # comment count above which PR split is recommended
+  loop_interval: "5m"    # default interval for /loop triage suggestion
+  bot-profiles: []
+    # - login: "my-custom-bot[bot]"
+    #   self-resolves: false
+    #   auto-resolve: true
+  overrides: {}
+    # coderabbitai[bot]:
+    #   auto-resolve: true
+  codecov:
+    patch_threshold: 80    # minimum patch coverage %; files below this are flagged as actionable
+    auto_remediate: true   # when true + below threshold: run Step 12c automatically; when false: flag only

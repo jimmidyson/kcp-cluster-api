@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "spex-gates": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:0fe6e40a3d83b2007799d238919a62f5789df96599fe4ae98d1805001983679e",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.spex-gates.review-spec",
+          "speckit.spex-gates.review-plan",
+          "speckit.spex-gates.review-code",
+          "speckit.spex-gates.verify",
+          "speckit.spex-gates.stamp"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-15T07:41:34.927850+00:00"
+    },
+    "spex-deep-review": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:2c22491530122df49cdaa5a7e44700d86d5bdd9d6e96aae40a5a60930990f07d",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.spex-deep-review.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-15T07:41:35.405243+00:00"
+    },
+    "spex-worktrees": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:8c6f14890a69f2ccdc71cca911809ea96fd5d24bed3551e6eb9d4e4ebf233833",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.spex-worktrees.manage"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-15T07:41:35.701211+00:00"
+    },
+    "spex-collab": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:b6f5ad2cfe6a73d0400c364ea763d568f82ba8e8253a90ca80504dd587e9b0ca",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.spex-collab.reviewers",
+          "speckit.spex-collab.phase-split",
+          "speckit.spex-collab.phase-manager",
+          "speckit.spex-collab.revise",
+          "speckit.spex-collab.reconcile"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-15T07:41:36.021360+00:00"
+    },
+    "spex-teams": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:99c4375c8471c6667e0c611210e60550d380e55b69166e79417b412c91367c3b",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.spex-teams.orchestrate",
+          "speckit.spex-teams.research",
+          "speckit.spex-teams.implement"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-08-15T07:41:36.346208+00:00"
+    }
+  }
+}

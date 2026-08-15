@@ -1,0 +1,8 @@
+{
+  "inputs": {
+    "integration": "claude",
+    "extensions": "spex,spex-gates,spex-deep-review,spex-worktrees,spex-collab,spex-teams",
+    "security": "autonomous",
+    "permissions": ""
+  }
+}

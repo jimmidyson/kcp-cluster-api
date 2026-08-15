@@ -1,0 +1,86 @@
+installed:
+- spex-collab
+- spex-deep-review
+- spex-gates
+- spex-teams
+- spex-worktrees
+settings:
+  auto_execute_hooks: true
+hooks:
+  after_specify:
+  - extension: spex-gates
+    command: speckit.spex-gates.review-spec
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-gates.review-spec?
+    description: Review spec soundness after specification
+    condition: null
+  - extension: spex-worktrees
+    command: speckit.spex-worktrees.manage
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-worktrees.manage?
+    description: Create git worktree after specification
+    condition: null
+  before_plan:
+  - extension: spex-teams
+    command: speckit.spex-teams.research
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Run parallel codebase research?
+    description: Parallel codebase research during planning via Agent Teams
+    condition: null
+  after_tasks:
+  - extension: spex-gates
+    command: speckit.spex-gates.review-plan
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-gates.review-plan?
+    description: Review plan and task quality after task generation
+    condition: null
+  - extension: spex-collab
+    command: speckit.spex-collab.reviewers
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-collab.reviewers?
+    description: Generate REVIEWERS.md after task generation
+    condition: null
+  before_implement:
+  - extension: spex-worktrees
+    command: speckit.spex-worktrees.manage
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-worktrees.manage?
+    description: Verify worktree isolation before implementation
+    condition: null
+  - extension: spex-collab
+    command: speckit.spex-collab.phase-split
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-collab.phase-split?
+    description: Present phase split proposal and per-phase implementation instructions
+    condition: null
+  after_implement:
+  - extension: spex-gates
+    command: speckit.spex-gates.review-code
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.spex-gates.review-code?
+    description: Review code compliance after implementation
+    condition: null
+  - extension: spex-deep-review
+    command: speckit.spex-deep-review.run
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Run deep multi-perspective review?
+    description: Multi-agent code review after implementation
+    condition: null
