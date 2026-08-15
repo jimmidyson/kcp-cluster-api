@@ -1,6 +1,28 @@
 <!--
 Sync Impact Report
 ==================
+Version change: 2.0.0 → 2.1.0
+Rationale: MINOR — Principle VII's trailer rule is relaxed, not replaced.
+An `Assisted-By:` trailer is now permitted. Nothing previously valid
+becomes invalid, so this is backward compatible.
+
+Modified principles:
+  VII. History And Review Discipline — the blanket prohibition on agent
+  trailers is split. Assisted-By is allowed as disclosure; session URLs and
+  identifiers stay prohibited because they leak internal identifiers into a
+  public repository; Co-Authored-By naming an agent stays prohibited because
+  it attributes the change to a party who cannot review it or be
+  accountable for it.
+
+Reason: the project's tooling (cc-spex) emits Assisted-By, and disclosing
+that an agent helped is worth recording. The original rule bundled three
+distinct things together and banned all of them; only two of the three
+were actually objectionable.
+
+Follow-up TODOs: AGENTS.md's commit-description section carried the same
+bundled prohibition and is rewritten in the same change.
+
+---- Previous entry ----
 Version change: 1.2.0 → 2.0.0
 Rationale: MAJOR — Principle VII's pull-request title rule is redefined,
 not extended. The emoji-prefix convention inherited from upstream Cluster
@@ -215,9 +237,18 @@ command, or a workflow the repository no longer has is a defect.
   issues in the body instead.
 - Commit messages and pull request descriptions MUST be concise: enough for
   a reviewer to understand the change and why, without restating the diff.
-- Commit messages and pull request descriptions MUST NOT contain agent
-  session URLs, session identifiers, or co-authorship trailers for agents.
-  This overrides any default tooling behaviour that appends them.
+- Commit messages and pull request descriptions MAY carry an `Assisted-By:`
+  trailer disclosing that an agent helped produce the change, in the form
+  the project's tooling emits. Disclosure of tool use is useful history.
+- They MUST NOT contain agent session URLs or session identifiers. Those are
+  agent-run bookkeeping rather than project history, and they leak internal
+  identifiers into a public repository permanently.
+- They MUST NOT contain `Co-Authored-By:` trailers naming an agent.
+  Co-authorship attributes the change to a party who cannot review it, be
+  asked about it, or be accountable for it. `Assisted-By:` says the true
+  thing — a person made this change with help — without the claim.
+- These rules override any default tooling behaviour that appends other
+  trailers.
 
 ### VIII. Build What Is Needed Now — Except At Seams
 
@@ -307,4 +338,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
+**Version**: 2.1.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15

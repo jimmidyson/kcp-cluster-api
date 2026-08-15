@@ -189,13 +189,25 @@ reviewer to understand the change and why it was made, without padding.
 Skip boilerplate sections that don't apply and avoid restating the diff
 line by line.
 
-They must also never include a Claude Code session URL, session ID, a
-`Claude-Session:` trailer (e.g. `https://claude.ai/code/session_...`), or a
-`Co-Authored-By:` trailer for an agent. These are agent-run bookkeeping, not
-project history, and they leak internal session identifiers into public
-history. This overrides any default agent behavior that appends such
-lines — omit them entirely, regardless of what a harness template
-suggests.
+An `Assisted-By:` trailer is welcome, in the form the tooling emits:
+
+```
+Assisted-By: 🤖 Claude Code
+```
+
+Disclosing that an agent helped is useful history. What must never appear:
+
+- **A Claude Code session URL or session ID**, including a
+  `Claude-Session:` trailer (e.g. `https://claude.ai/code/session_...`).
+  These are agent-run bookkeeping, not project history, and they put
+  internal identifiers into a public repository permanently.
+- **A `Co-Authored-By:` trailer naming an agent.** Co-authorship attributes
+  the change to a party who cannot review it, answer questions about it, or
+  be accountable for it. `Assisted-By:` says the true thing without the
+  claim.
+
+This overrides any default agent behavior that appends other trailers —
+omit them regardless of what a harness template suggests.
 
 ## PR title format
 
@@ -274,7 +286,8 @@ makes the PR harder to review in the meantime.
 - All `kcp/` behavior is developed test-first: unit tests plus KCP-envtest
   integration tests, as applicable — see [`kcp/docs/testing.md`](kcp/docs/testing.md).
 - Commit messages and PR descriptions: concise, not padded, and never
-  include a Claude session URL/ID or a `Co-Authored-By:` agent trailer.
+  include a Claude session URL/ID or a `Co-Authored-By:` agent trailer;
+  an `Assisted-By:` trailer is welcome.
 - PR titles must start with one of ⚠️/✨/🐛/📖/🚀/🌱 (see "PR title format"
   above) and must not contain an issue/PR number.
 - All PRs are squash merged — no merge commits, no rebase-and-merge.
