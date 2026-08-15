@@ -1,6 +1,19 @@
 <!--
 Sync Impact Report
 ==================
+Version change: 1.0.0 → 1.1.0
+Rationale: MINOR — new principle added (VIII. Build What Is Needed Now —
+Except At Seams). No existing principle removed or redefined.
+
+Added principles:
+  (added) → VIII. Build What Is Needed Now — Except At Seams
+
+Follow-up TODOs: the repo-inversion specification predates this principle
+and over-specifies against it — notably a machine-readable upstream-proposal
+reference format for a drift record whose expected size is one entry. Revise
+the specification against Principle VIII before planning.
+
+---- Previous entry ----
 Version change: (unversioned template) → 1.0.0
 Rationale: Initial ratification. The scaffold shipped by Spec Kit was
 placeholder text; this is the first populated constitution, derived from
@@ -145,6 +158,40 @@ command, or a workflow the repository no longer has is a defect.
   session URLs, session identifiers, or co-authorship trailers for agents.
   This overrides any default tooling behaviour that appends them.
 
+### VIII. Build What Is Needed Now — Except At Seams
+
+Features, options, configuration knobs, abstraction layers, and scale work
+MUST NOT be built ahead of a concrete need. The trigger for building is a
+second real caller, a measured constraint, or a stated requirement — not an
+anticipated one.
+
+- Deferral MUST be recorded as a decision, naming what would trigger the
+  work. Silent omission and deliberate deferral look identical later, and
+  only one of them is a plan.
+- Design documents MUST NOT specify mechanisms for work that has not been
+  scheduled. Recording the problem is useful; specifying its solution years
+  early is inventory that rots against a moving codebase.
+- Requirements MUST be justified by something that exists. A rule governing
+  a set of one is a rule about a hypothetical set.
+
+**The exception, narrow and deliberate**: correctness properties that are
+cheap to establish now, structural to retrofit, and silent when violated.
+Tenancy and isolation boundaries, lifecycle contracts for anything started
+or stopped, and the handling of shared process-global state fall here. For
+these, "the simplest thing that works today" is not the bar; the bar is the
+simplest thing that cannot silently violate the invariant when the second
+tenant, the second caller, or the second workspace arrives.
+
+This exception exists because this project has already paid for its absence.
+The Phase 1 skeleton built the simplest thing that worked for one workspace,
+which is exactly what this principle otherwise prescribes — and produced
+wiring that, at two workspaces, serves one tenant's admission requests using
+another tenant's client, without error. Deferring a feature costs time.
+Deferring a seam costs correctness, quietly.
+
+Principle V is not subject to this principle either: investigating how a
+dependency actually behaves is never premature.
+
 ## Environment And Tooling Constraints
 
 - Development tooling MUST be installable at pinned versions using only the
@@ -199,4 +246,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
+**Version**: 1.1.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
