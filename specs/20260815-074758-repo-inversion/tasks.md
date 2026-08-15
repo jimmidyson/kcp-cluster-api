@@ -144,14 +144,14 @@ inherited from upstream remains.
 target from the contract; no inherited workflow file remains. Quickstart
 Scenario 4.
 
-- [ ] T036 [US3] Delete the nine inherited workflows in `.github/workflows/`: `pr-verify.yaml`, `pr-golangci-lint.yaml`, `pr-dependabot.yaml`, `pr-md-link-check.yaml`, `weekly-md-link-check.yaml`, `weekly-security-scan.yaml`, `weekly-test-release.yaml`, `pr-gh-workflow-approve.yaml`, `release.yaml` (FR-015, research R6)
-- [ ] T037 [US3] Create `.github/workflows/pr.yaml` invoking `task check` and `task verify`, with no logic beyond checkout, toolchain setup and reporting (FR-014, SC-004)
-- [ ] T038 [US3] Add a PR-title check to `pr.yaml` validating [Conventional Commits](https://www.conventionalcommits.org) plus the no-issue-number rule, per Constitution Principle VII (v2.0.0). This replaces rather than restores the emoji check that died with `pr-verify.yaml`: since PRs are squash merged, the title is what release automation parses, so an unparseable title produces a wrong release rather than an untidy log (research R6)
-- [ ] T039 [P] [US3] Rewrite `.github/workflows/pr-kcp-docs.yaml` as `.github/workflows/docs.yaml`, invoking a task target rather than inline commands (FR-014)
-- [ ] T040 [P] [US3] Update `.github/dependabot.yaml` so it covers only this project's own manifests at their new root location (FR-018)
-- [ ] T041 [US3] Delete the old `kcp-tests.yaml`, whose behaviour is now covered by `pr.yaml` (FR-015)
-- [ ] T054 [US3] Add release-please configuration (`release-please-config.json`, `.release-please-manifest.json`) seeded at the project's current version, with the release strategy set for a Go module
-- [ ] T055 [US3] Add `.github/workflows/release-please.yaml` opening release PRs from Conventional Commit titles on the default branch
+- [x] T036 [US3] Delete the nine inherited workflows in `.github/workflows/`: `pr-verify.yaml`, `pr-golangci-lint.yaml`, `pr-dependabot.yaml`, `pr-md-link-check.yaml`, `weekly-md-link-check.yaml`, `weekly-security-scan.yaml`, `weekly-test-release.yaml`, `pr-gh-workflow-approve.yaml`, `release.yaml` (FR-015, research R6)
+- [x] T037 [US3] Create `.github/workflows/pr.yaml` invoking `task check` and `task verify`, with no logic beyond checkout, toolchain setup and reporting (FR-014, SC-004)
+- [x] T038 [US3] Add a PR-title check to `pr.yaml` validating [Conventional Commits](https://www.conventionalcommits.org) plus the no-issue-number rule, per Constitution Principle VII (v2.0.0). This replaces rather than restores the emoji check that died with `pr-verify.yaml`: since PRs are squash merged, the title is what release automation parses, so an unparseable title produces a wrong release rather than an untidy log (research R6)
+- [x] T039 [P] [US3] Rewrite `.github/workflows/pr-kcp-docs.yaml` as `.github/workflows/docs.yaml`, invoking a task target rather than inline commands (FR-014)
+- [x] T040 [P] [US3] Update `.github/dependabot.yaml` so it covers only this project's own manifests at their new root location (FR-018)
+- [x] T041 [US3] Delete the old `kcp-tests.yaml`, whose behaviour is now covered by `pr.yaml` (FR-015)
+- [x] T054 [US3] Add release-please configuration (`release-please-config.json`, `.release-please-manifest.json`) seeded at the project's current version, with the release strategy set for a Go module
+- [x] T055 [US3] Add `.github/workflows/release-please.yaml` opening release PRs from Conventional Commit titles on the default branch
 
 **Checkpoint**: CI and local runs are the same operations, and releases are
 derived from titles rather than hand-cut.
