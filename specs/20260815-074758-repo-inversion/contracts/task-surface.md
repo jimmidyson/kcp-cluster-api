@@ -54,6 +54,26 @@ success (Constitution Principle IV).
 | Fail | non-zero | A step ran and failed |
 | Could not run | non-zero, distinct from fail | A step was skipped because the environment lacks a required capability |
 
+**The exit statuses above hold when the harness is invoked directly. They do
+not survive a task runner.** go-task collapses every failing task to exit
+code `201` regardless of what the command returned — verified against exit
+codes 1, 2 and 7, all of which produced `201`. So a caller invoking
+`task verify` can distinguish pass from not-pass and nothing more.
+
+The outcome is therefore also written to a machine-readable report
+(`bin/verify-result.json` by default, `--report` to change it):
+
+```json
+{ "status": "could-not-run", "exitCode": 2,
+  "steps": [ { "step": "test:integration", "outcome": "could not run",
+               "missingCapability": "container runtime", "reason": "..." } ] }
+```
+
+CI MUST read `status` from that file rather than inferring the outcome from
+the runner's exit code. This is what satisfies "detectable by automation
+without reading logs" (FR-012) in the presence of a runner that discards the
+distinction.
+
 Rules:
 
 1. A skipped step MUST NOT produce exit status `0`.

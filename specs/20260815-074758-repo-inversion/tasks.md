@@ -114,22 +114,22 @@ returns neither success nor an ordinary failure. Quickstart Scenarios 2 and 3.
 
 ### Tests for User Story 2 (new behaviour — write first)
 
-- [ ] T023 [P] [US2] Write a failing test for the three-outcome contract: a step whose capability is unavailable yields an exit status that is non-zero and distinct from a test failure, names the missing capability, and appears in the summary as not-run (FR-012, SC-009)
-- [ ] T024 [P] [US2] Write a failing test that capability checks run *before* their dependent steps, so an unmet capability is reported before work begins (FR-013)
+- [x] T023 [P] [US2] Write a failing test for the three-outcome contract: a step whose capability is unavailable yields an exit status that is non-zero and distinct from a test failure, names the missing capability, and appears in the summary as not-run (FR-012, SC-009)
+- [x] T024 [P] [US2] Write a failing test that capability checks run *before* their dependent steps, so an unmet capability is reported before work begins (FR-013)
 
 ### Implementation for User Story 2
 
-- [ ] T025 [US2] Create `Taskfile.yaml` at the repository root implementing the targets in [contracts/task-surface.md](./contracts/task-surface.md), as a single file — the split into grouped files is deferred (spec: Deferred)
-- [ ] T026 [US2] Implement the `tools` target installing pinned tooling via `go install` into a repository-local `bin/`, with no package or environment manager (FR-009)
-- [ ] T027 [US2] Implement `build`, `test:unit`, `lint` and `check`, where `check` is the composition of the targets needing no container runtime (FR-010, FR-011, NFR-002)
-- [ ] T028 [US2] Implement `test:integration`, including download of the pinned kcp server binary into `bin/` and creation of the container network the dev provider attaches to
-- [ ] T029 [US2] Implement the capability checks and three-outcome reporting that T023 and T024 test, covering container runtime, image-source reachability and kcp binary availability (FR-011, FR-012, FR-013)
-- [ ] T030 [US2] Implement `verify` as the composition of the other targets, never a reimplementation of them (FR-007, contract: task surface)
-- [ ] T031 [US2] Add `bin/` to `.gitignore`
-- [ ] T032 [US2] Delete `kcp/Makefile` — no second build entry point may survive this change (FR-021)
-- [ ] T033 [US2] Verify tooling reuse: two consecutive `task check` runs, the second performing no downloads or rebuilds (NFR-003, Quickstart 2d)
-- [ ] T034 [US2] Verify the clean-environment start: with `bin/` removed and no project tooling present, `task check` succeeds with no manual preparation (FR-007, FR-008, SC-002, Quickstart 2c)
-- [ ] T035 [US2] Verify the fast subset completes within its 60 s warm budget and is a small fraction of the full run, recording both figures (NFR-002, SC-008)
+- [x] T025 [US2] Create `Taskfile.yaml` at the repository root implementing the targets in [contracts/task-surface.md](./contracts/task-surface.md), as a single file — the split into grouped files is deferred (spec: Deferred)
+- [x] T026 [US2] Implement the `tools` target installing pinned tooling via `go install` into a repository-local `bin/`, with no package or environment manager (FR-009)
+- [x] T027 [US2] Implement `build`, `test:unit`, `lint` and `check`, where `check` is the composition of the targets needing no container runtime (FR-010, FR-011, NFR-002)
+- [x] T028 [US2] Implement `test:integration`, including download of the pinned kcp server binary into `bin/` and creation of the container network the dev provider attaches to
+- [x] T029 [US2] Implement the capability checks and three-outcome reporting that T023 and T024 test, covering container runtime, image-source reachability and kcp binary availability (FR-011, FR-012, FR-013)
+- [x] T030 [US2] Implement `verify` as the composition of the other targets, never a reimplementation of them (FR-007, contract: task surface)
+- [x] T031 [US2] Add `bin/` to `.gitignore`
+- [x] T032 [US2] Delete `kcp/Makefile` — no second build entry point may survive this change (FR-021)
+- [x] T033 [US2] Verify tooling reuse: two consecutive `task check` runs, the second performing no downloads or rebuilds (NFR-003, Quickstart 2d)
+- [x] T034 [US2] Verify the clean-environment start: with `bin/` removed and no project tooling present, `task check` succeeds with no manual preparation (FR-007, FR-008, SC-002, Quickstart 2c)
+- [x] T035 [US2] Verify the fast subset completes within its 60 s warm budget and is a small fraction of the full run, recording both figures (NFR-002, SC-008)
 
 **Checkpoint**: One command decides done, and says so honestly when it cannot.
 

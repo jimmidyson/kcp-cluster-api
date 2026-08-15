@@ -8,3 +8,6 @@
 #
 # Only genuinely machine-local agent state is ignored.
 .claude/settings.local.json
+
+# Pinned tooling installed by `task tools`.
+bin/

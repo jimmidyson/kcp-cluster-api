@@ -120,9 +120,10 @@ task verify; echo "exit=$?"
 
 Expect, all of:
 
-- exit status is **not** 0;
-- exit status is **distinct** from the status produced by a genuine test
-  failure;
+- exit status is **not** 0 (`task` reports 201 for any failure — it discards
+  the distinction, which is why the report file below exists);
+- `bin/verify-result.json` has `"status": "could-not-run"` and
+  `"exitCode": 2`, distinct from a genuine failure's `"fail"` / `1`;
 - output names the missing capability (container runtime);
 - the summary lists the integration step and marks it as not run — it is not
   silently omitted;
