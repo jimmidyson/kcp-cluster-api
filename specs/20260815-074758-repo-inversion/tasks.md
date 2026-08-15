@@ -33,7 +33,7 @@ it lands.
 
 **Purpose**: Decisions and scaffolding that must exist before work starts
 
-- [ ] T001 Confirm the branch name and tag to use in the fork repository `github.com/jimmidyson/cluster-api` (plan proposes branch `kcp/v1.15` and tag `v1.15.0-kcp.1`) — a maintainer decision, since the repository is public and the tag is a published artifact
+- [ ] T001 Confirm the branch name and tag to use in the fork repository `github.com/jimmidyson/cluster-api` (plan proposes branch `kcp/v1.14` and tag `v1.14.1-kcp.1`) — a maintainer decision, since the repository is public and the tag is a published artifact
 - [ ] T002 [P] Record the confirmed module path `github.com/jimmidyson/kcp-cluster-api` in `specs/20260815-074758-repo-inversion/plan.md` if it differs from the spec's Repository identity assumption
 
 **Checkpoint**: The fork's branch/tag names are agreed; nothing has changed yet
@@ -50,7 +50,7 @@ compiles until this phase completes and is tagged.**
 with any other phase. See [research.md](./research.md) R2 and R3.
 
 - [ ] T003 In `/workspace/cluster-api`, add upstream as a remote and fetch commit `281e4e3`; do not branch from the fork's own `master`, which is at a 2021 commit (research R2)
-- [ ] T004 Create branch `kcp/v1.15` in `/workspace/cluster-api` from `281e4e3`
+- [ ] T004 Create branch `kcp/v1.14` in `/workspace/cluster-api` from `281e4e3`
 - [ ] T005 Add `controllers/external/metadata.go` in `/workspace/cluster-api` exposing the two symbols below, both delegating to the existing `internal/contract` implementation with behaviour unchanged (research R3)
 
   **Interfaces** — T013 and T014 consume these; the names and signatures are fixed here and must not be chosen independently:
@@ -68,7 +68,7 @@ with any other phase. See [research.md](./research.md) R2 and R3.
   ```
 - [ ] T006 Confirm upstream's own tests still pass in `/workspace/cluster-api` for `internal/contract` and `controllers/external`, unmodified — the seam must not change existing behaviour
 - [ ] T007 Write the commit message for T005 referencing the upstream proposal this change will become, per Constitution Principle I
-- [ ] T008 Tag `/workspace/cluster-api` as `v1.15.0-kcp.1` and push branch and tag
+- [ ] T008 Tag `/workspace/cluster-api` as `v1.14.1-kcp.1` and push branch and tag
 
 **Checkpoint**: An immutable fork tag exists carrying exactly one patch. User
 story work can begin.
@@ -86,7 +86,7 @@ internal package. Quickstart Scenario 1.
 
 - [ ] T009 [US1] Move every file under `kcp/` to the repository root, preserving history, so `kcp/cmd/`, `kcp/internal/`, `kcp/test/`, `kcp/docs/` become `cmd/`, `internal/`, `test/`, `docs/`
 - [ ] T010 [US1] Delete the upstream tree: `api/`, `bootstrap/`, `cmd/clusterctl/`, `controllers/`, `controlplane/`, `core/`, `exp/`, `feature/`, `internal/contract/`, `internal/controllers/` and every other upstream directory, plus root `Makefile`, `Dockerfile`, `Tiltfile`, `metadata.yaml`, `netlify.toml`, `OWNERS`, `OWNERS_ALIASES`, `SECURITY_CONTACTS`, `CHANGELOG/`, `hack/`, `util/`, `version/`, `test/e2e/` and the upstream `go.mod`/`go.sum` (FR-001)
-- [ ] T011 [US1] Rewrite `go.mod`: module path `github.com/jimmidyson/kcp-cluster-api`, replacing the three relative `replace` directives with pins to `github.com/jimmidyson/cluster-api v1.15.0-kcp.1` for `sigs.k8s.io/cluster-api`, `/api` and `/test` (FR-002, FR-003)
+- [ ] T011 [US1] Rewrite `go.mod`: module path `github.com/jimmidyson/kcp-cluster-api`, replacing the three relative `replace` directives with pins to `github.com/jimmidyson/cluster-api v1.14.1-kcp.1` for `sigs.k8s.io/cluster-api`, `/api` and `/test` (FR-002, FR-003)
 - [ ] T012 [US1] Rewrite every `sigs.k8s.io/cluster-api/kcp/...` import to the new module path across `cmd/`, `internal/` and `test/`
 - [ ] T013 [US1] Replace the `sigs.k8s.io/cluster-api/internal/contract` import in `internal/coremanager/contractmetadata.go` with `external.SetGKMetadataGetter` from T005 (FR-004)
 - [ ] T014 [US1] Replace the same internal import in `internal/coremanager/setup.go` with `external.GetAPIVersion` from T005, where the conversion webhook's API-version getter is wired (FR-004)

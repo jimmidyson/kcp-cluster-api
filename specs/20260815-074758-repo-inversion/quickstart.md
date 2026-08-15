@@ -13,7 +13,7 @@ Principle IV.
 | Go toolchain (1.26+) | everything |
 | Container runtime | scenarios 2b, 4 |
 | Network access to container image source | scenarios 2b, 4 |
-| Fork tagged `v1.15.0-kcp.1` with the public resolver seam | everything — hard prerequisite |
+| Fork tagged `v1.14.1-kcp.1` with the public resolver seam | everything — hard prerequisite |
 
 Nothing else. If any scenario below requires a setup step not listed here,
 that is itself a failure of FR-008.

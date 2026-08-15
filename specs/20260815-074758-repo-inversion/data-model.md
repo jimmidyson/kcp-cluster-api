@@ -40,7 +40,7 @@ module resolves Cluster API to.
 |---|---|
 | Base commit | `281e4e3` (upstream `main`, 2026-08-14, after `v1.14.0`) |
 | Branch | one per upstream release line |
-| Tag | `v1.15.0-kcp.1` initially |
+| Tag | `v1.14.1-kcp.1` initially |
 | Contents | upstream at base commit, plus carried patches |
 
 **Rules**

@@ -58,30 +58,52 @@ invalidates; failing loudly when the expected path is absent is required.
 ## R2 — What upstream ref is the fork branch based on?
 
 **Decision**: Base the fork branch on commit `281e4e3`, not on a release
-tag. Tag the fork `v1.15.0-kcp.1`.
+tag. Tag the fork `v1.14.1-kcp.1`.
 
 **Verification**:
 
 - Upstream `v1.14.0` exists: tag `4cfef8c`, dereferencing to `560d4ac`.
 - This repository's fork point `281e4e3` is a merge commit on upstream
-  `main` dated **2026-08-14** — i.e. *after* v1.14.0, not on it.
+  `main` dated **2026-08-14**, which is after v1.14.0's release.
+- `metadata.yaml` at the fork point declares its highest release series as
+  `major: 1, minor: 14, contract: v1beta2`, and that file is by its own
+  comment updated only when a new minor is released.
+- `AGENTS.md` states the fork point independently: "`281e4e3` on upstream
+  `main` (cluster-api v1.14 series, contract `v1beta2`)".
 - The existing fork `jimmidyson/cluster-api` has a default branch at
   `d0c3bf8`, dated **2021-03-10**. It is five years stale and unusable as a
   base; the branch must be cut from a freshly fetched upstream ref.
 
-**Rationale for the tag choice**: the code in this repository was written
-against `281e4e3`, so basing the patch branch on `v1.14.0` would mean
-building against a different tree than the one the code was developed and
-tested on. A replace directive uses the replacement's version verbatim, so
-ordering does not affect resolution — but a version below `v1.14.0` would
-misrepresent content that is ahead of it. `v1.15.0-kcp.1` reads honestly as
-"ahead of v1.14.0, not yet v1.15.0". The exact base commit goes in the drift
-record, which is the authoritative statement.
+**Not verified**: whether `281e4e3` is a git descendant of `v1.14.0`. The
+working clone is shallow and `merge-base --is-ancestor` remained
+undetermined after deepening. This is recorded as unknown rather than
+assumed; the evidence above establishes the *release series*, which is what
+the tag needs to reflect, without needing the ancestry.
 
-**Alternatives considered**: a Go pseudo-version of the base commit
-(rejected: unreadable in a manifest and gives the drift record nothing
-human-checkable); `v1.14.0-kcp.1` (rejected: sorts as a v1.14.0 pre-release,
-which is the opposite of what it contains).
+**Rationale for the tag choice**: the code here was written against
+`281e4e3`, so basing the patch branch on the `v1.14.0` tag would mean
+building against a different tree than the one the code was developed and
+tested on. For the version string, `v1.14.1-kcp.1` sorts above `v1.14.0` and
+below `v1.14.1` — "v1.14.0 plus changes, not yet the next patch" — which is
+what the fork point is. The exact base commit goes in the drift record, which
+is the authoritative statement.
+
+Ordering is cosmetic in any case: the fork is a different module path,
+consumed through a `replace` directive with an explicit version, so
+resolution is exact and never competes with upstream's version namespace.
+
+**Alternatives considered**:
+
+- `v1.15.0-kcp.1` — **rejected on review.** It asserts a minor series
+  upstream has not opened: `metadata.yaml` at this commit still tops out at
+  1.14, and this repository's own documentation calls the fork point the
+  v1.14 series. The earlier draft of this document chose it on the grounds
+  that a version below `v1.14.0` would misrepresent content ahead of it —
+  true, but the remedy is the next *patch* pre-release, not the next minor.
+- `v1.14.0-kcp.1` — rejected: sorts as a v1.14.0 pre-release, i.e. below the
+  release it is built on, the opposite of what it contains.
+- A Go pseudo-version of the base commit — rejected: unreadable in a
+  manifest and gives the drift record nothing human-checkable.
 
 ---
 
