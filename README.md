@@ -41,6 +41,21 @@ from `bin/verify-result.json`, which is also what CI reads — task runners
 collapse every failure to a single exit code, so the distinction does not
 survive the runner.
 
+### How long it takes
+
+**`task verify`: 5 min 13 s.** Measured, not estimated — that is the first
+green CI run of the full suite on a GitHub-hosted `ubuntu-latest` runner
+([run 31891936950][first-green], commit `30ee953`), timed from the start of
+the `task verify` step to its end, so it includes downloading the pinned kcp
+server and starting a real one.
+
+That figure is the budget. A change that pushes it materially higher is a
+change to be argued for, not absorbed: verification has to stay inside the
+feedback loop of writing code, or it gets deferred to CI and stops being a
+done-condition. `task check` is the sub-minute subset for the inner loop.
+
+[first-green]: https://github.com/jimmidyson/kcp-cluster-api/actions/runs/31891936950
+
 ## Layout
 
 ```

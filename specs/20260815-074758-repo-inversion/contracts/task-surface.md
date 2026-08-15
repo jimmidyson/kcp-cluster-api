@@ -23,7 +23,7 @@ marked *needs container runtime* — a working container runtime.
 
 | Name | Purpose | Needs container runtime | Budget |
 |---|---|---|---|
-| `verify` | **The done-condition.** Tools, lint, build, unit tests, integration tests. This is what CI runs and what delegated work is graded by | yes | see NFR-001; measured from first CI run |
+| `verify` | **The done-condition.** Tools, lint, build, unit tests, integration tests. This is what CI runs and what delegated work is graded by | yes | 5 min 13 s (NFR-001; measured, see README) |
 | `check` | The fast subset of `verify`: everything that needs no container runtime or external service | no | ≤ 60 s warm |
 | `build` | Compile all binaries | no | — |
 | `test:unit` | Unit tests only | no | ≤ 10 s warm |

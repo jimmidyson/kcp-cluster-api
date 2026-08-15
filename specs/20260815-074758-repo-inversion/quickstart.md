@@ -82,9 +82,10 @@ cold cache the module download dominates; the budget is a warm figure.
 task verify
 ```
 
-Expect: exit 0 within the documented budget (NFR-001). On the first green CI
-run, record the measured duration — that measurement *is* the budget, and
-recording it is a task, not a footnote.
+Expect: exit 0 within the documented budget (NFR-001), now recorded in the
+README as **5 min 13 s** — the measurement from the first green CI run
+(run 31891936950, commit `30ee953`) on a GitHub-hosted `ubuntu-latest`
+runner. That measurement *is* the budget; it was not estimated.
 
 ### 2c. Tooling installs itself
 
