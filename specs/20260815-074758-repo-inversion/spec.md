@@ -158,7 +158,7 @@ the check fails; remove it and confirm the check passes.
 ### Edge Cases
 
 - **The publicly reachable interface does not exist yet.** Story 1 depends on the fork exposing behaviour that upstream currently keeps internal. If the fork has not been prepared, the project cannot build at all — a hard ordering dependency, not a degradation. The failure must occur when dependencies are resolved, with a message naming the missing interface and the fork version expected to provide it, rather than surfacing later as an unrelated compilation error.
-- **Published schema definitions drift from the dependency.** The project publishes its own copies of resource definitions derived from Cluster API. When the Cluster API pin moves, those copies can silently fall out of step. Verification must detect this rather than leave it to be discovered at runtime.
+- **The location of resource definitions changes between dependency versions.** The definitions travel inside the pinned dependency, so they cannot disagree with it — but where they sit within it is not fixed across releases, and has already moved once. A dependency bump that relocates them must fail immediately and say what it looked for, not silently resolve nothing or find a different version's copies.
 - **The container runtime or its image source is unavailable.** Part of the suite provisions real containers. Where images cannot be pulled, verification must distinguish "environment cannot run this" from "the code is broken", because these have been conflated before and produced a false green.
 - **A required external download fails.** Verification fetches a server binary. A transient failure must be reported as an environment problem, not a test failure.
 
@@ -170,12 +170,12 @@ the check fails; remove it and confirm the check passes.
 - **FR-002**: The project MUST consume Cluster API and its companion modules as external, version-pinned dependencies.
 - **FR-003**: Those dependencies MUST resolve to a fork that carries this project's patches, pinned to an immutable released version rather than a moving branch.
 - **FR-004**: The project MUST NOT depend on any package upstream marks as internal. Behaviour currently obtained that way MUST be obtained through a publicly reachable interface provided by the fork.
-- **FR-005**: The project MUST NOT rely on reading files from an upstream source tree at build or test time. Resource definitions it needs MUST be generated into the repository and consumed from there.
-- **FR-006**: The project MUST provide a command that regenerates those definitions, and verification MUST fail if the generated output in the repository is stale relative to the pinned dependency.
+- **FR-005**: The project MUST NOT rely on reading files from a co-located upstream source tree. Resource definitions it needs MUST be resolved from the pinned dependency's own contents, so that they cannot disagree with the version the code is built against.
+- **FR-006**: Resolution MUST fail with an identifiable error naming the expected location if those definitions are not found where the pinned version is expected to carry them. It MUST NOT silently proceed with none, and MUST NOT fall back to a search that could pick up a different version's copies.
 - **FR-007**: A single named verification operation MUST exist that installs required tooling at pinned versions, prepares test prerequisites, and runs the full test suite.
 - **FR-008**: That operation MUST succeed from a clean environment containing only a language toolchain and a container runtime, with no prior setup.
 - **FR-009**: Tooling MUST be installed into a location local to the repository, at pinned versions, without requiring any package manager or environment manager beyond the language toolchain.
-- **FR-010**: Individual portions of the work — building, fast tests, tests requiring a running server, generation, linting — MUST each be invocable on their own by name.
+- **FR-010**: Individual portions of the work — building, fast tests, tests requiring a running server, linting — MUST each be invocable on their own by name.
 - **FR-011**: All operations MUST report failure with a non-zero exit status, and MUST NOT report success when a step was skipped.
 - **FR-012**: Where a step cannot run because the environment lacks a required capability, verification MUST end in a third outcome that is neither pass nor fail: a distinct, machine-readable result naming the missing capability. It MUST NOT be reported as success, MUST NOT be silently omitted from the summary, and MUST be detectable by automation without reading logs.
 - **FR-013**: Every capability a step depends on MUST be checked before that step runs, so an unmet capability is reported up front rather than surfacing as a mid-run failure.
@@ -199,8 +199,8 @@ the check fails; remove it and confirm the check passes.
 - **The patched fork**: A separate repository holding Cluster API plus this project's carried patches. Its contract is one branch per upstream release line, one commit per patch, each referencing an upstream proposal, and immutable released versions this project pins to. It carries no specifications, tooling, or process of its own.
 - **Carried patch**: A single change to Cluster API that this project needs and intends to remove. Has an upstream proposal associated with it and is expected to be deleted once that proposal is accepted.
 - **Drift record**: A checked-in file in this repository naming the upstream release the fork is based on, every path the fork is permitted to differ in, and — in prose — the upstream proposal each difference corresponds to. It is the reference the drift check compares reality against, and the place a new patch must be justified before it can be accepted. It begins with a single entry.
-- **Generated resource definitions**: Copies of Cluster API resource definitions, produced from the pinned dependency and stored in this repository, replacing the previous practice of reading them out of a co-located source tree.
-- **Named operation**: A single invocable unit of work — build, test, generate, lint, verify — available identically to contributors and to automated checks.
+- **Resolved resource definitions**: Cluster API resource definitions read from the pinned dependency's own contents at build or test time, replacing the previous practice of reading them out of a co-located source tree. They are not copied into this repository: a copy would be a thing that can disagree with the dependency, and the point is that nothing can.
+- **Named operation**: A single invocable unit of work — build, test, lint, verify — available identically to contributors and to automated checks.
 
 ## Success Criteria *(mandatory)*
 
@@ -211,7 +211,7 @@ the check fails; remove it and confirm the check passes.
 - **SC-003**: Adopting a newer Cluster API release requires changing only dependency pins, and produces no conflict in any file this project owns.
 - **SC-004**: Every automated check corresponds to a named operation a contributor can run locally under the same name, with no check logic existing only in automation.
 - **SC-005**: The patches carried against upstream are reported automatically on every change, and each is traceable to a proposal filed upstream.
-- **SC-006**: Generated definitions falling out of step with the pinned dependency is caught automatically rather than by review.
+- **SC-006**: Resource definitions cannot disagree with the dependency version the code is built against, because they are resolved from it rather than copied; and a dependency bump that relocates them fails immediately with a message naming what was expected, rather than resolving nothing.
 - **SC-007**: No contributor or governance document instructs a reader to do something the repository no longer supports.
 - **SC-008**: Verification completes within its documented time budget on a clean environment, and the fast subset completes in a small fraction of that, so contributors are not pushed into skipping it.
 - **SC-009**: A step that cannot run for lack of an environment capability is reported as its own outcome and is never counted as a pass — verifiable by running verification in an environment missing that capability and confirming the result is neither success nor an ordinary failure.
@@ -219,7 +219,7 @@ the check fails; remove it and confirm the check passes.
 ## Assumptions
 
 - **Repository identity**: The project keeps its current repository and history rather than starting a new one; the upstream tree is removed by a commit, so the history of this project's own work is preserved. Its published module identity follows the existing repository name (`github.com/jimmidyson/kcp-cluster-api`). If the project later moves to a shared organisation, that is a rename handled separately and is not part of this work.
-- **Fork base**: The patched fork's branch is based on the upstream release line this project currently sits on (the v1.14 series), not on the fork's own long-stale default branch, which is five years behind and unusable as a base.
+- **Fork base**: The patched fork's branch is cut from the exact upstream commit this project was developed against, which is a point on upstream's main branch *after* the most recent release — not from a release tag, and not from the fork's own default branch, which is five years behind and unusable as a base. Basing it on the nearest release tag would mean building against a different tree than the one the code was written and tested on.
 - **Patch set at the start**: Exactly one patch is carried initially — exposing the contract-metadata resolver publicly, which is also the change intended for upstream. The agreed drift list therefore begins at one file.
 - **Dependency direction**: Consumers of this project will need to mirror its dependency pinning, since pinning of this kind does not propagate to downstream consumers. This is acceptable because the project ships runnable programs rather than a library, and it is a further reason to drive the carried patch set to zero.
 - **Environment management**: No system-level package or environment manager is assumed to be available. This follows from verified constraints in the automated environments this project targets, where the relevant installer is unreachable and containers are discarded between runs, making per-run environment materialisation a recurring cost.
@@ -242,6 +242,7 @@ distinguishable from omission.
 | Splitting named operations across multiple grouped definition files | A single definition file becomes hard to navigate — a real threshold, not an anticipated one |
 | Guarantee that concurrent verification runs on one machine do not contend | Two runs are actually observed to collide |
 | Recording the verification time budget in a form that makes regressions against it visible automatically | The budget is exceeded and nobody notices until it hurts |
+| Generating deployable `APIResourceSchema` / `APIExport` manifests into the repository, with a command to regenerate them and a staleness check | The first attempt to install this project into a cluster from published artifacts. Tests resolve definitions from the pinned dependency and need no generated copies; a deployment genuinely will need real manifests, but nothing in this feature's user stories does |
 
 Two things that look like candidates for this list and are deliberately
 **not** deferred, because Principle VIII's seam exception covers them:

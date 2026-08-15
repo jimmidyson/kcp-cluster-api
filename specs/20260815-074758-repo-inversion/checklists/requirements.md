@@ -74,6 +74,21 @@ twice, deliberately, to keep the "step could not run" outcome and the
 public-interface requirement — both silent-failure or build-blocking, not
 convenience.
 
+**Third revision — Phase 0 research finding (R1).** Planning verified that
+CRD manifests ship inside the published Go module, which the spec had assumed
+was not the case. FR-005 and FR-006 required generating definitions into the
+repository with a staleness check; they now require resolving them from the
+pinned dependency, where they cannot disagree with the version the code is
+built against. SC-006, the corresponding edge case, and the "Generated
+resource definitions" entity (now "Resolved resource definitions") were
+updated to match, and deployable manifest generation was added to Deferred
+with the trigger being the first install from published artifacts.
+
+This is Principle V working as intended: the spec's assumption was plausible
+and wrong, and one command against a real published module settled it. The
+correction was applied to the spec rather than carried as a justified plan
+deviation, so the two do not disagree.
+
 Points carried forward to planning:
 
 - **Requirements name no tools.** Named operations, tooling installation and

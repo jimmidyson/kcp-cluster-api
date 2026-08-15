@@ -23,8 +23,8 @@ The single unit of code this repository publishes.
 
 - MUST NOT import any package upstream marks internal (FR-004).
 - MUST NOT read from a co-located upstream source tree; the resolved module
-  directory of a pinned dependency is not a source tree and is permitted
-  (FR-005, amended by research R1).
+  directory of a pinned dependency is not a source tree and is the required
+  source for resource definitions (FR-005).
 - Contains no file that exists in upstream Cluster API (FR-001).
 
 **Relationships**: depends on → Fork Release. Described by → Drift Record.

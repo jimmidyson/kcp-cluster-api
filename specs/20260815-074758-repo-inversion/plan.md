@@ -15,11 +15,12 @@ the project's machine-checkable done-condition, and replace eleven workflows
 our own that invoke those same targets.
 
 Research changed one significant element of the approach: CRD manifests ship
-inside the published Go module, so fixtures can resolve them from the pinned
+inside the published Go module, so fixtures resolve them from the pinned
 dependency instead of a generate-and-check-in pipeline. That removes a
-generation step, a checked-in artifact and a staleness check the spec assumed
-were necessary. See [research.md](./research.md) R1, and Complexity Tracking
-below for the spec deviation this implies.
+generation step, a checked-in artifact and a staleness check the spec
+originally assumed were necessary. See [research.md](./research.md) R1. The
+spec has since been revised to match (FR-005, FR-006, SC-006 and the
+corresponding edge case and entity), so this is no longer a deviation.
 
 ## Technical Context
 
@@ -160,5 +161,9 @@ and is the only task that cannot be completed in a development container.
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| Deviation from spec FR-005/FR-006: fixtures resolve CRD manifests from the pinned module rather than from generated, checked-in copies | Research R1 verified the manifests ship inside the module. Reading them from the resolved dependency makes them in step by construction | The spec's generate-and-check-in approach creates the drift it then needs a staleness check to detect. Keeping it would add a generation step, a checked-in artifact and a check, to solve a problem that does not exist once R1 is known. **This requires a spec revision to FR-005/FR-006 and SC-006 before implementation begins** |
 | Integration suite cannot run in the development environment | No container runtime, and image pulls are blocked by egress policy | Nothing to substitute. This is stated rather than worked around: the full acceptance condition is met on a CI runner, and per Constitution IV a step that cannot run here is reported as its own outcome, never as a pass |
+
+*The FR-005/FR-006 deviation recorded here at plan time has been resolved by
+revising the spec rather than by carrying a justified violation. The spec now
+specifies resolution from the pinned dependency, and the plan no longer
+departs from it.*

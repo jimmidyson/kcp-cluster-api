@@ -23,16 +23,20 @@ marked *needs container runtime* — a working container runtime.
 
 | Name | Purpose | Needs container runtime | Budget |
 |---|---|---|---|
-| `verify` | **The done-condition.** Tools, generation check, lint, build, unit tests, integration tests. This is what CI runs and what delegated work is graded by | yes | see NFR-001; measured from first CI run |
+| `verify` | **The done-condition.** Tools, lint, build, unit tests, integration tests. This is what CI runs and what delegated work is graded by | yes | see NFR-001; measured from first CI run |
 | `check` | The fast subset of `verify`: everything that needs no container runtime or external service | no | ≤ 60 s warm |
 | `build` | Compile all binaries | no | — |
 | `test:unit` | Unit tests only | no | ≤ 10 s warm |
 | `test:integration` | Integration tests against a real kcp server | yes | — |
 | `lint` | Static analysis | no | — |
-| `generate` | Regenerate any derived artifact in the repository | no | — |
-| `generate:check` | Fail if a derived artifact is out of date | no | — |
 | `tools` | Install pinned tooling into `bin/` | no | — |
 | `drift` | Report the fork's divergence from its base and compare against `DRIFT.md` | no | — |
+
+There is deliberately no `generate` target. Resource definitions are resolved
+from the pinned dependency rather than generated into the repository
+(spec FR-005/FR-006), so there is no derived artifact to regenerate and
+nothing that can go stale. A generation target returns if and when deployable
+manifests are needed — see the spec's Deferred section.
 
 `verify` MUST be defined as the composition of the other targets, not as a
 reimplementation of them, so that a contributor running a subset runs exactly
