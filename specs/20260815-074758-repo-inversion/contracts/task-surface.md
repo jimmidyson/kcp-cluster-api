@@ -27,10 +27,21 @@ marked *needs container runtime* — a working container runtime.
 | `check` | The fast subset of `verify`: everything that needs no container runtime or external service | no | ≤ 60 s warm |
 | `build` | Compile all binaries | no | — |
 | `test:unit` | Unit tests only | no | ≤ 10 s warm |
-| `test:integration` | Integration tests against a real kcp server | yes | — |
+| `test:integration` | Integration tests against a real kcp server: the composition of the two below | yes | — |
+| `test:integration:kcp` | The subset needing only a real kcp server | no | — |
+| `test:integration:docker` | The subset also needing a container runtime | yes | — |
 | `lint` | Static analysis | no | — |
 | `tools` | Install pinned tooling into `bin/` | no | — |
 | `drift` | Report the fork's divergence from its base and compare against `DRIFT.md` | no | — |
+
+`test:integration` was one target and is now three, split by capability rather
+than by subject. The reason is the outcome contract below: most of what the
+integration suite proves needs a real kcp server and nothing else, and running
+it as one step meant reporting all of it as "could not run" wherever a
+container runtime is absent — missing coverage dressed up as an environment
+problem. `verify` runs the two narrow targets, so each reports its own outcome.
+The original name keeps its original meaning, and remains what a contributor
+runs to execute everything.
 
 There is deliberately no `generate` target. Resource definitions are resolved
 from the pinned dependency rather than generated into the repository

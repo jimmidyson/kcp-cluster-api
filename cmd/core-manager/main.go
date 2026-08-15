@@ -14,22 +14,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command core-manager is the Phase 1 "walking skeleton" for kcp-cluster-api
-// (see kcp/docs/conversion-plan.md and kcp/docs/adr-0001-per-workspace-manager-pool.md):
-// it wires unmodified upstream Cluster API core and docker/dev-infrastructure
-// reconcilers and admission/conversion webhooks onto a *single, hardcoded*
-// KCP workspace, discovered and cached via
+// Command core-manager runs unmodified upstream Cluster API core and
+// docker/dev-infrastructure reconcilers against every KCP workspace bound to
+// this project's APIExport, discovered and cached via
 // github.com/kcp-dev/multicluster-provider + sigs.k8s.io/multicluster-runtime.
+// See docs/conversion-plan.md and docs/adr-0001-per-workspace-manager-pool.md.
 //
-// This is intentionally narrow: it hardcodes one target workspace rather than
-// dynamically engaging every workspace bound to the APIExport (that
-// generalization is Phase 2's G2 per-workspace glue), and it wires only the
-// Cluster/Machine reconcilers plus the docker/dev infrastructure provider's
-// DevCluster/DevMachine reconcilers, per ADR-0001's D3 scope decision - not
-// core/main.go's full reconciler set.
+// Workspaces are not named in configuration: each is set up as it binds and
+// torn down as it unbinds, by internal/providerwiring. Two things remain
+// narrower than upstream's own core/main.go, both deliberately:
+//
+//   - Only the Cluster/Machine reconcilers and the docker/dev infrastructure
+//     provider's DevCluster/DevMachine reconcilers are wired, per ADR-0001's
+//     D3 scope decision, rather than the full reconciler set.
+//   - Webhooks are served for at most one workspace, named by
+//     --webhook-workspace-cluster-name, because routing an admission request
+//     to its own workspace is the conversion plan's G4 and is unbuilt. Left
+//     unset, no webhooks are served.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -45,6 +50,7 @@ import (
 	_ "k8s.io/component-base/logs/json/register"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/kcp-dev/multicluster-provider/apiexport"
@@ -54,6 +60,7 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
@@ -66,7 +73,7 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	endpointSliceName  string
-	workspaceCluster   string
+	webhookWorkspace   string
 	engageTimeout      time.Duration
 	engagePollInterval time.Duration
 	webhookPort        int
@@ -96,16 +103,19 @@ func initFlags(fs *pflag.FlagSet) {
 		"Name of the APIExportEndpointSlice (in the workspace targeted by --kubeconfig/in-cluster config) "+
 			"whose virtual workspace URLs are used to discover and cache bound workspaces.")
 
-	fs.StringVar(&workspaceCluster, "workspace-cluster-name", "",
-		"Internal logical cluster name (not the human-readable workspace path) of the single, "+
-			"hardcoded workspace this Phase 1 walking skeleton engages. See ADR-0001.")
+	fs.StringVar(&webhookWorkspace, "webhook-workspace-cluster-name", "",
+		"Internal logical cluster name (not the human-readable workspace path) of the one workspace "+
+			"whose admission and conversion webhooks this process serves. Serving more than one "+
+			"requires resolving each admission request to its workspace, which is not built yet, so "+
+			"this is one workspace or none. Leave unset to serve no webhooks. Reconciliation is "+
+			"unaffected either way: every bound workspace is reconciled regardless.")
 
 	fs.DurationVar(&engageTimeout, "engage-timeout", 5*time.Minute,
-		"How long to wait for --workspace-cluster-name to become available via the provider "+
-			"(i.e. for its APIBinding to become Ready) before giving up.")
+		"How long to wait for --webhook-workspace-cluster-name to become available via the provider "+
+			"(i.e. for its APIBinding to become Ready) before giving up. Ignored when it is unset.")
 
 	fs.DurationVar(&engagePollInterval, "engage-poll-interval", time.Second,
-		"How often to poll for --workspace-cluster-name to become available.")
+		"How often to poll for --webhook-workspace-cluster-name to become available.")
 
 	fs.IntVar(&webhookPort, "webhook-port", 9443, "Webhook server port")
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/", "Webhook cert dir.")
@@ -145,12 +155,8 @@ func main() {
 		setupLog.Error(fmt.Errorf("--endpoint-slice-name is required"), "Unable to start manager")
 		os.Exit(1)
 	}
-	if workspaceCluster == "" {
-		setupLog.Error(fmt.Errorf("--workspace-cluster-name is required"), "Unable to start manager")
-		os.Exit(1)
-	}
 
-	coremanager.SetupContractMetadata()
+	coremanager.SetupProcessGlobals()
 
 	cfg := ctrl.GetConfigOrDie()
 
@@ -177,6 +183,29 @@ func main() {
 
 	ctx := ctrl.SetupSignalHandler()
 
+	// The docker/dev infrastructure provider's backend binds a fixed port, so
+	// it is created once and shared by every workspace. See
+	// coremanager.DevInfrastructure for what that sharing does and does not
+	// imply.
+	dev, err := coremanager.NewDevInfrastructure(ctx)
+	if err != nil {
+		setupLog.Error(err, "Unable to set up the dev infrastructure provider backend")
+		os.Exit(1)
+	}
+
+	// Registered before Start, and that ordering is load-bearing:
+	// multicluster-runtime hands each engagement to the components registered
+	// at that moment and never replays earlier ones, so wiring registered
+	// after the manager is running misses every workspace that engaged in the
+	// meantime - without an error, and without a log line.
+	if _, err := providerwiring.AddToManager(mgr, func(ctx context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
+		setupLog.Info("Wiring reconcilers onto a workspace", "clusterName", workspace)
+		return coremanager.SetupReconcilers(ctx, wsMgr, dev)
+	}, providerwiring.Options{Log: ctrl.Log.WithName("providerwiring")}); err != nil {
+		setupLog.Error(err, "Unable to register per-workspace wiring")
+		os.Exit(1)
+	}
+
 	go func() {
 		setupLog.Info("Starting manager")
 		if err := mgr.Start(ctx); err != nil {
@@ -187,21 +216,21 @@ func main() {
 
 	<-mgr.Elected()
 
-	setupLog.Info("Waiting for the target workspace to be engaged", "clusterName", workspaceCluster)
-	wsMgr, err := coremanager.WaitForManager(ctx, mgr, multicluster.ClusterName(workspaceCluster), engagePollInterval, engageTimeout)
-	if err != nil {
-		setupLog.Error(err, "Target workspace never became available")
-		os.Exit(1)
-	}
-
-	setupLog.Info("Wiring reconcilers and webhooks onto the engaged workspace", "clusterName", workspaceCluster)
-	if err := coremanager.SetupReconcilers(ctx, wsMgr); err != nil {
-		setupLog.Error(err, "Unable to set up reconcilers")
-		os.Exit(1)
-	}
-	if err := coremanager.SetupWebhooks(wsMgr); err != nil {
-		setupLog.Error(err, "Unable to set up webhooks")
-		os.Exit(1)
+	if webhookWorkspace != "" {
+		setupLog.Info("Waiting for the webhook workspace to be engaged", "clusterName", webhookWorkspace)
+		workspace := multicluster.ClusterName(webhookWorkspace)
+		wsMgr, err := coremanager.WaitForManager(ctx, mgr, workspace, engagePollInterval, engageTimeout)
+		if err != nil {
+			setupLog.Error(err, "Webhook workspace never became available")
+			os.Exit(1)
+		}
+		if err := coremanager.SetupWebhooks(workspace, wsMgr); err != nil {
+			setupLog.Error(err, "Unable to set up webhooks")
+			os.Exit(1)
+		}
+		setupLog.Info("Serving webhooks for one workspace", "clusterName", webhookWorkspace)
+	} else {
+		setupLog.Info("Serving no webhooks: --webhook-workspace-cluster-name is unset")
 	}
 
 	<-ctx.Done()

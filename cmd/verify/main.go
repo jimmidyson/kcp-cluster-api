@@ -45,11 +45,24 @@ func main() {
 	}
 
 	if !*fast {
-		steps = append(steps, verify.Step{
-			Name:  "test:integration",
-			Needs: []verify.Capability{verify.ContainerRuntime()},
-			Run:   taskTarget("test:integration"),
-		})
+		// Split by capability rather than run as one step. Most of what the
+		// integration suite proves - that every bound workspace is engaged,
+		// that each one's writes land in itself, that unbinding stops its work
+		// - needs a real kcp server and nothing else. Bundling it behind a
+		// container runtime would report all of it as "could not run" wherever
+		// Docker is absent, which is missing coverage reported as an
+		// environment problem.
+		steps = append(steps,
+			verify.Step{
+				Name: "test:integration:kcp",
+				Run:  taskTarget("test:integration:kcp"),
+			},
+			verify.Step{
+				Name:  "test:integration:docker",
+				Needs: []verify.Capability{verify.ContainerRuntime()},
+				Run:   taskTarget("test:integration:docker"),
+			},
+		)
 	}
 
 	results, code := verify.Run(os.Stdout, steps)
