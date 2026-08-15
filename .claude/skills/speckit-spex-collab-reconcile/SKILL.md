@@ -1,0 +1,1 @@
+../../../.specify/extensions/spex-collab/.specify-dev/agent-commands/claude/speckit-spex-collab-reconcile/SKILL.md
