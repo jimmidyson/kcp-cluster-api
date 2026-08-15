@@ -199,23 +199,38 @@ suggests.
 
 ## PR title format
 
-`.github/workflows/pr-verify.yaml` runs `hack/scripts/verify/verify-pr-title.sh`
-on every PR and fails it if the title doesn't comply. The title must start
-with one of these emoji prefixes, indicating the kind of change:
+Pull request titles follow [Conventional Commits](https://www.conventionalcommits.org):
 
-| Emoji | Shortcode      | Meaning                        |
-| ----- | -------------- | ------------------------------- |
-| ⚠️    | `:warning:`    | Breaking change                 |
-| ✨    | `:sparkles:`   | Non-breaking feature            |
-| 🐛    | `:bug:`        | Patch / bugfix                  |
-| 📖    | `:book:`       | Documentation                   |
-| 🚀    | `:rocket:`     | Release                         |
-| 🌱    | `:seedling:`   | Infra, tests, or other cleanup  |
+```
+type(optional scope): description
+```
 
-The title must also **not** contain an issue or PR number (`#123`) — link
-issues in the PR body instead (e.g. `Fixes #123`), not in the title.
+Because PRs are squash merged (see below), the title becomes the commit
+message on `main`. That makes it the machine-readable record: release
+tooling derives the version bump and the changelog entry from it. A title
+that does not parse is not a style problem — it produces a wrong release.
 
-Example: `🌱 Encode PR title format in AGENTS.md`.
+| Type | Meaning | Release effect |
+| ---- | ------- | -------------- |
+| `feat` | New capability | minor bump |
+| `fix` | Bug fix | patch bump |
+| `docs` | Documentation only | none |
+| `test` | Tests only | none |
+| `refactor` | Behaviour-preserving change | none |
+| `build` | Build, tooling or dependencies | none |
+| `ci` | CI configuration | none |
+| `chore` | Anything else with no release impact | none |
+
+Breaking changes take a `!` before the colon (`feat!: ...`) or a
+`BREAKING CHANGE:` footer in the body, and cause a major bump.
+
+The title must **not** contain an issue or PR number (`#123`) — link issues
+in the body instead (e.g. `Fixes #123`), not in the title.
+
+Individual commits on a branch should follow the same convention, but only
+the title is load-bearing: squash merging discards the rest.
+
+Example: `feat: add three-outcome verification contract`.
 
 ## Merging pull requests
 

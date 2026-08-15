@@ -1,6 +1,31 @@
 <!--
 Sync Impact Report
 ==================
+Version change: 1.2.0 → 2.0.0
+Rationale: MAJOR — Principle VII's pull-request title rule is redefined,
+not extended. The emoji-prefix convention inherited from upstream Cluster
+API is replaced by Conventional Commits.
+
+Modified principles:
+  VII. History And Review Discipline — titles now follow Conventional
+  Commits so release automation can derive versions and changelog entries
+  from them. The no-issue-number rule survives; the emoji requirement does
+  not.
+
+Reason: the project is adopting release-please, which reads Conventional
+Commit titles. Because pull requests are squash merged, the title is the
+commit that lands on the default branch, so it is what release automation
+parses. The two conventions cannot both hold.
+
+Note: the previous rule's enforcement had already been removed. The check
+lived in pr-verify.yaml and hack/scripts/verify/verify-pr-title.sh, both
+deleted with the upstream tree, so no automation is being broken here — but
+the replacement check is now specified rather than assumed (tasks T038).
+
+Follow-up TODOs: AGENTS.md's "PR title format" section still documents the
+emoji table and must be rewritten in the same change.
+
+---- Previous entry ----
 Version change: 1.1.0 → 1.2.0
 Rationale: MINOR — Principle I materially expanded with a bounded
 "proposal pending" state. No principle removed or redefined.
@@ -177,8 +202,17 @@ command, or a workflow the repository no longer has is a defect.
   default branch. No merge commits, no rebase-and-merge.
 - Open pull request branches MUST be kept current by rebasing onto the base
   branch, never by merging the base branch into them.
-- Pull request titles MUST carry the project's emoji prefix indicating the
-  kind of change, and MUST NOT contain an issue or pull request number.
+- Pull request titles MUST follow [Conventional Commits](https://www.conventionalcommits.org):
+  `type(optional scope): description`, with a `!` or a `BREAKING CHANGE:`
+  footer for breaking changes. Because pull requests are squash merged, the
+  title becomes the commit message on the default branch — so the title is
+  the machine-readable record, and release automation derives version bumps
+  and changelog entries from it. A title that does not parse is not a style
+  problem; it is a release that will be versioned wrongly.
+- Individual commits within a branch SHOULD follow the same convention, but
+  only the title is load-bearing, since squash merging discards the rest.
+- Pull request titles MUST NOT contain an issue or pull request number; link
+  issues in the body instead.
 - Commit messages and pull request descriptions MUST be concise: enough for
   a reviewer to understand the change and why, without restating the diff.
 - Commit messages and pull request descriptions MUST NOT contain agent
@@ -273,4 +307,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 1.2.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
+**Version**: 2.0.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
