@@ -84,20 +84,20 @@ Cluster API as a version-pinned dependency.
 `git ls-files` shows no upstream file; no direct import of an upstream
 internal package. Quickstart Scenario 1.
 
-- [ ] T009 [US1] Move every file under `kcp/` to the repository root, preserving history, so `kcp/cmd/`, `kcp/internal/`, `kcp/test/`, `kcp/docs/` become `cmd/`, `internal/`, `test/`, `docs/`
-- [ ] T010 [US1] Delete the upstream tree: `api/`, `bootstrap/`, `cmd/clusterctl/`, `controllers/`, `controlplane/`, `core/`, `exp/`, `feature/`, `internal/contract/`, `internal/controllers/` and every other upstream directory, plus root `Makefile`, `Dockerfile`, `Tiltfile`, `metadata.yaml`, `netlify.toml`, `OWNERS`, `OWNERS_ALIASES`, `SECURITY_CONTACTS`, `CHANGELOG/`, `hack/`, `util/`, `version/`, `test/e2e/` and the upstream `go.mod`/`go.sum` (FR-001)
-- [ ] T011 [US1] Rewrite `go.mod`: module path `github.com/jimmidyson/kcp-cluster-api`, replacing the three relative `replace` directives with pins to `github.com/jimmidyson/cluster-api v1.15.0-kcp.1` for `sigs.k8s.io/cluster-api`, `/api` and `/test` (FR-002, FR-003)
-- [ ] T012 [US1] Rewrite every `sigs.k8s.io/cluster-api/kcp/...` import to the new module path across `cmd/`, `internal/` and `test/`
-- [ ] T013 [US1] Replace the `sigs.k8s.io/cluster-api/internal/contract` import in `internal/coremanager/contractmetadata.go` with `external.SetGKMetadataGetter` from T005 (FR-004)
-- [ ] T014 [US1] Replace the same internal import in `internal/coremanager/setup.go` with `external.GetAPIVersion` from T005, where the conversion webhook's API-version getter is wired (FR-004)
-- [ ] T015 [US1] Replace the relative CRD manifest paths in `test/integration/coremanager/coremanager_test.go` with resolution from the pinned dependency's module directory (FR-005, research R1)
-- [ ] T016 [US1] Replace the relative webhook manifest paths in the same file with resolution from the pinned dependency's module directory (FR-005)
-- [ ] T017 [US1] Implement the manifest resolution helper in `internal/kcpfixtures/`, failing with an identifiable error naming the expected location when the definitions are absent, with no fallback search (FR-006)
-- [ ] T018 [P] [US1] Unit-test the resolution helper's failure path in `internal/kcpfixtures/`: an unexpected layout must produce the named error, not an empty result
-- [ ] T019 [US1] Verify `go build ./...` succeeds and that no package in this project **directly** imports an upstream internal package, using the direct-import check in Quickstart Scenario 1. Do not use `go list -deps`: it reports transitive internal packages, which upstream's own public packages legitimately use, and would fail against a correct implementation (FR-004)
-- [ ] T020 [US1] Verify no tracked file belongs to upstream by running the `git ls-files` check from Quickstart Scenario 1 and confirming it returns nothing — US1's own independent test, not deferred to Phase 7 (SC-001, FR-001)
-- [ ] T021 [US1] Verify the dependency resolves to an immutable fork tag, not a branch or filesystem path, using the `go list -m` check from Quickstart Scenario 1 (FR-002, FR-003, SC-003 in part — full verification of SC-003 requires an actual upstream version bump and happens the first time one is done, not within this feature)
-- [ ] T022 [US1] Verify the existing unit tests pass unchanged, with no assertion weakened to accommodate the move (spec: Behavioural equivalence)
+- [x] T009 [US1] Move every file under `kcp/` to the repository root, preserving history, so `kcp/cmd/`, `kcp/internal/`, `kcp/test/`, `kcp/docs/` become `cmd/`, `internal/`, `test/`, `docs/`
+- [x] T010 [US1] Delete the upstream tree: `api/`, `bootstrap/`, `cmd/clusterctl/`, `controllers/`, `controlplane/`, `core/`, `exp/`, `feature/`, `internal/contract/`, `internal/controllers/` and every other upstream directory, plus root `Makefile`, `Dockerfile`, `Tiltfile`, `metadata.yaml`, `netlify.toml`, `OWNERS`, `OWNERS_ALIASES`, `SECURITY_CONTACTS`, `CHANGELOG/`, `hack/`, `util/`, `version/`, `test/e2e/` and the upstream `go.mod`/`go.sum` (FR-001)
+- [x] T011 [US1] Rewrite `go.mod`: module path `github.com/jimmidyson/kcp-cluster-api`, replacing the three relative `replace` directives with pins to `github.com/jimmidyson/cluster-api v1.15.0-kcp.1` for `sigs.k8s.io/cluster-api`, `/api` and `/test` (FR-002, FR-003)
+- [x] T012 [US1] Rewrite every `sigs.k8s.io/cluster-api/kcp/...` import to the new module path across `cmd/`, `internal/` and `test/`
+- [x] T013 [US1] Replace the `sigs.k8s.io/cluster-api/internal/contract` import in `internal/coremanager/contractmetadata.go` with `external.SetGKMetadataGetter` from T005 (FR-004)
+- [x] T014 [US1] Replace the same internal import in `internal/coremanager/setup.go` with `external.GetAPIVersion` from T005, where the conversion webhook's API-version getter is wired (FR-004)
+- [x] T015 [US1] Replace the relative CRD manifest paths in `test/integration/coremanager/coremanager_test.go` with resolution from the pinned dependency's module directory (FR-005, research R1)
+- [x] T016 [US1] Replace the relative webhook manifest paths in the same file with resolution from the pinned dependency's module directory (FR-005)
+- [x] T017 [US1] Implement the manifest resolution helper in `internal/kcpfixtures/`, failing with an identifiable error naming the expected location when the definitions are absent, with no fallback search (FR-006)
+- [x] T018 [P] [US1] Unit-test the resolution helper's failure path in `internal/kcpfixtures/`: an unexpected layout must produce the named error, not an empty result
+- [x] T019 [US1] Verify `go build ./...` succeeds and that no package in this project **directly** imports an upstream internal package, using the direct-import check in Quickstart Scenario 1. Do not use `go list -deps`: it reports transitive internal packages, which upstream's own public packages legitimately use, and would fail against a correct implementation (FR-004)
+- [x] T020 [US1] Verify no tracked file belongs to upstream by running the `git ls-files` check from Quickstart Scenario 1 and confirming it returns nothing — US1's own independent test, not deferred to Phase 7 (SC-001, FR-001)
+- [x] T021 [US1] Verify the dependency resolves to an immutable fork tag, not a branch or filesystem path, using the `go list -m` check from Quickstart Scenario 1 (FR-002, FR-003, SC-003 in part — full verification of SC-003 requires an actual upstream version bump and happens the first time one is done, not within this feature)
+- [x] T022 [US1] Verify the existing unit tests pass unchanged, with no assertion weakened to accommodate the move (spec: Behavioural equivalence)
 
 **Checkpoint**: The repository is standalone and builds. This is the MVP.
 
