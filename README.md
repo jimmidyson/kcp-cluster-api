@@ -6,19 +6,30 @@ control plane can reconcile Cluster API resources across many logical
 clusters.
 
 Upstream Cluster API is consumed as a version-pinned dependency, not vendored
-or forked wholesale. The handful of changes we cannot yet get upstream live
-in a small patched fork and are recorded in [`DRIFT.md`](DRIFT.md) with the
-date each one's upstream proposal is due.
+or forked wholesale: `go.mod` requires `sigs.k8s.io/cluster-api` (plus its
+`api` and `test` modules) at `v1.15.0-kcp.1` and resolves it to a small
+patched fork, [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api).
+Everything the fork carries is recorded in [`DRIFT.md`](DRIFT.md) with the
+date each one's upstream proposal is due, and `task drift` fails if reality
+and that record disagree.
 
-> **Status: early.** A walking skeleton reconciles `Cluster` → `Machine`
-> against a real kcp server through unmodified upstream reconcilers. Known
+> **Status: early.** `cmd/core-manager` is a Phase 1 walking skeleton: it
+> discovers workspaces through an `APIExportEndpointSlice` using
+> [multicluster-provider](https://github.com/kcp-dev/multicluster-provider)
+> and [multicluster-runtime](https://sigs.k8s.io/multicluster-runtime), then
+> wires unmodified upstream `Cluster`/`Machine` reconcilers — and the docker
+> provider's `DevCluster`/`DevMachine` reconcilers — onto a *single,
+> hardcoded* workspace. Engaging every bound workspace is Phase 2. Known
 > design corrections for multi-workspace operation are outstanding — see
-> [`docs/conversion-plan.md`](docs/conversion-plan.md).
+> [`docs/conversion-plan.md`](docs/conversion-plan.md) and
+> [`docs/adr-0001-per-workspace-manager-pool.md`](docs/adr-0001-per-workspace-manager-pool.md).
 
 ## Getting started
 
-You need a Go toolchain and, for the integration tests, a container runtime.
-Nothing else: tooling installs itself at pinned versions.
+You need a Go toolchain (the version in [`go.mod`](go.mod)) and, for the
+integration tests, a container runtime. Nothing else: tooling installs itself
+at pinned versions — `task test:integration` downloads the pinned kcp server
+binary into `bin/` first.
 
 ```sh
 go install github.com/go-task/task/v3/cmd/task@latest
@@ -27,6 +38,22 @@ task --list      # what you can run
 task check       # the fast subset: build, lint, unit tests
 task verify      # everything, including integration tests
 ```
+
+Every operation is a named `task` target, and CI invokes those same targets
+and nothing else — so anything CI does is reproducible locally by name.
+
+| Target | What it does |
+|---|---|
+| `verify` | The done-condition: build, lint, unit tests, integration tests |
+| `check` | The inner-loop subset: everything needing no container runtime |
+| `build` | Compile all binaries |
+| `lint` | Static analysis (`go vet`) |
+| `test:unit` | Unit tests |
+| `test:integration` | Integration tests against a real kcp server |
+| `drift` | Check the fork's divergence from its base against `DRIFT.md` |
+| `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
+| `docs:build` | Build the documentation site |
+| `clean` | Remove `bin/` |
 
 ### `task verify` reports three outcomes, not two
 
@@ -60,13 +87,25 @@ done-condition. `task check` is the sub-minute subset for the inner loop.
 
 ```
 Taskfile.yaml     the named operations
+AGENTS.md         the rules, for people and agents alike
 DRIFT.md          what we carry against upstream, and why
 cmd/              binaries: core-manager, verify, drift
 internal/         implementation packages
 test/integration/ integration tests against a real kcp server
 docs/             ADRs, design notes and the documentation site
 specs/            spec-driven feature specifications
+.specify/         Spec Kit state, constitution and extensions
 ```
+
+## Continuous integration
+
+| Workflow | When | What |
+|---|---|---|
+| `pr` | pull requests, pushes to `main` | Runs `task verify`, then reads `bin/verify-result.json`: "could not run" fails the job rather than passing it |
+| `pr title` | pull requests, including edits | Enforces the Conventional Commits title format |
+| `drift` | daily, on demand, and on PRs touching the pin or the record | Runs `task drift` |
+| `docs` | pull requests touching `docs/site/` | Runs `task docs:build` |
+| `release-please` | pushes to `main` | Opens release PRs and cuts tags from the squashed commit titles |
 
 ## Documentation
 
@@ -88,14 +127,18 @@ Read [`AGENTS.md`](AGENTS.md) first — it applies equally to people and to
 agents. The short version:
 
 - Upstream is a dependency. Changes to it go in the patched fork and get an
-  entry in `DRIFT.md`, with an upstream proposal due within 90 days.
+  entry in [`DRIFT.md`](DRIFT.md), with an upstream proposal due within 90
+  days.
 - Integrate through upstream's public extension points. If something needs
   an internal, stop and raise it rather than working around it.
 - New behaviour is developed test-first, with integration tests against a
-  real kcp server.
+  real kcp server — never a vanilla envtest apiserver, which has no
+  workspace support. See [`docs/testing.md`](docs/testing.md).
+- Do not weaken an assertion to get a green run. If the assertion cannot be
+  met, that is the finding to report.
 - PR titles follow [Conventional Commits](https://www.conventionalcommits.org);
   PRs are squash merged, so the title becomes the commit on `main` and drives
-  releases.
+  releases. Keep open branches current by rebasing, not by merging `main` in.
 
 The governing principles are in
 [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
