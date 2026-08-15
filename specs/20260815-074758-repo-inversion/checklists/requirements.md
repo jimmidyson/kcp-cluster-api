@@ -57,6 +57,23 @@ Minor: added Purpose and Out of Scope sections; replaced "fail loudly and
 early" and the subjective SC-007 with objectively checkable statements; made
 the upstream-proposal reference machine-readable (FR-017).
 
+**Second revision — Constitution Principle VIII (YAGNI with a seam
+exception), ratified after this spec was written.** Re-reviewed against it
+and cut seven requirements that built machinery for a set of one: 22
+functional requirements down to 20 numbered (five removed, renumbered), four
+non-functional down to three, and one success criterion reworded to stop
+claiming automation that is no longer specified. Every cut is recorded in
+the spec's new Deferred section with the trigger that would justify building
+it, per the principle's requirement that deferral be a decision rather than
+an omission.
+
+The most over-specified item was FR-017: a fixed machine-readable format for
+upstream-proposal references, plus a check enforcing it, against a drift
+record whose expected size is one entry. The seam exception was applied
+twice, deliberately, to keep the "step could not run" outcome and the
+public-interface requirement — both silent-failure or build-blocking, not
+convenience.
+
 Points carried forward to planning:
 
 - **Requirements name no tools.** Named operations, tooling installation and

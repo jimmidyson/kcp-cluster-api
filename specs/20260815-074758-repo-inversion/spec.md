@@ -150,8 +150,8 @@ the check fails; remove it and confirm the check passes.
 **Acceptance Scenarios**:
 
 1. **Given** the fork carrying this project's patches, **When** the drift check runs, **Then** it reports the exact set of files that differ from the upstream release the fork is based on.
-2. **Given** a patch is added that is not in the agreed set, **When** the drift check runs, **Then** it fails and names the unexpected patch.
-3. **Given** a carried patch, **When** the drift check runs, **Then** it confirms that patch references a proposal filed with upstream Cluster API, and fails if it does not.
+2. **Given** a patch is added that is not in the record, **When** the drift check runs, **Then** it fails and names the unexpected patch.
+3. **Given** the record, **When** a reader opens it, **Then** every carried patch names the upstream proposal it corresponds to.
 
 ---
 
@@ -161,8 +161,6 @@ the check fails; remove it and confirm the check passes.
 - **Published schema definitions drift from the dependency.** The project publishes its own copies of resource definitions derived from Cluster API. When the Cluster API pin moves, those copies can silently fall out of step. Verification must detect this rather than leave it to be discovered at runtime.
 - **The container runtime or its image source is unavailable.** Part of the suite provisions real containers. Where images cannot be pulled, verification must distinguish "environment cannot run this" from "the code is broken", because these have been conflated before and produced a false green.
 - **A required external download fails.** Verification fetches a server binary. A transient failure must be reported as an environment problem, not a test failure.
-- **Someone reintroduces an upstream file.** A contributor or an automated dependency update adds a file that belongs to upstream. This must be caught automatically, since this is precisely how the current drift accumulated.
-- **Verification is run twice concurrently on one machine.** Shared resources (a container network, a fixed port, a downloaded binary) must not corrupt each other or produce misleading failures.
 
 ## Requirements *(mandatory)*
 
@@ -178,33 +176,29 @@ the check fails; remove it and confirm the check passes.
 - **FR-008**: That operation MUST succeed from a clean environment containing only a language toolchain and a container runtime, with no prior setup.
 - **FR-009**: Tooling MUST be installed into a location local to the repository, at pinned versions, without requiring any package manager or environment manager beyond the language toolchain.
 - **FR-010**: Individual portions of the work — building, fast tests, tests requiring a running server, generation, linting — MUST each be invocable on their own by name.
-- **FR-011**: Named operations MUST be organised into separate grouped definitions rather than one monolithic file.
-- **FR-012**: All operations MUST report failure with a non-zero exit status, and MUST NOT report success when a step was skipped.
-- **FR-013**: Where a step cannot run because the environment lacks a required capability, verification MUST end in a third outcome that is neither pass nor fail: a distinct, machine-readable result naming the missing capability. It MUST NOT be reported as success, MUST NOT be silently omitted from the summary, and MUST be detectable by automation without reading logs.
-- **FR-013a**: Every capability a step depends on MUST be checked before that step runs, so an unmet capability is reported up front rather than surfacing as a mid-run failure.
+- **FR-011**: All operations MUST report failure with a non-zero exit status, and MUST NOT report success when a step was skipped.
+- **FR-012**: Where a step cannot run because the environment lacks a required capability, verification MUST end in a third outcome that is neither pass nor fail: a distinct, machine-readable result naming the missing capability. It MUST NOT be reported as success, MUST NOT be silently omitted from the summary, and MUST be detectable by automation without reading logs.
+- **FR-013**: Every capability a step depends on MUST be checked before that step runs, so an unmet capability is reported up front rather than surfacing as a mid-run failure.
 - **FR-014**: Automated checks MUST invoke the same named operations available to contributors locally, rather than reimplementing them.
 - **FR-015**: All automated checks inherited from upstream Cluster API MUST be removed.
-- **FR-016**: The permitted patch set MUST be recorded as a checked-in file in this repository, listing each expected differing path and the upstream release the fork is based on. An automated check MUST compare the fork's actual differences against that file and fail on any discrepancy in either direction — an unexpected patch, or a recorded patch that has disappeared.
-- **FR-017**: Each entry in that record MUST carry a reference to the corresponding upstream proposal in a fixed, machine-readable form, and the check MUST fail if any entry lacks one.
-- **FR-018**: An automated check MUST fail if a file belonging to upstream Cluster API is reintroduced into this repository.
-- **FR-019**: Dependency automation MUST operate only on this project's own dependency manifests.
-- **FR-020**: Project documentation MUST describe the new layout, how to run verification, and how the fork and its patch set are maintained. Documentation describing the previous layout MUST be removed or rewritten, not left to contradict it.
-- **FR-021**: The project's governance documents MUST be rewritten as part of this change, not after it. The contributor and agent guidance is currently built around a prohibition on editing a tree that will no longer exist, and MUST be replaced with the rules that actually apply: how the fork is maintained, how patches are added and retired, and how the drift record is kept.
-- **FR-022**: Verification MUST fail if governance or contributor documentation still instructs readers to follow the previous layout.
+- **FR-016**: The patches carried against upstream MUST be recorded in a checked-in file naming the upstream release the fork is based on, each differing path, and — in prose — the upstream proposal each corresponds to.
+- **FR-017**: An automated check MUST report the fork's actual differences against that release and fail if they do not match the record.
+- **FR-018**: Dependency automation MUST operate only on this project's own dependency manifests.
+- **FR-019**: Project documentation MUST describe the new layout, how to run verification, and how the fork and its patch set are maintained. Documentation describing the previous layout MUST be removed or rewritten, not left to contradict it.
+- **FR-020**: The project's governance documents MUST be rewritten as part of this change, not after it. The contributor and agent guidance is currently built around a prohibition on editing a tree that will no longer exist, and MUST be replaced with the rules that actually apply: how the fork is maintained, how patches are added and retired, and how the drift record is kept.
 
 ### Non-Functional Requirements
 
-- **NFR-001**: Verification MUST complete within a bounded, documented time budget on a clean environment, and that budget MUST be short enough to sit in the feedback loop of a change rather than be deferred. The budget MUST be recorded so regressions against it are visible.
+- **NFR-001**: Verification MUST complete within a documented time budget on a clean environment, short enough to sit inside the feedback loop of a change rather than be deferred.
 - **NFR-002**: The portion of verification that does not require external services or a container runtime MUST be separately invocable and MUST complete substantially faster than the full run, so the common case is not gated on the slowest path.
 - **NFR-003**: Repeated verification runs on the same machine MUST NOT re-download or rebuild tooling that is already present at the pinned version.
-- **NFR-004**: Concurrent verification runs on one machine MUST NOT corrupt each other's shared resources or produce failures caused by that contention.
 
 ### Key Entities
 
 - **This project's module**: The single unit of code this repository publishes. Owns its own dependency manifest, tooling definitions, checks, and documentation.
 - **The patched fork**: A separate repository holding Cluster API plus this project's carried patches. Its contract is one branch per upstream release line, one commit per patch, each referencing an upstream proposal, and immutable released versions this project pins to. It carries no specifications, tooling, or process of its own.
 - **Carried patch**: A single change to Cluster API that this project needs and intends to remove. Has an upstream proposal associated with it and is expected to be deleted once that proposal is accepted.
-- **Drift record**: A checked-in file in this repository naming the upstream release the fork is based on, every path the fork is permitted to differ in, and the upstream proposal each difference corresponds to. It is the reference the drift check compares reality against, and the place a new patch must be justified before it can be accepted.
+- **Drift record**: A checked-in file in this repository naming the upstream release the fork is based on, every path the fork is permitted to differ in, and — in prose — the upstream proposal each difference corresponds to. It is the reference the drift check compares reality against, and the place a new patch must be justified before it can be accepted. It begins with a single entry.
 - **Generated resource definitions**: Copies of Cluster API resource definitions, produced from the pinned dependency and stored in this repository, replacing the previous practice of reading them out of a co-located source tree.
 - **Named operation**: A single invocable unit of work — build, test, generate, lint, verify — available identically to contributors and to automated checks.
 
@@ -216,10 +210,10 @@ the check fails; remove it and confirm the check passes.
 - **SC-002**: A contributor starting from a clean environment can go from clone to a definitive pass/fail answer with exactly one command and no prior setup steps.
 - **SC-003**: Adopting a newer Cluster API release requires changing only dependency pins, and produces no conflict in any file this project owns.
 - **SC-004**: Every automated check corresponds to a named operation a contributor can run locally under the same name, with no check logic existing only in automation.
-- **SC-005**: The number of patches carried against upstream is reported automatically on every change, and each one is traceable to a proposal filed upstream.
-- **SC-006**: Reintroducing an upstream file, or letting generated definitions fall out of step with the pinned dependency, is caught automatically rather than by review.
-- **SC-007**: No contributor or governance document instructs a reader to do something the repository no longer supports; this is checked automatically, not by reading.
-- **SC-008**: Verification completes within its recorded time budget on a clean environment, and the fast subset completes in a small fraction of that, so contributors are not pushed into skipping it.
+- **SC-005**: The patches carried against upstream are reported automatically on every change, and each is traceable to a proposal filed upstream.
+- **SC-006**: Generated definitions falling out of step with the pinned dependency is caught automatically rather than by review.
+- **SC-007**: No contributor or governance document instructs a reader to do something the repository no longer supports.
+- **SC-008**: Verification completes within its documented time budget on a clean environment, and the fast subset completes in a small fraction of that, so contributors are not pushed into skipping it.
 - **SC-009**: A step that cannot run for lack of an environment capability is reported as its own outcome and is never counted as a pass — verifiable by running verification in an environment missing that capability and confirming the result is neither success nor an ordinary failure.
 
 ## Assumptions
@@ -231,3 +225,31 @@ the check fails; remove it and confirm the check passes.
 - **Environment management**: No system-level package or environment manager is assumed to be available. This follows from verified constraints in the automated environments this project targets, where the relevant installer is unreachable and containers are discarded between runs, making per-run environment materialisation a recurring cost.
 - **Scope boundary**: The design corrections identified for the per-workspace manager and webhook routing, the upstream proposal itself, and any change to reconciler behaviour are out of scope. This work changes where code lives and how it is built, verified, and checked — not what it does.
 - **Behavioural equivalence**: The existing test suite is the definition of correct behaviour for this change. It must pass afterwards with assertions no weaker than before; weakening a test to accommodate the move counts as a failure of this work.
+
+## Deferred
+
+Per Constitution Principle VIII, the following were specified in the first
+draft and cut because they build machinery for a set of one. Each is
+recorded with the trigger that would make it worth building, so deferral is
+distinguishable from omission.
+
+| Deferred | Trigger to build it |
+|---|---|
+| Machine-checkable format for upstream-proposal references in the drift record, and a check that every entry has one | The record reaches roughly five entries, or an entry is found without a proposal reference by reading it |
+| Drift check failing on a *recorded* patch that has disappeared, as well as on an unexpected one | A patch is lost or silently dropped during a fork rebase |
+| Automated check that a file belonging to upstream has been reintroduced into this repository | Any upstream file reappears; the inversion makes this a deliberate act rather than an accident, so the structural fix is the control until then |
+| Automated check that documentation no longer describes the previous layout | Documentation grows past what a reviewer can hold, or a stale instruction reaches the default branch |
+| Splitting named operations across multiple grouped definition files | A single definition file becomes hard to navigate — a real threshold, not an anticipated one |
+| Guarantee that concurrent verification runs on one machine do not contend | Two runs are actually observed to collide |
+| Recording the verification time budget in a form that makes regressions against it visible automatically | The budget is exceeded and nobody notices until it hurts |
+
+Two things that look like candidates for this list and are deliberately
+**not** deferred, because Principle VIII's seam exception covers them:
+
+- **FR-012/FR-013 and SC-009**, the "step could not run" third outcome. Its
+  failure mode is silent, and it is structural to retrofit once contributors
+  have learned to trust a green result that was never earned.
+- **FR-004**, resolving upstream behaviour through a publicly reachable
+  interface rather than an internal package. It is not extra work to be
+  added later; it is the difference between the repository being able to
+  build at all and not.
