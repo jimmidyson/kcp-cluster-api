@@ -183,7 +183,7 @@ the check fails; remove it and confirm the check passes.
 - **FR-013**: Every capability a step depends on MUST be checked before that step runs, so an unmet capability is reported up front rather than surfacing as a mid-run failure.
 - **FR-014**: Automated checks MUST invoke the same named operations available to contributors locally, rather than reimplementing them.
 - **FR-015**: All automated checks inherited from upstream Cluster API MUST be removed.
-- **FR-016**: The patches carried against upstream MUST be recorded in a checked-in file naming the upstream release the fork is based on, each differing path, and — in prose — the upstream proposal each corresponds to.
+- **FR-016**: The patches carried against upstream MUST be recorded in a checked-in file naming the upstream release the fork is based on, each differing path, and — in prose — the upstream proposal each corresponds to. Where a proposal has not yet been filed, the record MUST instead carry the date by which it will be, within the bound the project's governance sets.
 - **FR-017**: An automated check MUST report the fork's actual differences against that release and fail if they do not match the record.
 - **FR-018**: Dependency automation MUST operate only on this project's own dependency manifests.
 - **FR-019**: Project documentation MUST describe the new layout, how to run verification, and how the fork and its patch set are maintained. Documentation describing the previous layout MUST be removed or rewritten, not left to contradict it.

@@ -168,7 +168,7 @@ when an unrecorded change is added to the fork. Quickstart Scenario 5.
 
 ### Implementation for User Story 4
 
-- [ ] T043 [US4] Create `DRIFT.md` recording the fork base commit `281e4e3`, the single carried patch from T005, and in prose the upstream proposal it corresponds to (FR-016)
+- [ ] T043 [US4] Create `DRIFT.md` recording the fork base commit `281e4e3`, the fork tag `v1.14.1-kcp.1`, and the single carried patch from T005 across its two paths (`internal/contract/version.go`, `controllers/external/metadata.go`). Its upstream proposal is not yet filed, so record the filing deadline **2026-11-13** — 90 days from the patch landing, the maximum Constitution Principle I allows for a pending proposal (FR-016)
 - [ ] T044 [US4] Implement the `drift` target comparing the fork's actual differences against `DRIFT.md` and failing on any unrecorded path (FR-017)
 - [ ] T045 [US4] Add `task drift` to `pr.yaml` so divergence is reported on every change (SC-005)
 

@@ -1,6 +1,26 @@
 <!--
 Sync Impact Report
 ==================
+Version change: 1.1.0 → 1.2.0
+Rationale: MINOR — Principle I materially expanded with a bounded
+"proposal pending" state. No principle removed or redefined.
+
+Modified principles:
+  I. Divergence From Upstream Is Counted And Temporary — a carried change
+  may now precede its upstream proposal, but only with a filing date
+  recorded in the drift record, no more than 90 days out. An expired or
+  absent date is a defect, exactly as a missing proposal was before.
+
+Reason: implementing the first carried patch surfaced a conflict between
+this principle and the repo-inversion specification, which puts filing the
+upstream proposal out of scope. Without this amendment the drift record
+would land in a self-declared defective state on day one. Amended rather
+than left violated, per the governance rule that deviations are stated
+explicitly rather than tolerated silently.
+
+Follow-up TODOs: none.
+
+---- Previous entry ----
 Version change: 1.0.0 → 1.1.0
 Rationale: MINOR — new principle added (VIII. Build What Is Needed Now —
 Except At Seams). No existing principle removed or redefined.
@@ -55,8 +75,15 @@ justified, and expected to disappear.
 - Every carried change MUST be recorded in the drift record, with the
   upstream release it applies to and a reference to the upstream proposal
   that will make it unnecessary.
-- A carried change without an open upstream proposal MUST be treated as a
-  defect in the project, not a stable state.
+- A change MAY be carried before its proposal is filed, but only as an
+  explicitly **pending** state: the drift record MUST record a date by which
+  the proposal will be filed, and that date MUST be no more than 90 days
+  after the change first lands. Pending is a state with an expiry, not a
+  category to park work in.
+- Once that date passes without a filed proposal, or where no date was
+  recorded at all, the carried change MUST be treated as a defect in the
+  project, not a stable state. The response is to file the proposal, remove
+  the change, or amend this constitution — not to extend the date silently.
 - The permitted set MUST be checked automatically. Divergence discovered by
   review rather than by a check is a failure of the check.
 
@@ -246,4 +273,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
+**Version**: 1.2.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-15
