@@ -41,6 +41,27 @@ jobs:
             The title must not contain an issue or PR number. Link issues in
             the body instead (for example "Fixes #123").
 
+  drift:
+    # Divergence from upstream is measured on every change, not trusted:
+    # experience is that it arrives through routine activity rather than
+    # deliberate decisions (Constitution I).
+    name: drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+
+      - name: Check drift against DRIFT.md
+        run: task drift
+
   verify:
     # Invokes named task targets and nothing else (FR-014). Any logic here
     # that a contributor cannot reproduce with `task <name>` is a violation.
