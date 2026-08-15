@@ -102,7 +102,7 @@ fail, without any prior setup steps.
 2. **Given** the verification command has been run once, **When** it is run again, **Then** it reuses already-installed tooling rather than reinstalling it.
 3. **Given** the test suite passes, **When** the verification command finishes, **Then** it reports success with a non-error exit status suitable for use as an automated gate.
 4. **Given** any part of the suite fails, **When** the verification command finishes, **Then** it reports failure with a non-zero exit status and identifies which part failed.
-5. **Given** a contributor wants to run only one portion of the work (for example only the fast tests, or only code generation), **When** they invoke that portion by name, **Then** it runs on its own without running the whole suite.
+5. **Given** a contributor wants to run only one portion of the work (for example only the fast tests, or only linting), **When** they invoke that portion by name, **Then** it runs on its own without running the whole suite.
 
 ---
 
@@ -134,8 +134,10 @@ locally, and that no inherited upstream check remains configured.
 
 The patches this project carries against Cluster API are visible, countable,
 and each one is on a path to being removed. An automated check reports the
-current patch set and fails if it grows beyond what has been agreed or if a
-patch has no corresponding proposal filed upstream.
+current patch set and fails if it differs from what has been recorded. The
+record itself states, in prose, the upstream proposal each patch corresponds
+to; enforcing that mechanically is deferred until the record is large enough
+for reading it to be unreliable.
 
 **Why this priority**: The value of this project depends on the carried patch
 set trending toward zero. Experience so far shows drift appears through
@@ -173,7 +175,7 @@ the check fails; remove it and confirm the check passes.
 - **FR-005**: The project MUST NOT rely on reading files from a co-located upstream source tree. Resource definitions it needs MUST be resolved from the pinned dependency's own contents, so that they cannot disagree with the version the code is built against.
 - **FR-006**: Resolution MUST fail with an identifiable error naming the expected location if those definitions are not found where the pinned version is expected to carry them. It MUST NOT silently proceed with none, and MUST NOT fall back to a search that could pick up a different version's copies.
 - **FR-007**: A single named verification operation MUST exist that installs required tooling at pinned versions, prepares test prerequisites, and runs the full test suite.
-- **FR-008**: That operation MUST succeed from a clean environment containing only a language toolchain and a container runtime, with no prior setup.
+- **FR-008**: That operation MUST succeed from a clean environment containing only a language toolchain, a container runtime, and network access to the dependencies and tooling it fetches, with no prior setup. Offline operation is not a requirement.
 - **FR-009**: Tooling MUST be installed into a location local to the repository, at pinned versions, without requiring any package manager or environment manager beyond the language toolchain.
 - **FR-010**: Individual portions of the work — building, fast tests, tests requiring a running server, linting — MUST each be invocable on their own by name.
 - **FR-011**: All operations MUST report failure with a non-zero exit status, and MUST NOT report success when a step was skipped.
@@ -186,10 +188,11 @@ the check fails; remove it and confirm the check passes.
 - **FR-018**: Dependency automation MUST operate only on this project's own dependency manifests.
 - **FR-019**: Project documentation MUST describe the new layout, how to run verification, and how the fork and its patch set are maintained. Documentation describing the previous layout MUST be removed or rewritten, not left to contradict it.
 - **FR-020**: The project's governance documents MUST be rewritten as part of this change, not after it. The contributor and agent guidance is currently built around a prohibition on editing a tree that will no longer exist, and MUST be replaced with the rules that actually apply: how the fork is maintained, how patches are added and retired, and how the drift record is kept.
+- **FR-021**: The build entry points this project used previously MUST be removed in the same change that introduces their replacement. Exactly one definition of how to build, test and verify may exist; two that can disagree is the failure this feature exists to remove, not an acceptable transition state.
 
 ### Non-Functional Requirements
 
-- **NFR-001**: Verification MUST complete within a documented time budget on a clean environment, short enough to sit inside the feedback loop of a change rather than be deferred.
+- **NFR-001**: Verification MUST complete within a time budget that is recorded in the project's own documentation, alongside the instructions for running it, short enough to sit inside the feedback loop of a change rather than be deferred. The recorded figure MUST come from a measurement, not an estimate.
 - **NFR-002**: The portion of verification that does not require external services or a container runtime MUST be separately invocable and MUST complete substantially faster than the full run, so the common case is not gated on the slowest path.
 - **NFR-003**: Repeated verification runs on the same machine MUST NOT re-download or rebuild tooling that is already present at the pinned version.
 
@@ -212,7 +215,7 @@ the check fails; remove it and confirm the check passes.
 - **SC-004**: Every automated check corresponds to a named operation a contributor can run locally under the same name, with no check logic existing only in automation.
 - **SC-005**: The patches carried against upstream are reported automatically on every change, and each is traceable to a proposal filed upstream.
 - **SC-006**: Resource definitions cannot disagree with the dependency version the code is built against, because they are resolved from it rather than copied; and a dependency bump that relocates them fails immediately with a message naming what was expected, rather than resolving nothing.
-- **SC-007**: No contributor or governance document instructs a reader to do something the repository no longer supports.
+- **SC-007**: No contributor or governance document instructs a reader to do something the repository no longer supports. Verified by review at this size, deliberately: the automated check is deferred (see Deferred), so this is the one success criterion here that a human confirms rather than a command.
 - **SC-008**: Verification completes within its documented time budget on a clean environment, and the fast subset completes in a small fraction of that, so contributors are not pushed into skipping it.
 - **SC-009**: A step that cannot run for lack of an environment capability is reported as its own outcome and is never counted as a pass — verifiable by running verification in an environment missing that capability and confirming the result is neither success nor an ordinary failure.
 

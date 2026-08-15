@@ -89,6 +89,37 @@ and wrong, and one command against a real published module settled it. The
 correction was applied to the spec rather than carried as a justified plan
 deviation, so the two do not disagree.
 
+**Fourth revision — soundness gate re-run against the committed text.**
+Requested explicitly because the third revision changed what a requirement
+*meant* rather than only removing requirements. It found three Important
+issues, two of which were contradictions the earlier revisions had
+introduced:
+
+1. **US2 acceptance scenario 5 still offered "only code generation"** as an
+   example of a separately invocable portion, two revisions after generation
+   was removed. A reader following it would have built the one target the
+   contract says must not exist.
+2. **US4's narrative still promised deferred behaviour** — that the drift
+   check fails when a patch lacks an upstream proposal. FR-017 had been
+   narrowed to comparing paths and the enforcement deferred, but the story
+   was never updated to match.
+3. **Nothing required the previous build entry point to be removed.** The
+   title and Purpose said the task runner replaces it; no requirement did.
+   Two definitions of how to build and test, able to disagree, is precisely
+   the failure this feature exists to remove. Added as FR-021.
+
+Minor: FR-008 now names network access explicitly and states that offline
+operation is not a requirement; NFR-001 says where the budget is recorded and
+that it must be measured rather than estimated; SC-007 now states openly that
+it is human-verified because its check is deferred.
+
+**Lesson recorded for the workflow, not just this spec**: the two
+contradictions were both introduced by revisions that edited requirements
+without re-reading the user stories those requirements serve. Prose above the
+requirements section does not get re-read by default. Re-running the gate
+against committed text — rather than trusting the reviewer who just made the
+edits — is what caught it, and is worth making the standard.
+
 Points carried forward to planning:
 
 - **Requirements name no tools.** Named operations, tooling installation and
