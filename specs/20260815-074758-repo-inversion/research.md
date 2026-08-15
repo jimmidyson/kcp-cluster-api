@@ -115,6 +115,23 @@ Ordering is cosmetic in any case: the fork is a different module path,
 consumed through a `replace` directive with an explicit version, so
 resolution is exact and never competes with upstream's version namespace.
 
+**The fork needs three tags, not one.** `api/` and `test/` are separate Go
+modules inside the Cluster API repository, resolved by tag prefix. Verified
+by attempting resolution with only the root tag pushed:
+
+```
+reading github.com/jimmidyson/cluster-api/api/go.mod
+  at revision api/v1.15.0-kcp.1: unknown revision
+```
+
+So every fork release requires `v1.15.0-kcp.1`, `api/v1.15.0-kcp.1` and
+`test/v1.15.0-kcp.1` on the same commit. Upstream follows the same
+convention — its tag list contains `api/v1.14.0` and `test/v1.14.0`. This
+project imports from all three modules (core types from `api`, the docker
+provider from `test`), so a partial tag set fails at dependency resolution,
+not at compile time, and the error names a revision rather than a package —
+easy to misread as a typo in the version string.
+
 **Alternatives considered**:
 
 - Basing the branch on the `v1.14.0` tag — **rejected on evidence**, see

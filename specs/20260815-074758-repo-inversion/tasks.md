@@ -68,7 +68,7 @@ with any other phase. See [research.md](./research.md) R2 and R3.
   ```
 - [ ] T006 Confirm upstream's own tests still pass in `/workspace/cluster-api` for `internal/contract` and `controllers/external`, unmodified — the seam must not change existing behaviour
 - [ ] T007 Write the commit message for T005 referencing the upstream proposal this change will become, per Constitution Principle I
-- [ ] T008 Tag `/workspace/cluster-api` as `v1.15.0-kcp.1` and push branch and tag
+- [ ] T008 Tag `/workspace/cluster-api` with **three** tags, all on the same commit, and push them with the branch: `v1.15.0-kcp.1` (root module), `api/v1.15.0-kcp.1`, and `test/v1.15.0-kcp.1`. `api/` and `test/` are separate Go modules inside the repository, resolved by tag prefix; upstream follows the same convention (`api/v1.14.0`, `test/v1.14.0`). Without all three, dependency resolution fails with "unknown revision api/v1.15.0-kcp.1" as soon as anything imports `sigs.k8s.io/cluster-api/api/...`, which the core types do
 
 **Checkpoint**: An immutable fork tag exists carrying exactly one patch. User
 story work can begin.

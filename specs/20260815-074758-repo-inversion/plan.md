@@ -65,7 +65,7 @@ these exact values rather than choosing its own.
 | Module path | `github.com/jimmidyson/kcp-cluster-api` | spec: Repository identity |
 | Fork repository | `github.com/jimmidyson/cluster-api` | spec: The patched fork |
 | Fork base commit | `281e4e3` | research R2 |
-| Fork tag consumed | `v1.15.0-kcp.1` | research R2 |
+| Fork tags consumed | `v1.15.0-kcp.1`, `api/v1.15.0-kcp.1`, `test/v1.15.0-kcp.1` — all on the same commit | research R2 |
 | kcp server version | v0.32.3 | existing `kcp/Makefile` |
 | multicluster-provider | v0.8.0 | ADR-0001 D1 |
 | multicluster-runtime | v0.24.1 | ADR-0001 D1 |
