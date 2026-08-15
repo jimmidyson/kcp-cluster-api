@@ -23,7 +23,6 @@ limitations under the License.
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -48,7 +47,7 @@ func main() {
 	if !*fast {
 		steps = append(steps, verify.Step{
 			Name:  "test:integration",
-			Needs: []verify.Capability{containerRuntime(), kcpBinary()},
+			Needs: []verify.Capability{containerRuntime()},
 			Run:   taskTarget("test:integration"),
 		})
 	}
@@ -94,25 +93,3 @@ func containerRuntime() verify.Capability {
 	}
 }
 
-// kcpBinary reports whether the kcp server binary the integration suite
-// starts is present. `task tools` installs it.
-func kcpBinary() verify.Capability {
-	return verify.Capability{
-		Name: "kcp server binary",
-		Check: func() error {
-			root, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			p := filepath.Join(root, "bin", "kcp")
-			if _, err := os.Stat(p); err != nil {
-				if lp, lerr := exec.LookPath("kcp"); lerr == nil {
-					_ = lp
-					return nil
-				}
-				return errors.New("not found in bin/ or on PATH; run `task tools`")
-			}
-			return nil
-		},
-	}
-}

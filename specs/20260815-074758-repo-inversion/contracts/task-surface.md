@@ -88,11 +88,25 @@ Rules:
 
 ### Known capability requirements
 
+A capability is something **the environment provides and this project cannot
+install for itself**. That distinction is load-bearing: modelling an
+installable dependency as a capability deadlocks the run, because the check
+gates the step whose own setup would install it.
+
 | Capability | Required by | Detection |
 |---|---|---|
-| Container runtime | `test:integration`, `verify` | runtime responds to a version query |
-| Container image source reachable | `test:integration`, `verify` | images resolvable |
-| kcp server binary | `test:integration`, `verify` | present in `bin/` at the pinned version, or downloadable |
+| Container runtime | `test:integration`, `verify` | socket present, or `DOCKER_HOST` set |
+
+Deliberately **not** capabilities:
+
+- **The kcp server binary.** `task tools` downloads it, and `test:integration`
+  depends on that target. It was briefly modelled as a capability and CI
+  caught the deadlock immediately: the check reported "could not run — kcp
+  server binary not found; run `task tools`" on a runner where `task tools`
+  was exactly what the blocked step would have done.
+- **Container image reachability.** Not separately checked. A failed image
+  pull surfaces as a test failure today; if that proves confusing in
+  practice, it can become a capability then.
 
 ## CI contract
 
