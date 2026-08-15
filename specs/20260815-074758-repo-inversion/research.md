@@ -58,7 +58,7 @@ invalidates; failing loudly when the expected path is absent is required.
 ## R2 — What upstream ref is the fork branch based on?
 
 **Decision**: Base the fork branch on commit `281e4e3`, not on a release
-tag. Tag the fork `v1.14.1-kcp.1`.
+tag. Tag the fork `v1.15.0-kcp.1`.
 
 **Verification**:
 
@@ -74,19 +74,42 @@ tag. Tag the fork `v1.14.1-kcp.1`.
   `d0c3bf8`, dated **2021-03-10**. It is five years stale and unusable as a
   base; the branch must be cut from a freshly fetched upstream ref.
 
+**The base is forced, not chosen.** Cutting the branch from the `v1.14.0`
+tag — which would minimise divergence from a release, and was proposed for
+exactly that reason — was tested and does not work. Two packages this project
+imports do not exist at `v1.14.0`:
+
+| Import in `internal/coremanager/setup.go` | at `v1.14.0` | at `281e4e3` |
+|---|---|---|
+| `test/infrastructure/docker/reconcilers` | absent — lived at `internal/controllers` | present, public |
+| `test/infrastructure/docker/webhooks/admission` | absent — real code in `internal/webhooks` | present, public |
+
+At `v1.14.0` the docker provider's reconcilers and webhooks were under
+`internal/`, which an external module cannot import at all. They became
+public on `main` after the release, as part of a 132-file, ~11k-line
+reorganisation. **That reorganisation is what makes this project possible**:
+Phase 1's premise — wiring unmodified upstream reconcilers into our own
+manager — depends on those packages being importable.
+
+Basing on the tag would therefore either fail to build, or require carrying
+the whole reorganisation as fork drift, which is the opposite of the
+minimality that motivated the idea.
+
+The core packages are all present at `v1.14.0` (`core/reconcilers/*`,
+`core/webhooks/*`, `clustercache`, `remote`, `container`,
+`inmemory/pkg/server`); it is only the docker provider that moved.
+
 **Not verified**: whether `281e4e3` is a git descendant of `v1.14.0`. The
 working clone is shallow and `merge-base --is-ancestor` remained
-undetermined after deepening. This is recorded as unknown rather than
-assumed; the evidence above establishes the *release series*, which is what
-the tag needs to reflect, without needing the ancestry.
+undetermined after deepening. Recorded as unknown rather than assumed. It
+does not affect the decision, which rests on package contents.
 
-**Rationale for the tag choice**: the code here was written against
-`281e4e3`, so basing the patch branch on the `v1.14.0` tag would mean
-building against a different tree than the one the code was developed and
-tested on. For the version string, `v1.14.1-kcp.1` sorts above `v1.14.0` and
-below `v1.14.1` — "v1.14.0 plus changes, not yet the next patch" — which is
-what the fork point is. The exact base commit goes in the drift record, which
-is the authoritative statement.
+**Rationale for the version string**: the base carries public API surface
+that `v1.14.0` does not have — new importable packages. By semver that is
+minor-level content, not patch-level, so `v1.15.0-kcp.1` is the honest
+version: above the whole 1.14 line, below `v1.15.0`. A reader seeing a
+1.14.x version in `go.mod` would reasonably expect "v1.14.0 plus fixes" and
+would get "v1.14.0 plus a public API reorganisation".
 
 Ordering is cosmetic in any case: the fork is a different module path,
 consumed through a `replace` directive with an explicit version, so
@@ -94,12 +117,13 @@ resolution is exact and never competes with upstream's version namespace.
 
 **Alternatives considered**:
 
-- `v1.15.0-kcp.1` — **rejected on review.** It asserts a minor series
-  upstream has not opened: `metadata.yaml` at this commit still tops out at
-  1.14, and this repository's own documentation calls the fork point the
-  v1.14 series. The earlier draft of this document chose it on the grounds
-  that a version below `v1.14.0` would misrepresent content ahead of it —
-  true, but the remedy is the next *patch* pre-release, not the next minor.
+- Basing the branch on the `v1.14.0` tag — **rejected on evidence**, see
+  above. Impossible without carrying the reorganisation.
+- `v1.14.1-kcp.1` — chosen briefly, then rejected. It reads as "v1.14.0 plus
+  patch-level changes", which understates a base containing public packages
+  that v1.14.0 lacks. The evidence that settled it was the package contents;
+  release dates and `metadata.yaml` could not distinguish the two cases,
+  because that file only changes when a minor is released.
 - `v1.14.0-kcp.1` — rejected: sorts as a v1.14.0 pre-release, i.e. below the
   release it is built on, the opposite of what it contains.
 - A Go pseudo-version of the base commit — rejected: unreadable in a

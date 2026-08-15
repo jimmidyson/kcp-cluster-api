@@ -65,7 +65,7 @@ these exact values rather than choosing its own.
 | Module path | `github.com/jimmidyson/kcp-cluster-api` | spec: Repository identity |
 | Fork repository | `github.com/jimmidyson/cluster-api` | spec: The patched fork |
 | Fork base commit | `281e4e3` | research R2 |
-| Fork tag consumed | `v1.14.1-kcp.1` | research R2 |
+| Fork tag consumed | `v1.15.0-kcp.1` | research R2 |
 | kcp server version | v0.32.3 | existing `kcp/Makefile` |
 | multicluster-provider | v0.8.0 | ADR-0001 D1 |
 | multicluster-runtime | v0.24.1 | ADR-0001 D1 |
@@ -160,7 +160,7 @@ serial; the rest is mostly parallel once it lands.
 
 1. **Fork preparation (blocking, serial, separate repository).** Cut a branch
    in `jimmidyson/cluster-api` from upstream `281e4e3`, add the public
-   resolver seam (R3), tag `v1.14.1-kcp.1`. Nothing else can begin: until
+   resolver seam (R3), tag `v1.15.0-kcp.1`. Nothing else can begin: until
    this tag exists, this repository cannot compile after the internal import
    is removed.
 2. **Inversion.** Delete the upstream tree, move `kcp/*` to root, rewrite the

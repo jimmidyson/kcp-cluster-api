@@ -43,7 +43,7 @@ Until that tag exists, nothing here compiles — so it is Phase 2, strictly
 serial, in a different repository.
 
 Everything else follows: move files, rewrite the module path and imports,
-swap three relative `replace` directives for pins to `v1.14.1-kcp.1`, then
+swap three relative `replace` directives for pins to `v1.15.0-kcp.1`, then
 build the task surface, then point CI at it.
 
 One research finding changed the design. CRD manifests ship *inside* the
@@ -89,15 +89,22 @@ staleness check that the first draft of the spec required.
    resolver's logic locally (a silent fork with no drift entry and no upstream
    path).
 
-3. **Fork branch cut from a commit, not a release tag; tagged on the 1.14
-   line.** The fork point `281e4e3` is an upstream `main` commit dated after
-   `v1.14.0`. Basing the patch branch on the nearest release tag would mean
-   building against a different tree than the code was written and tested
-   against. The fork is tagged `v1.14.1-kcp.1`, which sorts above `v1.14.0`
-   and below `v1.14.1`. An earlier draft proposed `v1.15.0-kcp.1`; that was
-   rejected because it asserts a minor series upstream has not opened —
-   `metadata.yaml` at this commit still tops out at 1.14, and this project's
-   own `AGENTS.md` calls the fork point the v1.14 series.
+3. **Fork branch cut from a commit, because a release tag is not possible.**
+   Basing the branch on `v1.14.0` was proposed, to minimise divergence from a
+   release, and tested: two packages this project imports —
+   `test/infrastructure/docker/reconcilers` and
+   `.../webhooks/admission` — do not exist at that tag. They were under
+   `internal/` at v1.14.0 and became public on `main` afterwards, in a
+   132-file reorganisation. An external module cannot import `internal/`, so
+   the tag either fails to build or forces us to carry the whole
+   reorganisation as drift. The fork point is load-bearing, not arbitrary.
+
+   The fork is tagged `v1.15.0-kcp.1` because that base carries public API
+   surface `v1.14.0` lacks — minor-level content by semver. A 1.14.x version
+   would read as "v1.14.0 plus fixes" and deliver a public API
+   reorganisation. A `v1.14.1-kcp.1` tag was chosen briefly on weaker
+   evidence (dates and `metadata.yaml`, which cannot distinguish the cases)
+   and reversed once the package contents were checked.
 
 4. **Tooling via `go install`, no environment manager on the critical path.**
    Verified that the devbox installer host is unreachable from the target
@@ -146,8 +153,8 @@ real runner and not marked done from a plausible estimate.
 ## Open Questions
 
 1. **Fork branch and tag names** (T001) are a maintainer decision, unresolved
-   at the time of writing. The plan proposes branch `kcp/v1.14` and tag
-   `v1.14.1-kcp.1`. The repository is public and the tag is a published
+   at the time of writing. The plan proposes branch `kcp/v1.15` and tag
+   `v1.15.0-kcp.1`. The repository is public and the tag is a published
    artifact, so this is not an implementation detail.
 2. **SC-003 cannot be verified within this feature.** "Adopting a newer
    release requires changing only dependency pins" is only demonstrable the
