@@ -33,8 +33,8 @@ it lands.
 
 **Purpose**: Decisions and scaffolding that must exist before work starts
 
-- [ ] T001 Confirm the branch name and tag to use in the fork repository `github.com/jimmidyson/cluster-api` (plan proposes branch `kcp/v1.15` and tag `v1.15.0-kcp.1`) — a maintainer decision, since the repository is public and the tag is a published artifact
-- [ ] T002 [P] Record the confirmed module path `github.com/jimmidyson/kcp-cluster-api` in `specs/20260815-074758-repo-inversion/plan.md` if it differs from the spec's Repository identity assumption
+- [x] T001 Confirm the branch name and tag to use in the fork repository `github.com/jimmidyson/cluster-api` (plan proposes branch `kcp/v1.15` and tag `v1.15.0-kcp.1`) — a maintainer decision, since the repository is public and the tag is a published artifact
+- [x] T002 [P] Record the confirmed module path `github.com/jimmidyson/kcp-cluster-api` in `specs/20260815-074758-repo-inversion/plan.md` if it differs from the spec's Repository identity assumption
 
 **Checkpoint**: The fork's branch/tag names are agreed; nothing has changed yet
 
@@ -49,9 +49,9 @@ compiles until this phase completes and is tagged.**
 (`/workspace/cluster-api`), is strictly serial, and cannot be parallelised
 with any other phase. See [research.md](./research.md) R2 and R3.
 
-- [ ] T003 In `/workspace/cluster-api`, add upstream as a remote and fetch commit `281e4e3`; do not branch from the fork's own `master`, which is at a 2021 commit (research R2)
-- [ ] T004 Create branch `kcp/v1.15` in `/workspace/cluster-api` from `281e4e3`
-- [ ] T005 Add `controllers/external/metadata.go` in `/workspace/cluster-api` exposing the two symbols below, both delegating to the existing `internal/contract` implementation with behaviour unchanged (research R3)
+- [x] T003 In `/workspace/cluster-api`, add upstream as a remote and fetch commit `281e4e3`; do not branch from the fork's own `master`, which is at a 2021 commit (research R2)
+- [x] T004 Create branch `kcp/v1.15` in `/workspace/cluster-api` from `281e4e3`
+- [x] T005 Add `controllers/external/metadata.go` in `/workspace/cluster-api` exposing the two symbols below, both delegating to the existing `internal/contract` implementation with behaviour unchanged (research R3)
 
   **Interfaces** — T013 and T014 consume these; the names and signatures are fixed here and must not be chosen independently:
 
@@ -66,9 +66,9 @@ with any other phase. See [research.md](./research.md) R2 and R3.
   // configured metadata getter.
   func GetAPIVersion(ctx context.Context, c client.Reader, gk schema.GroupKind) (string, error)
   ```
-- [ ] T006 Confirm upstream's own tests still pass in `/workspace/cluster-api` for `internal/contract` and `controllers/external`, unmodified — the seam must not change existing behaviour
-- [ ] T007 Write the commit message for T005 referencing the upstream proposal this change will become, per Constitution Principle I
-- [ ] T008 Tag `/workspace/cluster-api` with **three** tags, all on the same commit, and push them with the branch: `v1.15.0-kcp.1` (root module), `api/v1.15.0-kcp.1`, and `test/v1.15.0-kcp.1`. `api/` and `test/` are separate Go modules inside the repository, resolved by tag prefix; upstream follows the same convention (`api/v1.14.0`, `test/v1.14.0`). Without all three, dependency resolution fails with "unknown revision api/v1.15.0-kcp.1" as soon as anything imports `sigs.k8s.io/cluster-api/api/...`, which the core types do
+- [x] T006 Confirm upstream's own tests still pass in `/workspace/cluster-api` for `internal/contract` and `controllers/external`, unmodified — the seam must not change existing behaviour
+- [x] T007 Write the commit message for T005 referencing the upstream proposal this change will become, per Constitution Principle I
+- [x] T008 Tag `/workspace/cluster-api` with **three** tags, all on the same commit, and push them with the branch: `v1.15.0-kcp.1` (root module), `api/v1.15.0-kcp.1`, and `test/v1.15.0-kcp.1`. `api/` and `test/` are separate Go modules inside the repository, resolved by tag prefix; upstream follows the same convention (`api/v1.14.0`, `test/v1.14.0`). Without all three, dependency resolution fails with "unknown revision api/v1.15.0-kcp.1" as soon as anything imports `sigs.k8s.io/cluster-api/api/...`, which the core types do
 
 **Checkpoint**: An immutable fork tag exists carrying exactly one patch. User
 story work can begin.
