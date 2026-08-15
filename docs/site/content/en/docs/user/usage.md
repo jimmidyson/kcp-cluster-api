@@ -6,8 +6,12 @@ weight: 20
 
 {{% pageinfo color="info" %}}
 This page will fill in as KCP-aware functionality lands. Today one manager
-process reconciles one workspace, named at startup — see
-[Installation](installation.md) for how to run it.
+process reconciles every workspace bound to the export, engaging each as it
+binds and stopping when it unbinds — no workspace is named in configuration.
+Webhooks are the exception: one workspace or none. See
+[Installation](installation.md) for how to run it, and
+[Per-workspace wiring](../design/per-workspace-wiring.md) for what that
+exception costs and why it is there.
 {{% /pageinfo %}}
 
 ## What is different, and what is not

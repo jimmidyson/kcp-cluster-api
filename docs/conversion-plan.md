@@ -246,6 +246,29 @@ keep it minimal and get it merged before fanning out.
   file only): build/vet/lint `kcp/go.mod`, run Phase 1's walking-skeleton
   test as an integration job (kind + kcp).
 
+**Status: G1, G2 and G5 done; G3 deferred with its trigger recorded; G4
+outstanding.** See
+[Per-workspace wiring](site/content/en/docs/design/per-workspace-wiring.md)
+for the contract and the reasoning, and
+[`specs/20260815-185524-per-workspace-wiring`](../specs/20260815-185524-per-workspace-wiring/spec.md)
+for the specification it was built against.
+
+- **G1** needed no code of its own beyond `cmd/core-manager`'s existing
+  provider construction, and deliberately gets no project-owned interface:
+  `multicluster.Provider` and `mcmanager.Manager` are already interfaces
+  owned by their implementers.
+- **G2** is `internal/providerwiring`. The generalization from one hardcoded
+  workspace turned out to be less about discovery than about three
+  process-global mechanisms in the dependencies that are silently
+  single-tenant — the webhook builder's skip-if-already-registered, the
+  never-emptied controller-name registry, and a per-workspace manager whose
+  `Add` delegates to the host — all documented at the package.
+- **G3** has no caller and is not built. Trigger: P5, or anything else that
+  must reach a specific workspace from outside the engaged pool.
+- **G4** remains the gating item for Phase 3's P4, and keeps its human review
+  checkpoint. Until it lands, webhook wiring is constrained to one named
+  workspace and refuses a second rather than silently serving it wrong.
+
 G1 and G2 are largely proven by Phase 1's skeleton already (this is
 mostly generalizing that code from one hardcoded workspace to the real
 discovery loop); G3 is independent and can be built in parallel with them

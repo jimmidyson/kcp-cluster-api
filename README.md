@@ -13,16 +13,20 @@ Everything the fork carries is recorded in [`DRIFT.md`](DRIFT.md) with the
 date each one's upstream proposal is due, and `task drift` fails if reality
 and that record disagree.
 
-> **Status: early.** `cmd/core-manager` is a Phase 1 walking skeleton: it
-> discovers workspaces through an `APIExportEndpointSlice` using
+> **Status: early.** `cmd/core-manager` discovers workspaces through an
+> `APIExportEndpointSlice` using
 > [multicluster-provider](https://github.com/kcp-dev/multicluster-provider)
-> and [multicluster-runtime](https://sigs.k8s.io/multicluster-runtime), then
+> and [multicluster-runtime](https://sigs.k8s.io/multicluster-runtime), and
 > wires unmodified upstream `Cluster`/`Machine` reconcilers — and the docker
-> provider's `DevCluster`/`DevMachine` reconcilers — onto a *single,
-> hardcoded* workspace. Engaging every bound workspace is Phase 2. Known
-> design corrections for multi-workspace operation are outstanding — see
-> [`docs/conversion-plan.md`](docs/conversion-plan.md) and
-> [`docs/adr-0001-per-workspace-manager-pool.md`](docs/adr-0001-per-workspace-manager-pool.md).
+> provider's `DevCluster`/`DevMachine` reconcilers — onto *every* workspace
+> bound to the export, as it binds. Webhooks are the exception: they are
+> served for one workspace or none, because routing an admission request to
+> its own workspace is not built yet. See
+> [Per-workspace wiring](docs/site/content/en/docs/design/per-workspace-wiring.md)
+> for the contract and its remaining gaps,
+> [`docs/conversion-plan.md`](docs/conversion-plan.md) for what comes next,
+> and [`docs/adr-0001-per-workspace-manager-pool.md`](docs/adr-0001-per-workspace-manager-pool.md)
+> for the decisions underneath.
 
 ## Getting started
 
@@ -50,6 +54,8 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `lint` | Static analysis (`go vet`) |
 | `test:unit` | Unit tests |
 | `test:integration` | Integration tests against a real kcp server |
+| `test:integration:kcp` | The subset needing only a kcp server, no container runtime |
+| `test:integration:docker` | The subset also needing a container runtime |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
 | `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
 | `docs:build` | Build the documentation site |

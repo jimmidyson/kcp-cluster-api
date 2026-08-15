@@ -59,6 +59,14 @@ tasks:
 
   test:integration:
     desc: Integration tests against a real kcp server
+    # Sequential, not `deps`: go-task runs deps in parallel, and each of these
+    # starts its own kcp server.
+    cmds:
+      - task: test:integration:kcp
+      - task: test:integration:docker
+
+  test:integration:kcp:
+    desc: Integration tests needing only a real kcp server, no container runtime
     deps: [tools]
     cmds:
       # PATH is set on the command, not in a top-level `env:` block: go-task
@@ -69,7 +77,13 @@ tasks:
       # PATH is the right mechanism despite what the fixture's failure hint
       # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
       # fixture resolves the server as a bare "kcp" and relies on lookup.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/...
+
+  test:integration:docker:
+    desc: Integration tests needing a real kcp server and a container runtime
+    deps: [tools]
+    cmds:
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/coremanager/...
 
   tools:
     desc: Install pinned tooling into bin/

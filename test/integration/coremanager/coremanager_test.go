@@ -28,6 +28,7 @@ package coremanager_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -62,6 +63,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/verify"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
@@ -158,9 +160,10 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 		t.Fatalf("failed to disable MachinePool feature gate: %v", err)
 	}
 
-	// Installs controllers/external.GetGKMetadataFunc - see ADR-0001's
-	// "Known gaps" section and kcp/internal/coremanager/contractmetadata.go.
-	coremanager.SetupContractMetadata()
+	// Installs the process-wide contract-metadata and conversion resolvers -
+	// see ADR-0001's "Known gaps" section and
+	// kcp/internal/coremanager/contractmetadata.go.
+	coremanager.SetupProcessGlobals()
 
 	ctrl.SetLogger(testr.New(t))
 	ctx := t.Context()
@@ -288,11 +291,63 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 		t.Fatalf("workspace was never engaged by the provider: %v", err)
 	}
 
-	if err := coremanager.SetupReconcilers(mgrCtx, wsMgr); err != nil {
+	// The dev infrastructure provider's backend binds a fixed port, so it is
+	// created once per process and shared - see coremanager.DevInfrastructure.
+	dev, err := coremanager.NewDevInfrastructure(mgrCtx)
+	if err != nil {
+		t.Fatalf("failed to set up the dev infrastructure provider backend: %v", err)
+	}
+
+	if err := coremanager.SetupReconcilers(mgrCtx, wsMgr, dev); err != nil {
 		t.Fatalf("failed to set up reconcilers: %v", err)
 	}
-	if err := coremanager.SetupWebhooks(wsMgr); err != nil {
+	coremanager.ResetWebhookWorkspaceForTest()
+	t.Cleanup(coremanager.ResetWebhookWorkspaceForTest)
+	if err := coremanager.SetupWebhooks(clusterName, wsMgr); err != nil {
 		t.Fatalf("failed to set up webhooks: %v", err)
+	}
+
+	// --- A second workspace, wired with the same real reconciler set.
+	//
+	// This is the regression test for what per-workspace wiring costs at the
+	// second workspace, and it needs the real reconcilers rather than a stand-in
+	// (which test/integration/providerwiring covers): the failure it guards
+	// against comes from controller-runtime's process-global registry of
+	// controller names, so it only appears once two workspaces each wire a
+	// controller called "cluster". Nothing is reconciled here - the Cluster to
+	// Machine loop is exercised in the first workspace above - because what is
+	// being asserted is that the wiring itself survives a second tenant.
+	secondWsPath, secondWs := kcptesting.NewWorkspaceFixture(t, server, logicalcluster.NewPath("root"))
+	secondClusterName := multicluster.ClusterName(secondWs.Spec.Cluster)
+
+	secondWsCfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), secondWsPath)
+	secondFixtureClient, err := client.New(secondWsCfg, client.Options{Scheme: fixtureScheme})
+	if err != nil {
+		t.Fatalf("failed to build second workspace client: %v", err)
+	}
+	if err := kcpfixtures.BindExport(ctx, secondFixtureClient, kcpfixtures.BindExportOptions{
+		BindingName: bindingName,
+		ExportPath:  "root",
+		ExportName:  exportName,
+	}); err != nil {
+		t.Fatalf("failed to bind APIExport into the second workspace: %v", err)
+	}
+
+	secondWsMgr, err := coremanager.WaitForManager(mgrCtx, mgr, secondClusterName, 250*time.Millisecond, 60*time.Second)
+	if err != nil {
+		t.Fatalf("second workspace was never engaged by the provider: %v", err)
+	}
+	if err := coremanager.SetupReconcilers(mgrCtx, secondWsMgr, dev); err != nil {
+		t.Fatalf("failed to set up reconcilers for a second workspace: %v", err)
+	}
+
+	// Webhooks, by contrast, are deliberately not multi-workspace: there is one
+	// webhook server for the process, and controller-runtime skips a path that
+	// is already registered rather than rejecting it, so a second workspace's
+	// handlers would be silently dropped and the first workspace's client would
+	// answer for everyone. That has to be an error until G4 exists.
+	if err := coremanager.SetupWebhooks(secondClusterName, secondWsMgr); !errors.Is(err, providerwiring.ErrWebhooksAlreadyWired) {
+		t.Errorf("SetupWebhooks for a second workspace = %v, want it to wrap %v", err, providerwiring.ErrWebhooksAlreadyWired)
 	}
 
 	// --- Exercise it: create a Cluster/DevCluster/Machine/DevMachine
