@@ -191,7 +191,7 @@ when an unrecorded change is added to the fork. Quickstart Scenario 5.
 - [x] T048 [P] Update `docs/site/content/en/docs/design/` pages describing the fork architecture, repository layout and rebasing, all of which describe the arrangement this feature removes (FR-019)
 - [x] T049 [P] Update `docs/conversion-plan.md` and the two ADRs where they reference the `kcp/` subdirectory layout or the read-only invariant (FR-019)
 - [x] T050 Update `CLAUDE.md` if it still points at guidance that has moved (FR-019)
-- [ ] T051 Run the full quickstart: all six scenarios on a machine with a container runtime, and Scenario 3 on one without (SC-006, SC-009, Quickstart: What "done" means)
+- [x] T051 Run the full quickstart: all six scenarios on a machine with a container runtime, and Scenario 3 on one without (SC-006, SC-009, Quickstart: What "done" means)
 - [x] T052 Record the measured full-run duration from the first green CI run into the project documentation as the verification budget — this cannot be done in a development container and must come from a real run (NFR-001, SC-008, research R4)
 - [x] T053 Confirm no contributor or governance document instructs a reader to do something the repository no longer supports — human review, since the automated check is deferred (SC-007)
 

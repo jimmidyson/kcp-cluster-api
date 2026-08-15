@@ -191,3 +191,38 @@ one to get a green run is a failure of this work, not a workaround.
 All six scenarios pass on a machine with a container runtime, and scenario 3
 passes on one without. Scenario 2b's duration is recorded in the
 documentation as the verification budget.
+
+## Result of the first full run
+
+Run on 2026-08-15 against commit `771b2da`, split across two environments: a
+development container with no container runtime, and the CI runner, which
+has one.
+
+| Scenario | Where | Result |
+|---|---|---|
+| 1 — upstream is absent | container | pass: nothing tracked, builds, no internal import, all three modules at `v1.15.0-kcp.1` |
+| 2a — `task check` | container | pass, 5 s warm (budget 60 s) |
+| 2b — `task verify` | CI | pass, all four steps ran; 5 min 13 s, now the recorded budget |
+| 2c — tooling installs itself | container | pass from an empty `bin/`, 8 s |
+| 2d — second run reuses tooling | container | pass: `Task "tools:kcp" is up to date`, no download |
+| 3 — missing capability | container | pass: `could-not-run` / exit 2, capability named, step listed |
+| 4 — CI runs what you run | both | pass, after the trigger fix below |
+| 5 — drift is measured | container | pass both ways: matches `DRIFT.md`, and names the path when an entry is removed |
+| 6 — behaviour unchanged | CI | pass: `TestCoreManagerClusterToMachine` ran in 42.270 s |
+
+Two defects surfaced, both of which CI was green through, and both fixed in
+`771b2da`:
+
+- **Scenario 4's title assertion had never been run.** It failed when run:
+  the check could not re-fire on an edited title, because a bare
+  `pull_request:` trigger does not include `edited`. Split into its own
+  workflow with the right trigger, then confirmed by editing a real pull
+  request title to a non-compliant one and watching the project's own
+  subject rule reject it.
+- **Scenario 6 exposed a skip masquerading as a pass.** The integration test
+  guarded on the docker socket while the harness accepted `DOCKER_HOST` too,
+  so on a machine with a remote daemon the harness started the step and the
+  test skipped itself — reporting pass. The distinction between "ran" and
+  "skipped" was visible only as wall-clock in a log (42.270 s against
+  0.156 s). One definition now, and skipping over an asserted capability is
+  a failure. See the rules in [contracts/task-surface.md](./contracts/task-surface.md).
