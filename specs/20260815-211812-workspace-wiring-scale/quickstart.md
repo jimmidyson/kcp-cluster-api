@@ -35,7 +35,7 @@ Reports how many workspaces this environment can create and bind, and how long
 creating them takes.
 
 **Read it like this**: if the achievable ceiling is far below any interesting
-knee, the sweep cannot locate one. Every capacity figure derived from such a run
+departure point, the sweep cannot locate one. Every capacity figure derived from such a run
 is an **extrapolation** and must be labelled one — see the `extrapolated` field
 in [contracts/capacity-report.md](contracts/capacity-report.md).
 
@@ -47,7 +47,7 @@ task test:scale -- --profile=active-heavy --sweep
 ```
 
 Produces, per profile: engagement latency, per-event delivery cost,
-per-workspace footprint, throughput, and the knee per FR-030's procedure —
+per-workspace footprint, throughput, and the departure point per FR-030's procedure —
 together with the tolerance and point count used, so the run is reproducible.
 
 Validates **SC-001**.

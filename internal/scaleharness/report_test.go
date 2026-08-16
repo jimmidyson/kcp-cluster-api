@@ -35,12 +35,12 @@ func sampleRun() SweepRun {
 			{Workspaces: 32, Value: 320},
 			{Workspaces: 64, Value: 1280},
 		},
-		Knee: DetectKnee([]Point{
+		Departure: FindDeparture([]Point{
 			{Workspaces: 8, Value: 80},
 			{Workspaces: 16, Value: 160},
 			{Workspaces: 32, Value: 320},
 			{Workspaces: 64, Value: 1280},
-		}, KneeOptions{Tolerance: 0.25}),
+		}, DepartureOptions{Tolerance: 0.25}),
 	}
 }
 
@@ -86,16 +86,16 @@ func TestUnknownModeIsRejected(t *testing.T) {
 func TestOutcomeUsesTheExistingContract(t *testing.T) {
 	run := sampleRun()
 	if got := run.Outcome(); got != verify.OutcomePass {
-		t.Errorf("a completed sweep with a knee reported %v, want pass", got)
+		t.Errorf("a completed sweep with a departure point reported %v, want pass", got)
 	}
 
-	noKnee := sampleRun()
-	noKnee.Points = noKnee.Points[:2]
-	noKnee.Knee = DetectKnee(noKnee.Points, KneeOptions{Tolerance: 0.25})
-	if got := noKnee.Outcome(); got != verify.OutcomeCouldNotRun {
-		t.Errorf("a sweep too short to establish a knee reported %v, want could-not-run", got)
+	noDeparture := sampleRun()
+	noDeparture.Points = noDeparture.Points[:2]
+	noDeparture.Departure = FindDeparture(noDeparture.Points, DepartureOptions{Tolerance: 0.25})
+	if got := noDeparture.Outcome(); got != verify.OutcomeCouldNotRun {
+		t.Errorf("a sweep too short to establish a departure point reported %v, want could-not-run", got)
 	}
-	if got := noKnee.Outcome().String(); got != "could not run" {
+	if got := noDeparture.Outcome().String(); got != "could not run" {
 		t.Errorf("outcome renders as %q, want the existing wording", got)
 	}
 }
@@ -110,9 +110,9 @@ func TestLinearSweepIsAPass(t *testing.T) {
 		{Workspaces: 32, Value: 320},
 		{Workspaces: 64, Value: 640},
 	}
-	run.Knee = DetectKnee(run.Points, KneeOptions{Tolerance: 0.25})
+	run.Departure = FindDeparture(run.Points, DepartureOptions{Tolerance: 0.25})
 
-	if run.Knee.Found {
+	if run.Departure.Found {
 		t.Fatal("test setup is wrong: this series is linear")
 	}
 	if got := run.Outcome(); got != verify.OutcomePass {

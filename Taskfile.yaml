@@ -122,9 +122,9 @@ tasks:
       # active workspaces are not interchangeable units of load.
       PROFILE: '{{.PROFILE | default "idle-heavy"}}'
       # Comma-separated workspace counts to sweep, geometrically spaced. The
-      # knee is derived from these, so the set is recorded with the result.
+      # departure point is derived from these, so the set is recorded with the result.
       POINTS: '{{.POINTS | default "1,2,4,8"}}'
-      # Fractional deviation from the linear projection that counts as the knee.
+      # Fractional deviation from the linear projection that counts as the departure point.
       TOLERANCE: '{{.TOLERANCE | default "0.25"}}'
       # Extra flags, e.g. --probe-ceiling to report only what this environment
       # can host before designing a sweep against it.

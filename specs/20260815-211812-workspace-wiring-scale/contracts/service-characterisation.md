@@ -25,7 +25,7 @@ provider port — a real planned caller, not a hypothetical one.
 **Service-agnostic** — written once, reused unchanged for every future service:
 
 - the sweep across geometrically spaced workspace counts
-- knee detection (FR-030's defined procedure)
+- departure detection (FR-030's defined procedure)
 - coefficient fitting and held-out validation (FR-034, FR-035)
 - reporting through `internal/verify`'s three-outcome contract
 
@@ -46,7 +46,7 @@ built on `providerwiring`'s `SetupFunc` seam. Only coefficients differ.
 
 | # | Property | Requirement | Verified by |
 |---|---|---|---|
-| S1 | The sweep, fit and knee machinery contains no reference to Cluster API types | FR-038 | Compile-time: the agnostic package does not import CAPI |
+| S1 | The sweep, fit and departure point machinery contains no reference to Cluster API types | FR-038 | Compile-time: the agnostic package does not import CAPI |
 | S2 | A second implementation of the interface, constructing different objects, drives the same machinery unchanged | FR-038, SC-019 | A test implementation exercised in unit tests |
 | S3 | Every reported figure records synthetic or observed | FR-039, SC-020 | Unit test asserting the mode is non-empty on every emitted figure |
 | S4 | A synthetic figure is distinguishable from an observed one at the point of publication, not only internally | FR-039 | The published tables carry the mode |

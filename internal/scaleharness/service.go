@@ -26,7 +26,7 @@ import (
 
 // Service is the service-specific half of scale characterisation.
 //
-// Everything else in this package — sweeping, fitting, knee detection,
+// Everything else in this package — sweeping, fitting, departure detection,
 // reporting — is service-agnostic, because the cost structure it measures is a
 // property of the per-workspace wiring rather than of any one controller.
 // Listener count, cached objects, workers and dispatch cost take the same form

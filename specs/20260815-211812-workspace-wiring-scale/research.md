@@ -342,7 +342,7 @@ of onboarding is not where the quadratic lives**.
 **Does not**: the controller ceiling. This test runs no manager — it creates and
 binds workspaces and stops. The costs this feature exists to find (listener
 fan-out, store replay under `blockDeltas`, engagement serialisation) are all in
-`core-manager`'s engagement path and are untouched here. **The knee this feature
+`core-manager`'s engagement path and are untouched here. **The departure point this feature
 is looking for is not in these numbers, and their flatness is not evidence that
 it does not exist.**
 
@@ -371,7 +371,7 @@ which has no logical clusters). How many workspaces can the CI and development
 environments actually create and bind, and how long does creating them take?
 
 This is the single biggest risk in the plan. If the environment tops out at a
-number well below any interesting knee, the sweep cannot locate it, and:
+number well below any interesting departure point, the sweep cannot locate it, and:
 
 - FR-022 requires this be reported as **"could not run"**, not as a pass.
 - The gated requirements cannot get a determination from measurement, and the
@@ -533,7 +533,7 @@ workspace, one watch on `Cluster`, `MaxConcurrentReconciles: 2`.
 - **Heap: ~867 KiB per workspace** idle, ~900 KiB active. Step deltas of
   850/864/867 KiB show no curvature. The ~33 KiB difference is the profile's ten
   objects.
-- **No knee on either profile** up to 64 workspaces.
+- **No departure point on either profile** up to 64 workspaces.
 - Per-event issue cost is flat: 5.8 / 6.5 / 6.7 / 6.1 ms.
 - Telemetry held at **20 labelled series across 64 workspaces**, so the
   cardinality bound holds in practice rather than only in unit tests.
@@ -559,9 +559,9 @@ Three limits, stated because the flatness is easy to over-read:
    swept range was limited by measurement time rather than by capability. Any
    figure quoted above 64 is an extrapolation.
 
-### A methodological finding about the knee procedure
+### A methodological finding about the departure point procedure
 
-The first sweep ran 1, 2, 4, 8 and reported no knee — but its heap went
+The first sweep ran 1, 2, 4, 8 and reported no departure point — but its heap went
 6.3 → 9.5 MiB from one workspace to two, then only 9.5 → 10.1 MiB from two to
 eight. The first point was dominated by **fixed process cost**, which inflated
 the slope projected from the two smallest points and would have hidden a real

@@ -270,7 +270,7 @@ CPU    ≈ base + d·events_total·W + e·reconciles_per_second
 
 Two consequences worth stating. The CPU term is **quadratic in disguise** —
 total events scale with workspace count, and each event costs O(W) to dispatch —
-which is the knee expressed algebraically. And if the workspace-scale feature's
+which is the departure point expressed algebraically. And if the workspace-scale feature's
 gated demux work is built, that term collapses to linear, so **the model must be
 re-fitted afterwards**; that before-and-after refit is exactly the evidence
 SC-010 already requires.
@@ -285,7 +285,7 @@ are simply absent from a database or VM service's model.
 extrapolate defensibly where a curve fit does not, but three limits are
 binding:
 
-1. **Never project across an unobserved knee.** The model is valid within its
+1. **Never project across an unobserved departure point.** The model is valid within its
    measured regime; past a discontinuity it has not seen, it must decline rather
    than emit a number.
 2. **Model live heap, not RSS.** Go's resident size is not a clean function of
@@ -316,7 +316,7 @@ controller. Listener count, cached object count, worker count and dispatch cost
 have the same form for every controller built on `providerwiring`'s `SetupFunc`
 seam. Only the coefficients differ. So characterising a new service is fitting
 known-shape coefficients, not discovering an unknown function, and threshold
-derivation is the knee procedure operating on a curve rather than on service
+derivation is the departure point procedure operating on a curve rather than on service
 semantics.
 
 **Two measurement modes, and every figure records which produced it:**

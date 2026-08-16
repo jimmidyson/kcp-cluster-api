@@ -128,7 +128,7 @@ func TestSweepRunCarriesModeProfileAndService(t *testing.T) {
 	}
 }
 
-func TestSweepDerivesAKneeFromItsPoints(t *testing.T) {
+func TestSweepDerivesADepartureFromItsPoints(t *testing.T) {
 	run, err := Sweep(t.Context(), sweepOpts(1, 2, 4, 8))
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
@@ -137,11 +137,11 @@ func TestSweepDerivesAKneeFromItsPoints(t *testing.T) {
 	if len(run.Points) != len(run.Measurements) {
 		t.Errorf("derived %d points from %d measurements", len(run.Points), len(run.Measurements))
 	}
-	if run.Knee.Points != len(run.Points) {
-		t.Errorf("knee recorded %d points, sweep had %d", run.Knee.Points, len(run.Points))
+	if run.Departure.Points != len(run.Points) {
+		t.Errorf("departure result recorded %d points, sweep had %d", run.Departure.Points, len(run.Points))
 	}
-	if run.Knee.Tolerance <= 0 {
-		t.Error("knee result records no tolerance")
+	if run.Departure.Tolerance <= 0 {
+		t.Error("departure result records no tolerance")
 	}
 }
 
@@ -153,7 +153,7 @@ func TestShortSweepReportsCouldNotRun(t *testing.T) {
 		t.Fatalf("Sweep: %v", err)
 	}
 
-	if !run.Knee.CouldNotRun {
+	if !run.Departure.CouldNotRun {
 		t.Error("a two-point sweep did not report could-not-run")
 	}
 	if run.Outcome().String() != "could not run" {

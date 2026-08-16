@@ -72,17 +72,17 @@ type SweepOptions struct {
 	// the run yields.
 	Mode LoadMode
 
-	// Knee parameterises detection. Zero values take the documented defaults.
-	Knee KneeOptions
+	// Departure parameterises detection. Zero values take the documented defaults.
+	Departure DepartureOptions
 
-	// Metric selects the measured quantity the knee is taken over. Nil means
+	// Metric selects the measured quantity the departure point is taken over. Nil means
 	// heap bytes, which is the term that bounds how many workspaces a shard
 	// holds.
 	Metric func(Measurement) float64
 }
 
 // Sweep measures a service across a range of workspace counts and derives the
-// knee from the result.
+// departure point from the result.
 //
 // It does not decide anything. It produces the evidence a capacity figure is
 // set from, and reports honestly when the evidence is insufficient — a sweep
@@ -118,14 +118,14 @@ func Sweep(ctx context.Context, opts SweepOptions) (SweepRun, error) {
 		if err != nil {
 			// Returned rather than recorded and skipped: a point that could
 			// not be measured leaves a gap the trend is projected across, and
-			// a knee derived from a sweep with holes in it is not reproducible.
+			// a departure point derived from a sweep with holes in it is not reproducible.
 			return SweepRun{}, fmt.Errorf("measuring %d workspaces: %w", n, err)
 		}
 		run.Measurements = append(run.Measurements, m)
 		run.Points = append(run.Points, Point{Workspaces: n, Value: metric(m)})
 	}
 
-	run.Knee = DetectKnee(run.Points, opts.Knee)
+	run.Departure = FindDeparture(run.Points, opts.Departure)
 	return run, nil
 }
 
@@ -194,7 +194,7 @@ func driveEvents(ctx context.Context, opts SweepOptions, clients []client.Client
 // GC runs first so the figure is what the process is holding rather than what
 // it has not yet collected. Without it, a later point looks larger simply for
 // having allocated more garbage since the last cycle, which would manufacture a
-// knee out of collector timing.
+// departure point out of collector timing.
 func sample() (heapBytes uint64, goroutines int) {
 	runtime.GC()
 	var stats runtime.MemStats

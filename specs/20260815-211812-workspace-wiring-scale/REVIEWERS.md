@@ -81,7 +81,7 @@ cache runnable group (`pkg/manager/internal.go:446`) *before* leader election
    and today it exposes none (`SkipNameValidation` aggregates all workspaces'
    metrics under one controller name).
 2. **Harness** — profiles, a sweep across geometrically spaced workspace counts,
-   knee detection by a defined procedure, reporting through `internal/verify`'s
+   departure detection by a defined procedure, reporting through `internal/verify`'s
    *existing* three-outcome contract.
 3. **The gate** — baseline, capacity derivation, eight build-or-close
    determinations.
@@ -197,7 +197,7 @@ claim is tagged `VERIFIED`, `ASSUMED` or `OPEN` with file and line. Two are
 ## Open Questions
 
 - **R10 — can the environment host a meaningful sweep?** The largest open risk.
-  If achievable workspace counts sit well below any interesting knee, the sweep
+  If achievable workspace counts sit well below any interesting departure point, the sweep
   cannot locate it, capacity figures become labelled extrapolations, and the
   gate's determinations rest on weaker evidence. T012/T013 resolve this and
   **must** run before the harness design is fixed. FR-022 requires this be

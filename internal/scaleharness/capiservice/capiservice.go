@@ -19,7 +19,7 @@ limitations under the License.
 //
 // It is a package of its own rather than a file in internal/scaleharness for a
 // structural reason: the harness asserts, by parsing its own imports, that the
-// sweep, fit and knee machinery knows nothing about any particular service. A
+// sweep, fit and departure point machinery knows nothing about any particular service. A
 // Cluster API implementation living beside that machinery would defeat the
 // assertion the moment it compiled. Keeping it here means the property is
 // enforced by the package boundary rather than by everyone remembering.

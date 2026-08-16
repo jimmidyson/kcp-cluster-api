@@ -22,16 +22,16 @@ import (
 )
 
 const (
-	// DefaultKneeTolerance is how far a measurement may exceed the linear
+	// DefaultTolerance is how far a measurement may exceed the linear
 	// projection before it counts as a departure.
 	//
 	// Not zero, and not configurable to zero: measurement noise on a real
 	// server is easily a few percent, and a literal zero would report the
-	// first rounding wobble as a knee. Understating capacity that way is a
+	// first rounding wobble as a departure point. Understating capacity that way is a
 	// quieter failure than overstating it, but it is still wrong.
-	DefaultKneeTolerance = 0.25
+	DefaultTolerance = 0.25
 
-	// DefaultMinPoints is the shortest sweep from which a knee may be claimed:
+	// DefaultMinPoints is the shortest sweep from which a departure point may be claimed:
 	// two to establish the trend, and at least two more to depart from it.
 	//
 	// A shorter sweep does not mean "cost is linear", it means the question
@@ -46,21 +46,21 @@ type Point struct {
 	Value      float64
 }
 
-// KneeOptions parameterises detection. Both fields are recorded in the result,
-// because a knee quoted without them cannot be reproduced or compared.
-type KneeOptions struct {
+// DepartureOptions parameterises detection. Both fields are recorded in the result,
+// because a departure point quoted without them cannot be reproduced or compared.
+type DepartureOptions struct {
 	// Tolerance is the fractional excess over the linear projection that
-	// counts as a departure. Zero means DefaultKneeTolerance.
+	// counts as a departure. Zero means DefaultTolerance.
 	Tolerance float64
 
-	// MinPoints is the shortest sweep a knee may be claimed from. Zero means
+	// MinPoints is the shortest sweep a departure point may be claimed from. Zero means
 	// DefaultMinPoints.
 	MinPoints int
 }
 
-// KneeResult is the outcome of detection, carrying the parameters that produced
+// Departure is the outcome of detection, carrying the parameters that produced
 // it. Comparable, so a test can assert determinism directly.
-type KneeResult struct {
+type Departure struct {
 	// Found reports whether cost departed from linear within the swept range.
 	Found bool
 	// Workspaces is the smallest count at which it did. Meaningful only when
@@ -77,29 +77,47 @@ type KneeResult struct {
 	Points    int
 }
 
-// DetectKnee finds the smallest swept workspace count at which a measured
+// FindDeparture finds the smallest swept workspace count at which a measured
 // quantity exceeds the linear projection from the sweep's two smallest points
 // by more than the tolerance.
+//
+// # On the name
+//
+// Performance engineering calls this the "knee of the curve", and that term is
+// standard enough to have a literature and tooling behind it. It is
+// deliberately not used here, for two reasons.
+//
+// It describes a different phenomenon. The classic knee is response time
+// against utilisation — a queueing curve — where the bend is contested: an
+// M/M/1 response-time curve is a smooth hyperbola, so a "knee" found on it is
+// partly an artifact of the chosen axes. What is measured here is resource cost
+// against workspace count, looking for evidence that an O(W) algorithmic term
+// has begun to dominate. That is a real change in growth rate with a cause we
+// can point at in a dependency's source, not an asymptote.
+//
+// And it is a shape metaphor in a document an operator reads to size a
+// deployment. "Cost departs from linear at N workspaces" says what was found;
+// "the knee is at N" requires knowing what curve is being pictured.
 //
 // The procedure is deliberately simple and stated in full, because its output
 // becomes a published capacity figure. Anything cleverer — a fitted curve, a
 // second-derivative test — would be harder to reproduce by hand and harder to
 // argue with, and the ability to argue with it is the point.
 //
-// It does not extrapolate. A knee outside the swept range is not detected and
+// It does not extrapolate. A departure point outside the swept range is not detected and
 // not guessed at; that is what CouldNotRun and the caller's extrapolation
 // labelling are for.
-func DetectKnee(points []Point, opts KneeOptions) KneeResult {
+func FindDeparture(points []Point, opts DepartureOptions) Departure {
 	tolerance := opts.Tolerance
 	if tolerance <= 0 {
-		tolerance = DefaultKneeTolerance
+		tolerance = DefaultTolerance
 	}
 	minPoints := opts.MinPoints
 	if minPoints <= 0 {
 		minPoints = DefaultMinPoints
 	}
 
-	result := KneeResult{Tolerance: tolerance, Points: len(points)}
+	result := Departure{Tolerance: tolerance, Points: len(points)}
 
 	if len(points) < minPoints {
 		result.CouldNotRun = true

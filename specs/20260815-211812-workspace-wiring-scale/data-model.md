@@ -124,17 +124,17 @@ One execution of the harness at one profile across several workspace counts.
 |---|---|
 | profile | Which profile |
 | points | Geometrically spaced workspace counts (FR-030) |
-| tolerance | Deviation threshold for knee detection (FR-030) |
+| tolerance | Deviation threshold for departure detection (FR-030) |
 | measurements | Per point: engagement latency, per-event delivery cost, per-workspace footprint, throughput |
 | outcome | `pass` / `fail` / `could not run` — reusing `internal/verify.Outcome` ([R11](research.md#r11--reuse-the-existing-three-outcome-contract--verified)) |
-| knee | Smallest point exceeding the linear projection from the two smallest by more than tolerance; absent if none found within the swept range |
+| departure point | Smallest point exceeding the linear projection from the two smallest by more than tolerance; absent if none found within the swept range |
 
 **`tolerance` and `points` are recorded with the result**, so two runs of one
 profile yield the same figure — that is what makes FR-030 a procedure rather
 than an inspection.
 
-**A sweep whose range never reaches a knee is not a pass.** It reports
-`could not run` for the knee, per FR-022, and any capacity claim derived from it
+**A sweep whose range never reaches a departure point is not a pass.** It reports
+`could not run` for the departure point, per FR-022, and any capacity claim derived from it
 is an extrapolation and must be labelled one.
 
 ### Capacity figure
@@ -147,7 +147,7 @@ The published output. One per profile.
 | watchedObjects, eventRate | The units capacity is stated in (FR-027) |
 | workspaceGuidance | Derived workspace count, explicitly secondary |
 | derivedFrom | The sweep run, including tolerance and point count |
-| headroom | Margin between the knee and the stated figure |
+| headroom | Margin between the departure point and the stated figure |
 | extrapolated | Whether measurement reached this range or it was projected |
 
 ### Gate determination

@@ -74,7 +74,7 @@ feature needs to exist:
 
 The limit is therefore an **output of measurement, not an input to design**:
 the harness finds where cost departs from linear, and the limit is set below
-that knee with headroom. This is why no absolute figure is asserted here, and
+that departure point with headroom. This is why no absolute figure is asserted here, and
 why the requirements it decides are explicitly gated on it — see "The
 measurement gate".
 
@@ -231,11 +231,11 @@ controller that wants it does not depend on how many other workspaces exist.
 
 **Why this priority**: this is the cost that sets the per-shard limit. Every
 other cost in this feature is additive and bounded; this one multiplies, so it
-is what makes the knee appear. Sharding does not relieve it — each process pays
+is what makes the departure point appear. Sharding does not relieve it — each process pays
 the multiplication over its own shard's workspaces — so a low limit is the only
 alternative to fixing it, and a low limit means more shards for the same fleet.
 
-**Gated**: if Story 1's measurement shows the knee falls well above any capacity
+**Gated**: if Story 1's measurement shows the departure point falls well above any capacity
 an operator would set, this story is closed on the evidence rather than built.
 
 **Independent Test**: run the harness at two workspace counts an order of
@@ -570,11 +570,11 @@ set.
   silently. This feature MUST NOT claim to enforce a limit it cannot enforce:
   workspace placement onto shards is kcp's, and admission-time enforcement
   requires G4 — see Out of Scope.
-- **FR-030**: The harness of FR-020 MUST derive the knee by a defined,
+- **FR-030**: The harness of FR-020 MUST derive the departure point by a defined,
   repeatable procedure, not by inspection. That procedure MUST specify: which
   reported quantities are swept; a minimum number of geometrically spaced
   workspace counts per sweep; a stated deviation tolerance; and the rule for
-  identifying the knee — the smallest swept workspace count at which a measured
+  identifying the departure point — the smallest swept workspace count at which a measured
   quantity exceeds the linear projection from the sweep's two smallest points by
   more than that tolerance. The tolerance and the point count MUST be recorded
   with each result, so two runs of the same profile yield the same figure.
@@ -607,7 +607,7 @@ set.
 - **FR-038**: The harness's **service-specific** parts — how a profile's objects
   are constructed, and how a controller's watch set and engaged count are
   obtained — MUST sit behind a narrow interface, separate from the
-  service-agnostic sweep, fit and knee-detection machinery. This feature does
+  service-agnostic sweep, fit and departure-detection machinery. This feature does
   **not** build a general-purpose characterisation utility: there is one
   controller today, and Principle VIII prohibits the abstraction before a second
   caller. **Trigger to generalise: the conversion plan's P1**
@@ -626,7 +626,7 @@ set.
   model. Its size is the independent variable, and the quantity a per-shard
   capacity limit bounds.
 - **Capacity**: the stated load one shard's process can carry, per profile.
-  Derived from where measured cost departs from linear, set below that knee with
+  Derived from where measured cost departs from linear, set below that departure point with
   headroom. The primary deliverable, since the deployment model reaches its
   target by composing bounded shards rather than by unbounded scaling.
 - **Engagement**: the act of making one workspace reconciled, and the state that
@@ -710,7 +710,7 @@ result.
   SC-016 are derived from the **same** fitted model, so a deployment sized from
   the published tables reports its position against the arithmetic it was sized
   with.
-- **SC-019**: The sweep, fit and knee-detection machinery runs against a
+- **SC-019**: The sweep, fit and departure-detection machinery runs against a
   service-specific implementation supplied through an interface, demonstrated by
   a second implementation in tests that constructs different objects — evidence
   that characterising another controller later is a matter of supplying that

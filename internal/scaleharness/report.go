@@ -58,16 +58,16 @@ const (
 )
 
 // SweepRun is one execution of the harness: one service, one profile, one
-// mode, the points measured and the knee derived from them.
+// mode, the points measured and the departure point derived from them.
 type SweepRun struct {
-	Service string     `json:"service"`
-	Profile Profile    `json:"profile"`
-	Mode    LoadMode   `json:"mode"`
-	Points  []Point    `json:"points"`
-	Knee    KneeResult `json:"knee"`
+	Service   string    `json:"service"`
+	Profile   Profile   `json:"profile"`
+	Mode      LoadMode  `json:"mode"`
+	Points    []Point   `json:"points"`
+	Departure Departure `json:"departure"`
 
 	// Measurements are the raw per-point costs. Points is the single quantity
-	// the knee was taken over; these are everything that was recorded, so a
+	// the departure point was taken over; these are everything that was recorded, so a
 	// later question can be asked of an existing run without re-measuring.
 	Measurements []Measurement `json:"measurements,omitempty"`
 }
@@ -99,7 +99,7 @@ func (r SweepRun) Validate() error {
 // short to establish anything. Reporting the second as a pass would let an
 // unrunnable measurement masquerade as evidence of headroom.
 func (r SweepRun) Outcome() verify.Outcome {
-	if r.Knee.CouldNotRun {
+	if r.Departure.CouldNotRun {
 		return verify.OutcomeCouldNotRun
 	}
 	return verify.OutcomePass
@@ -124,12 +124,12 @@ func (r SweepRun) Summary() string {
 	fmt.Fprintf(&b, "%s / %s / %s: %d points", r.Service, r.Profile.Name, r.Mode, len(r.Points))
 
 	switch {
-	case r.Knee.CouldNotRun:
-		fmt.Fprintf(&b, "; knee could not run (%s)", r.Knee.Reason)
-	case r.Knee.Found:
-		fmt.Fprintf(&b, "; knee at %d workspaces (tolerance %.0f%%)", r.Knee.Workspaces, r.Knee.Tolerance*100)
+	case r.Departure.CouldNotRun:
+		fmt.Fprintf(&b, "; departure point could not be established (%s)", r.Departure.Reason)
+	case r.Departure.Found:
+		fmt.Fprintf(&b, "; departure point at %d workspaces (tolerance %.0f%%)", r.Departure.Workspaces, r.Departure.Tolerance*100)
 	default:
-		fmt.Fprintf(&b, "; no knee (%s)", r.Knee.Reason)
+		fmt.Fprintf(&b, "; no departure point (%s)", r.Departure.Reason)
 	}
 	return b.String()
 }

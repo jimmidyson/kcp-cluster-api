@@ -32,8 +32,8 @@ limitations under the License.
 // second one. "Could not run" is a first-class result: a workspace count the
 // environment cannot host is not a pass, and must never be reported as one.
 //
-// The knee is found by a defined procedure, not by inspection — swept points,
-// a stated tolerance, and a rule for which point counts as the knee — so that
+// The departure point is found by a defined procedure, not by inspection — swept points,
+// a stated tolerance, and a rule for which point counts as the departure point — so that
 // two runs of one profile yield the same figure. A capacity derived by eye is
 // not reproducible and therefore not a capacity.
 //
@@ -47,7 +47,7 @@ limitations under the License.
 // # What is deliberately not here
 //
 // This is not a general-purpose characterisation utility for arbitrary
-// controllers. The sweep, fit and knee machinery is service-agnostic — the cost
+// controllers. The sweep, fit and departure point machinery is service-agnostic — the cost
 // structure it measures is a property of the per-workspace wiring rather than
 // of any one controller — but the service-specific parts sit behind a narrow
 // interface with a single production implementation, because there is one

@@ -33,7 +33,7 @@ import (
 //
 // A seam with a single implementation is a claim. This one constructs
 // ConfigMaps, has nothing to do with Cluster API, and drives the same sweep and
-// knee machinery — which is what turns "characterising the next controller will
+// departure point machinery — which is what turns "characterising the next controller will
 // be cheap" from an intention into something demonstrated. It stands in for the
 // VM or database services the appliance model anticipates, before they exist.
 type configMapService struct{ prefix string }

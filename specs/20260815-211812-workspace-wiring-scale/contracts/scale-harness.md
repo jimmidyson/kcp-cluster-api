@@ -39,7 +39,7 @@ type Result struct{ Outcome Outcome; Err error; … }
 Principle IV). Specifically:
 
 - A requested workspace count the environment cannot create → `could not run`.
-- A sweep whose range never reaches a knee → the knee is `could not run`, and
+- A sweep whose range never reaches a departure point → the departure point is `could not run`, and
   any capacity derived from it is an extrapolation and is labelled one.
 - Never report a pass because the harness ran without crashing.
 
@@ -63,18 +63,18 @@ Per FR-020, at each swept point:
 Per-workspace attribution depends on P1's telemetry work — the harness cannot
 report load the process does not expose.
 
-## Knee detection (FR-030)
+## Departure detection (FR-030)
 
 A defined, repeatable procedure, **not inspection**:
 
 1. Sweep at least *k* geometrically spaced workspace counts on one profile
    (*k* set in P2 from what R10 shows achievable; recorded with the result).
 2. Project linearly from the two smallest points.
-3. The **knee** is the smallest swept count at which any measured quantity
+3. The **departure point** is the smallest swept count at which any measured quantity
    exceeds that projection by more than the stated tolerance.
 4. Record tolerance and point count with the result.
 
-Two runs of one profile must yield the same knee. If they do not, the procedure
+Two runs of one profile must yield the same departure point. If they do not, the procedure
 is underspecified and that is a finding, not noise to average away.
 
 ## Profiles

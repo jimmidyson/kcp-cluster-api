@@ -21,7 +21,7 @@ limitations under the License.
 //
 // This is the scale feature's R10, and it is deliberately the first thing that
 // runs. A sweep designed against a workspace count the environment cannot reach
-// produces no knee, and a capacity figure with no knee behind it is a guess
+// produces no departure point, and a capacity figure with no departure point behind it is a guess
 // wearing a measurement's clothes. So the ceiling is established first, and the
 // sweep is designed against the number this reports rather than against a
 // number somebody hoped for.
@@ -183,7 +183,7 @@ func TestWorkspaceCeiling(t *testing.T) {
 	// Onboarding cost is expected to grow with fleet size — that is the
 	// quadratic this feature exists to find. Reporting first against last is
 	// the cheapest possible signal of it, and it is only a signal: the sweep,
-	// not this, is what establishes a knee.
+	// not this, is what establishes a departure point.
 	if reached >= 4 {
 		firstQuarter := mean(binds[:reached/4])
 		lastQuarter := mean(binds[reached-reached/4:])

@@ -25,7 +25,7 @@ One entry per profile, stated in **the units that actually consume capacity**:
 | Sustained event rate | rate | The other real consumer |
 | Workspace guidance | derived count | **Secondary**, derived from the above (FR-027) |
 | Derived from | sweep run, tolerance, point count | Reproducibility |
-| Headroom | margin below the knee | The figure is not the knee |
+| Headroom | margin below the departure point | The figure is not the departure point |
 | Extrapolated? | yes/no | Honesty about what was measured |
 
 Workspace count is deliberately the *derived* figure. An operator can check

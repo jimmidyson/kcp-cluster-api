@@ -65,8 +65,8 @@ var (
 	sweepProfile = flag.String("profile", "idle-heavy",
 		"Which load profile to sweep: idle-heavy or active-heavy. Capacity is stated per profile, so this is part of the answer.")
 	sweepPoints = flag.String("points", "1,2,4,8",
-		"Comma-separated workspace counts, geometrically spaced. The knee is derived from these, so the set is recorded with the result.")
-	sweepTolerance = flag.Float64("tolerance", scaleharness.DefaultKneeTolerance,
+		"Comma-separated workspace counts, geometrically spaced. The departure point is derived from these, so the set is recorded with the result.")
+	sweepTolerance = flag.Float64("tolerance", scaleharness.DefaultTolerance,
 		"Fractional excess over the linear projection that counts as a departure.")
 	engageTimeout = flag.Duration("engage-timeout", 5*time.Minute,
 		"How long to wait for every provisioned workspace to be engaged before a point is abandoned.")
@@ -179,7 +179,7 @@ func TestSweep(t *testing.T) {
 		Workspaces: points,
 		Provision:  fleet.Provision,
 		Mode:       scaleharness.ModeSynthetic,
-		Knee:       scaleharness.KneeOptions{Tolerance: *sweepTolerance},
+		Departure:  scaleharness.DepartureOptions{Tolerance: *sweepTolerance},
 	})
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -206,12 +206,12 @@ func TestSweep(t *testing.T) {
 	// range; one too short to establish anything must say so rather than be
 	// read as headroom.
 	switch {
-	case run.Knee.CouldNotRun:
-		t.Logf("COULD NOT RUN: %s", run.Knee.Reason)
-	case run.Knee.Found:
-		t.Logf("KNEE at %d workspaces — capacity should be set below this with headroom", run.Knee.Workspaces)
+	case run.Departure.CouldNotRun:
+		t.Logf("COULD NOT RUN: %s", run.Departure.Reason)
+	case run.Departure.Found:
+		t.Logf("DEPARTURE at %d workspaces — capacity should be set below this with headroom", run.Departure.Workspaces)
 	default:
-		t.Logf("NO KNEE within the swept range: %s", run.Knee.Reason)
+		t.Logf("NO DEPARTURE POINT within the swept range: %s", run.Departure.Reason)
 		t.Logf("  Any capacity quoted above %d workspaces is an extrapolation and must be labelled one.",
 			points[len(points)-1])
 	}

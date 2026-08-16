@@ -86,7 +86,7 @@ cardinality, and releases everything on disengagement. Measurement can begin.
 determinations that decide how much of the rest of this feature gets built.
 
 **Independent Test**: run the harness across increasing workspace counts on a
-fixed profile, confirm it locates the knee by FR-030's procedure, and confirm a
+fixed profile, confirm it locates the departure point by FR-030's procedure, and confirm a
 running process reports its position against stated capacity.
 
 **This is the MVP and it is genuinely shippable alone.** A measured capacity
@@ -101,11 +101,11 @@ if every gated requirement closes.
 ### Harness
 
 - [x] T014 [P] [US1] Write failing unit tests for scale profile construction in `internal/scaleharness/profile_test.go` covering `idle-heavy` and `active-heavy` per data-model.md's Scale profile entity
-- [x] T014a [US1] Define the service-characterisation interface in `internal/scaleharness/service.go` per [contracts/service-characterisation.md](contracts/service-characterisation.md): construct a profile's objects, report the watch set, report engaged workspaces. Keep the sweep, fit and knee machinery free of any Cluster API import so property **S1** holds at compile time (FR-038)
-- [x] T014b [P] [US1] Write a second, non-CAPI implementation of that interface in `internal/scaleharness/service_test.go` constructing different objects, and assert it drives the same sweep and knee machinery unchanged — property **S2**, the evidence that the seam is real rather than asserted (FR-038, SC-019)
+- [x] T014a [US1] Define the service-characterisation interface in `internal/scaleharness/service.go` per [contracts/service-characterisation.md](contracts/service-characterisation.md): construct a profile's objects, report the watch set, report engaged workspaces. Keep the sweep, fit and departure point machinery free of any Cluster API import so property **S1** holds at compile time (FR-038)
+- [x] T014b [P] [US1] Write a second, non-CAPI implementation of that interface in `internal/scaleharness/service_test.go` constructing different objects, and assert it drives the same sweep and departure point machinery unchanged — property **S2**, the evidence that the seam is real rather than asserted (FR-038, SC-019)
 - [x] T015 [US1] Implement the Cluster API service implementation in `internal/scaleharness/capiservice.go` behind T014a's interface, and profiles in `internal/scaleharness/profile.go`: workspace count, objects per workspace by kind, event rate, active ratio
-- [x] T016 [P] [US1] Write failing unit tests for knee detection in `internal/scaleharness/knee_test.go`: geometric spacing, linear projection from the two smallest points, tolerance comparison, and the **no-knee-in-range case returning "could not run" rather than a value**
-- [x] T017 [US1] Implement knee detection in `internal/scaleharness/knee.go` per FR-030's defined procedure, recording tolerance and point count with every result so two runs of one profile agree
+- [x] T016 [P] [US1] Write failing unit tests for departure detection in `internal/scaleharness/departure_test.go`: geometric spacing, linear projection from the two smallest points, tolerance comparison, and the **no-departure-in-range case returning "could not run" rather than a value**
+- [x] T017 [US1] Implement departure detection in `internal/scaleharness/departure.go` per FR-030's defined procedure, recording tolerance and point count with every result so two runs of one profile agree
 - [x] T018 [P] [US1] Write failing unit tests in `internal/scaleharness/report_test.go` asserting results serialise through `internal/verify`'s `Outcome` / `Step` / `Result` types, that "could not run" is distinct from "failed" (FR-022), and that **every emitted figure carries a non-empty load mode** — `synthetic` or `observed` — since an unlabelled figure must not be usable for sizing (FR-039, SC-020, properties **S3**/**S4**)
 - [x] T019 [US1] Implement reporting in `internal/scaleharness/report.go` reusing `internal/verify` types and writing to `bin/verify-result.json`'s existing contract — **do not introduce a second reporting convention** (R11)
 - [x] T020 [US1] Implement measurement collection in `internal/scaleharness/measure.go` for engagement latency p50/p99, per-event delivery cost, per-workspace footprint, throughput, delivery pause during join, and cold start duration (FR-020)
@@ -116,7 +116,7 @@ if every gated requirement closes.
 
 - [ ] T023 [US1] Run the sweep on `idle-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-idle-heavy.json`
 - [ ] T024 [US1] Run the sweep on `active-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-active-heavy.json`
-- [ ] T025 [US1] Derive candidate per-shard capacity per profile from T023/T024 in the units of FR-027 — watched object count and event rate, with workspace count as the derived secondary figure — recording headroom below the knee and whether the figure is extrapolated, in `specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md`
+- [ ] T025 [US1] Derive candidate per-shard capacity per profile from T023/T024 in the units of FR-027 — watched object count and event rate, with workspace count as the derived secondary figure — recording headroom below the departure point and whether the figure is extrapolated, in `specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md`
 - [ ] T025a [US1] Fit a resource model in `internal/scaleharness/model.go` over the known cost structure — `memory ≈ base + a·W + b·objects + c·W·maxConcurrent`, `CPU ≈ base + d·events·W + e·reconciles/s` — emitting coefficients per profile and the regime in which they are valid (FR-034). Model **live heap** with a stated derivation to RSS under stated GC settings, and take per-workspace event rate from the profile rather than inferring it (FR-036)
 - [ ] T025b [US1] Write failing unit tests in `internal/scaleharness/model_test.go` for held-out validation: fit on a subset of points, predict an excluded point, record the error; and assert the model **declines to project** across a discontinuity it has not observed rather than emitting a number (FR-034, FR-035)
 - [ ] T025c [US1] Run held-out validation against the T023/T024 sweeps and record the prediction error and extrapolation factor in `evidence/model-accuracy.md` (FR-035, SC-017)

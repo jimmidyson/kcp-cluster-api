@@ -120,7 +120,7 @@ internal/
 │                          # one registration per type, map[clusterName][]handler,
 │                          # per-cluster replay via ByIndex. Only if P3 says build.
 ├── coremanager/           # SetupReconcilers: concurrency defaults (FR-010)
-├── scaleharness/          # NEW, unconditional. Profiles, sweep, knee detection,
+├── scaleharness/          # NEW, unconditional. Profiles, sweep, departure detection,
 │                          # reporting through internal/verify's Outcome types.
 ├── workspacetelemetry/    # NEW, unconditional. Per-workspace attribution with
 │                          # bounded cardinality (FR-017/FR-018; design in P1)
@@ -180,7 +180,7 @@ a real kcp. This number constrains everything; designing the harness before it
 exists risks a harness that cannot run.
 
 Then: load profiles (idle-heavy and active-heavy per FR-026), the sweep across
-geometrically spaced counts, knee detection per FR-030's defined procedure, and
+geometrically spaced counts, departure detection per FR-030's defined procedure, and
 reporting through `internal/verify`'s `Outcome` types with `task test:scale` as
 the named operation.
 
@@ -191,7 +191,7 @@ and profile, and reports "could not run" distinctly from "failed".
 ### P3 — The gate (unconditional, blocking)
 
 Run the sweep on both profiles against the **current** implementation. Produce
-the baseline, locate the knee per FR-030, derive candidate per-shard capacity
+the baseline, locate the departure point per FR-030, derive candidate per-shard capacity
 per FR-026/FR-027, and **record a determination for each of the eight gated
 requirements**: build (the cost binds at or below a plausible capacity) or close
 (it does not), with the figures either way.
