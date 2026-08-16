@@ -52,8 +52,16 @@ type Service interface {
 	// resource model.
 	WatchedTypes() []string
 
-	// Populate creates the objects one workspace holds under a profile, using
+	// Populate ensures one workspace holds the given number of objects, using
 	// a client already scoped to that workspace.
+	//
+	// It MUST be idempotent. A sweep accumulates workspaces rather than
+	// rebuilding them at each point — that is both cheaper and a truer model
+	// of a shard, which grows — so a workspace provisioned for an early point
+	// is populated again at every later one. An implementation that assumed a
+	// fresh workspace would fail on the second call with the objects already
+	// existing, and would do so only under a profile that creates any, which
+	// is how this went unnoticed until an active profile ran.
 	Populate(ctx context.Context, c client.Client, objects int) error
 
 	// Touch generates one event in a workspace, so that a profile's declared

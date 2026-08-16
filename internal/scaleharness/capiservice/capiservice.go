@@ -29,7 +29,9 @@ import (
 	"context"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -74,7 +76,11 @@ func (s Service) WatchedTypes() []string {
 	}
 }
 
-// Populate creates the Clusters one workspace holds under a profile.
+// Populate ensures the workspace holds the requested number of Clusters.
+//
+// Idempotent, as the seam requires: a sweep accumulates workspaces, so this is
+// called again for every workspace at every later point, and an object that
+// already exists means the workspace is already in the wanted shape.
 func (s Service) Populate(ctx context.Context, c client.Client, objects int) error {
 	for i := range objects {
 		cluster := &clusterv1.Cluster{
@@ -83,8 +89,19 @@ func (s Service) Populate(ctx context.Context, c client.Client, objects int) err
 				Namespace: Namespace,
 				Labels:    map[string]string{"scaleharness": s.Prefix},
 			},
+			// Paused is set explicitly, and not for its meaning. ClusterSpec is
+			// tagged omitzero, so an entirely zero spec is omitted from the
+			// serialised object and the server rejects it with "spec: Required
+			// value". Setting any field makes the spec non-zero.
+			//
+			// This is the synthetic-load hazard in miniature, and it is why
+			// ModeSynthetic figures carry their label: an object generated from
+			// a type's Go shape can be rejected by the server that type came
+			// from, and a sweep that measured rejections would report load it
+			// never applied. Only a real server finds this.
+			Spec: clusterv1.ClusterSpec{Paused: ptr.To(false)},
 		}
-		if err := c.Create(ctx, cluster); err != nil {
+		if err := c.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("creating Cluster %s: %w", cluster.Name, err)
 		}
 	}

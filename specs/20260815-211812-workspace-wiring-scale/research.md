@@ -515,6 +515,67 @@ a wrapper that resolves per request replaces that binding.
 
 ---
 
+## R14 — First sweep results, and what the harness still cannot see — MEASURED
+
+**Measured** by `test/integration/scale/sweep_test.go` against a real kcp with a
+multicluster manager engaged on every workspace. One probe controller per
+workspace, one watch on `Cluster`, `MaxConcurrentReconciles: 2`.
+
+| Profile | Workspaces | Heap | Goroutines | Load | Events |
+|---|---|---|---|---|---|
+| idle-heavy | 8 / 16 / 32 / 64 | 10.2 / 17.0 / 30.5 / 57.6 MiB | 156 / 260 / 468 / 884 | — | 0 |
+| active-heavy | 8 / 16 / 32 / 64 | 10.5 / 17.6 / 31.6 / 59.7 MiB | 156 / 260 / 468 / 884 | 46 / 104 / 213 / 393 ms | 8 / 16 / 32 / 64 |
+
+**Both profiles are linear across the swept range, and strikingly so.**
+
+- **Goroutines: exactly 13.0 per workspace** at every step. Deltas are 104/8,
+  208/16, 416/32 — the same figure three times, with no drift.
+- **Heap: ~867 KiB per workspace** idle, ~900 KiB active. Step deltas of
+  850/864/867 KiB show no curvature. The ~33 KiB difference is the profile's ten
+  objects.
+- **No knee on either profile** up to 64 workspaces.
+- Per-event issue cost is flat: 5.8 / 6.5 / 6.7 / 6.1 ms.
+- Telemetry held at **20 labelled series across 64 workspaces**, so the
+  cardinality bound holds in practice rather than only in unit tests.
+
+### What these numbers do not establish
+
+Three limits, stated because the flatness is easy to over-read:
+
+1. **Event *delivery* cost is not measured.** `LoadDuration` times how long it
+   takes to *issue* mutations, and a write returns once the apiserver has
+   accepted it. Dispatch to listeners happens afterwards, on the informer's own
+   goroutine. The O(W) fan-out this feature is chiefly about therefore does not
+   appear in any column above. **This is a gap in the harness, not evidence
+   about the system**, and closing it needs delivery latency — write to
+   reconcile — rather than write duration. FR-001's determination cannot be made
+   from this run.
+2. **One watch, not nineteen.** The probe registers a single watch; the wired
+   Cluster API set registers roughly nineteen across five controllers. The
+   listener-driven terms should be expected to scale with that, so 13
+   goroutines per workspace is a floor for the wiring, not a figure for
+   `core-manager`.
+3. **64 workspaces, not 256.** The fixture reaches at least 256 (R10), so the
+   swept range was limited by measurement time rather than by capability. Any
+   figure quoted above 64 is an extrapolation.
+
+### A methodological finding about the knee procedure
+
+The first sweep ran 1, 2, 4, 8 and reported no knee — but its heap went
+6.3 → 9.5 MiB from one workspace to two, then only 9.5 → 10.1 MiB from two to
+eight. The first point was dominated by **fixed process cost**, which inflated
+the slope projected from the two smallest points and would have hidden a real
+departure.
+
+FR-030 specifies projecting from the sweep's two smallest points, so this is a
+property of the stated procedure rather than a bug in it. The practical
+consequence: **a sweep must start above the warm-up region**, or its projection
+encodes one-time cost as if it were marginal. Both reported runs start at 8 for
+that reason. This belongs in the harness's guidance, and is a candidate spec
+refinement if a later sweep is forced to start small.
+
+---
+
 ## R13 — Per-reconcile attribution has no public seam — VERIFIED, Principle II finding
 
 **Question** (from T007): FR-018 wants per-workspace *load*. Engagement counts

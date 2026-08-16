@@ -114,3 +114,26 @@ func TestWatchedTypesCoverTheWiredSet(t *testing.T) {
 		}
 	}
 }
+
+// A sweep accumulates workspaces, so every workspace is populated again at
+// every later point. This failed against a real server under the active
+// profile and was invisible under the idle one, which creates nothing.
+func TestPopulateIsIdempotent(t *testing.T) {
+	svc := Service{Prefix: "run"}
+	c := newClient(t).Build()
+	ctx := t.Context()
+
+	for range 3 {
+		if err := svc.Populate(ctx, c, 4); err != nil {
+			t.Fatalf("repeat Populate: %v", err)
+		}
+	}
+
+	list := &clusterv1.ClusterList{}
+	if err := c.List(ctx, list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 4 {
+		t.Errorf("holds %d Clusters after three populates, want 4", len(list.Items))
+	}
+}

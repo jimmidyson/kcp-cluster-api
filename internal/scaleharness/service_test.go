@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -50,7 +51,7 @@ func (s configMapService) Populate(ctx context.Context, c client.Client, objects
 			},
 			Data: map[string]string{"n": fmt.Sprint(i)},
 		}
-		if err := c.Create(ctx, cm); err != nil {
+		if err := c.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
 	}
