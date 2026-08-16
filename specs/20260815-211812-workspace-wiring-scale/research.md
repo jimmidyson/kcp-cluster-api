@@ -515,6 +515,61 @@ a wrapper that resolves per request replaces that binding.
 
 ---
 
+## R13 — Per-reconcile attribution has no public seam — VERIFIED, Principle II finding
+
+**Question** (from T007): FR-018 wants per-workspace *load*. Engagement counts
+and failures are reachable, but attributing individual reconciles to the
+workspace that caused them needs a hook into the reconcile path of reconcilers
+this project does not own.
+
+**Answer: there is no public seam for it, and the obvious one is explicitly
+forbidden.**
+
+`controller.Options` does carry a `Reconciler` field, which looks like exactly
+the injection point — set it to a counting wrapper and every reconcile is
+attributed. It is not usable. `controller-runtime@v0.24.1`
+`pkg/builder/controller.go:394-399`:
+
+```go
+if ctrlOptions.Reconciler != nil && r != nil {
+    return errors.New("reconciler was set via WithOptions() and via Build() or Complete()")
+}
+```
+
+Every Cluster API `SetupWithManager` passes its reconciler to `Build` or
+`Complete`, so setting `Options.Reconciler` in `controllerOptions()` does not
+wrap anything — it makes setup fail outright.
+
+**Responses considered**, per Principle II (another integration point, propose
+upstream, or accept the limitation):
+
+- *Wrap the reconciler before Cluster API sees it* — impossible without
+  changing upstream, since each `SetupWithManager` constructs its own.
+- *Attribute at the cache instead of the reconciler* — reachable, and it is the
+  same `GetCache()` interposition R1 describes. **Deliberately not done now**:
+  building that machinery under an unconditional observability label would
+  smuggle gated work past the measurement gate, which is the one thing FR-031
+  exists to prevent. If the gate says build, attribution comes free with it.
+- *Propose upstream* — a reconciler middleware in `controller.Options`, or
+  relaxing the check so an options-supplied wrapper composes with `Build`'s
+  argument. Worth filing alongside R9's other two.
+- **Accepted for now**: attribute what engagement gives us, and let the harness
+  attribute its own synthetic load.
+
+**Consequence, and it is asymmetric between the two load modes:**
+
+- **Synthetic** mode attributes fully. The harness generates the load, so it
+  knows which workspace it touched and records it directly.
+- **Observed** mode cannot attribute reconciles at all today. It sees engagement
+  counts, failures and aggregate totals, but not which workspace produced the
+  reconciles.
+
+That difference is a real limitation of `ModeObserved` and belongs in the mode's
+documentation rather than being discovered by whoever first tries to
+characterise a running deployment.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |

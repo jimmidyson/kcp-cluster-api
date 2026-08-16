@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 )
 
 // waitFor fails the test if c is not closed promptly. Everything this package
@@ -454,6 +457,73 @@ func TestWebhookRegistrationIsRefused(t *testing.T) {
 // immediately after cancelling races that. Waiting for the expected set is not
 // a weaker assertion than reading it once: the set still has to be exactly
 // want, and the test still fails if it never gets there.
+// TestTelemetryRecordsEngagementOutcomes covers FR-018.
+//
+// The harness cannot report load the process does not expose, and engagement
+// is where a workspace's existence becomes observable at all. Reasons are fixed
+// categories rather than error text: they are a metric label, so deriving them
+// from an error string would make their cardinality unbounded — the problem the
+// telemetry package exists to avoid.
+func TestTelemetryRecordsEngagementOutcomes(t *testing.T) {
+	recorder := workspacetelemetry.New(workspacetelemetry.Options{})
+
+	managers := newFakeManagers()
+	var failNext bool
+	w, err := New(managers, func(context.Context, multicluster.ClusterName, manager.Manager) error {
+		if failNext {
+			return errors.New("setup exploded")
+		}
+		return nil
+	}, Options{Log: logr.Discard(), Telemetry: recorder})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, disengage := context.WithCancel(t.Context())
+	if err := w.Engage(ctx, "good", nil); err != nil {
+		t.Fatalf("Engage(good): %v", err)
+	}
+	if got := recorder.Snapshot().EngagedWorkspaces; got != 1 {
+		t.Errorf("engaged workspaces = %d after one success, want 1", got)
+	}
+
+	failNext = true
+	if err := w.Engage(t.Context(), "bad", nil); err == nil {
+		t.Fatal("Engage(bad) succeeded; the test needs it to fail")
+	}
+
+	snap := recorder.Snapshot()
+	if snap.EngagementFailures != 1 {
+		t.Errorf("engagement failures = %d, want 1", snap.EngagementFailures)
+	}
+	if snap.EngagedWorkspaces != 1 {
+		t.Errorf("engaged = %d after one success and one failure, want 1: a failed engagement is not an engaged workspace", snap.EngagedWorkspaces)
+	}
+	for reason := range snap.EngagementFailuresByReason {
+		if strings.Contains(reason, "exploded") {
+			t.Errorf("failure reason %q carries the error text: reasons are labels, and unbounded labels are the cardinality problem this avoids", reason)
+		}
+	}
+
+	disengage()
+	waitForEmpty(t, w)
+	if got := recorder.Snapshot().EngagedWorkspaces; got != 0 {
+		t.Errorf("engaged = %d after disengagement, want 0", got)
+	}
+}
+
+// Telemetry is optional, and nothing about wiring may depend on it being
+// present: a nil recorder is the configuration every existing caller uses.
+func TestWiringWorksWithoutTelemetry(t *testing.T) {
+	w := newWiring(t, newFakeManagers(), func(context.Context, multicluster.ClusterName, manager.Manager) error {
+		return nil
+	})
+
+	if err := w.Engage(t.Context(), "tenant-a", nil); err != nil {
+		t.Fatalf("Engage with no recorder configured: %v", err)
+	}
+}
+
 // TestSustainedChurnLeavesNoResidue covers FR-012 at the scale that makes it
 // matter.
 //

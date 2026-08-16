@@ -32,6 +32,8 @@ import (
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 )
 
 // ErrDisengaged is returned when a runnable is registered against a workspace
@@ -47,6 +49,11 @@ type Options struct {
 	// else to go: a runnable outlives the call that registered it, so there
 	// is no caller left to return an error to.
 	Log logr.Logger
+
+	// Telemetry records engagement outcomes and per-workspace load, so that
+	// an operator can size a deployment and find a workspace that is failing
+	// to wire. Optional: nil disables recording and changes nothing else.
+	Telemetry *workspacetelemetry.Recorder
 }
 
 // Wiring runs a SetupFunc once for each workspace a provider engages, and
@@ -61,10 +68,23 @@ type Wiring struct {
 	setup    SetupFunc
 	log      logr.Logger
 
+	telemetry *workspacetelemetry.Recorder
+
 	mu      sync.Mutex
 	started bool
 	engaged map[multicluster.ClusterName]*runnableGroup
 }
+
+// engagement failure reasons.
+//
+// Fixed categories, never error text: a reason is a metric label, so deriving
+// one from an error string would make its cardinality unbounded — the problem
+// internal/workspacetelemetry exists to avoid. The error itself is still
+// returned to the caller and logged; only the label is coarse.
+const (
+	reasonManagerUnavailable = "manager-unavailable"
+	reasonSetupFailed        = "setup-failed"
+)
 
 var _ mcmanager.Runnable = (*Wiring)(nil)
 
@@ -80,10 +100,11 @@ func New(managers ManagerGetter, setup SetupFunc, opts Options) (*Wiring, error)
 		return nil, errors.New("a SetupFunc is required")
 	}
 	return &Wiring{
-		managers: managers,
-		setup:    setup,
-		log:      opts.Log,
-		engaged:  map[multicluster.ClusterName]*runnableGroup{},
+		managers:  managers,
+		setup:     setup,
+		log:       opts.Log,
+		telemetry: opts.Telemetry,
+		engaged:   map[multicluster.ClusterName]*runnableGroup{},
 	}, nil
 }
 
@@ -135,17 +156,32 @@ func (w *Wiring) Engage(ctx context.Context, workspace multicluster.ClusterName,
 
 	mgr, err := w.managers.GetManager(ctx, workspace)
 	if err != nil {
+		w.recordFailure(workspace, reasonManagerUnavailable)
 		w.disengage(workspace)
 		return fmt.Errorf("getting manager for workspace %s: %w", workspace, err)
 	}
 
 	if err := w.setup(ctx, workspace, &workspaceManager{Manager: mgr, group: group}); err != nil {
+		w.recordFailure(workspace, reasonSetupFailed)
 		w.disengage(workspace)
 		return fmt.Errorf("setting up workspace %s: %w", workspace, err)
 	}
 
+	// Recorded only once setup has succeeded. A workspace whose wiring failed
+	// is not an engaged workspace, and counting it as one would inflate the
+	// number an operator sizes against.
+	if w.telemetry != nil {
+		w.telemetry.Engaged(string(workspace))
+	}
+
 	log.Info("Engaged workspace")
 	return nil
+}
+
+func (w *Wiring) recordFailure(workspace multicluster.ClusterName, reason string) {
+	if w.telemetry != nil {
+		w.telemetry.EngagementFailed(string(workspace), reason)
+	}
 }
 
 // Start blocks until ctx is cancelled, then waits for every engaged
@@ -187,6 +223,10 @@ func (w *Wiring) disengage(workspace multicluster.ClusterName) {
 	group, ok := w.engaged[workspace]
 	delete(w.engaged, workspace)
 	w.mu.Unlock()
+
+	if w.telemetry != nil {
+		w.telemetry.Disengaged(string(workspace))
+	}
 
 	if ok {
 		group.stop()

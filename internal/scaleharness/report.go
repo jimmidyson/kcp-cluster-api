@@ -45,6 +45,15 @@ const (
 	// ModeObserved means coefficients came from a running deployment's real
 	// load. Always measures real work; yields nothing for a service that is
 	// not deployed, or a fleet that does not vary.
+	//
+	// It is also weaker than synthetic in one specific way, and the asymmetry
+	// runs opposite to what the names suggest: a running process cannot
+	// currently attribute reconciles to the workspace that caused them,
+	// because controller-runtime has no seam for wrapping a reconciler it did
+	// not construct (research R13). Observed runs therefore see engagement
+	// counts, failures and aggregate totals, but no per-workspace breakdown —
+	// whereas synthetic runs attribute fully, since the harness generates the
+	// load and knows where it sent it.
 	ModeObserved LoadMode = "observed"
 )
 

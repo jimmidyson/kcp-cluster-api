@@ -61,6 +61,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
@@ -208,12 +209,20 @@ func main() {
 	// at that moment and never replays earlier ones, so wiring registered
 	// after the manager is running misses every workspace that engaged in the
 	// meantime - without an error, and without a log line.
+	// One recorder for the process, shared by every workspace. It attributes
+	// load without letting exported series grow with workspace count; see
+	// internal/workspacetelemetry for why that asymmetry is deliberate.
+	telemetry := workspacetelemetry.New(workspacetelemetry.Options{})
+
 	if _, err := providerwiring.AddToManager(mgr, func(ctx context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
 		setupLog.Info("Wiring reconcilers onto a workspace", "clusterName", workspace)
 		return coremanager.SetupReconcilers(ctx, wsMgr, dev, coremanager.SetupOptions{
 			MaxConcurrentReconciles: maxConcurrentReconciles,
 		})
-	}, providerwiring.Options{Log: ctrl.Log.WithName("providerwiring")}); err != nil {
+	}, providerwiring.Options{
+		Log:       ctrl.Log.WithName("providerwiring"),
+		Telemetry: telemetry,
+	}); err != nil {
 		setupLog.Error(err, "Unable to register per-workspace wiring")
 		os.Exit(1)
 	}
