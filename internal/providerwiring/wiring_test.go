@@ -19,7 +19,9 @@ package providerwiring
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -452,6 +454,96 @@ func TestWebhookRegistrationIsRefused(t *testing.T) {
 // immediately after cancelling races that. Waiting for the expected set is not
 // a weaker assertion than reading it once: the set still has to be exactly
 // want, and the test still fails if it never gets there.
+// TestSustainedChurnLeavesNoResidue covers FR-012 at the scale that makes it
+// matter.
+//
+// TestRunnablesStopOnDisengage already shows that one workspace's runnables
+// stop. This asserts the property the fleet target depends on: that repeating
+// engage and disengage many times leaves nothing behind. A per-workspace leak
+// is individually small and therefore invisible in a two-workspace test, and
+// the appliance model's whole premise is that a shard's cost is bounded — which
+// a leak under churn quietly falsifies.
+//
+// What this discriminates, established by mutating the implementation rather
+// than assumed:
+//
+//   - Residue in the engaged map is caught: dropping the delete in disengage
+//     fails this test and passes the rest of the suite.
+//   - A runnable that never terminates is caught, since every cycle's runnable
+//     is waited on.
+//
+// What it does *not* catch, recorded so the next reader does not over-trust
+// it: removing group.stop() entirely still passes, because a group's context
+// descends from the engagement's, so cancelling the engagement stops the
+// runnables by propagation regardless. group.stop()'s distinct value is the
+// synchronous wait, which matters on Start's shutdown path rather than here.
+//
+// The goroutine count is a backstop for leaks that are anchored to neither of
+// the above, not the primary assertion.
+func TestSustainedChurnLeavesNoResidue(t *testing.T) {
+	const cycles = 50
+
+	managers := newFakeManagers()
+	var mu sync.Mutex
+	var runnables []*blockingRunnable
+
+	w := newWiring(t, managers, func(_ context.Context, _ multicluster.ClusterName, mgr manager.Manager) error {
+		r := newBlockingRunnable()
+		mu.Lock()
+		runnables = append(runnables, r)
+		mu.Unlock()
+		return mgr.Add(r)
+	})
+
+	settle(t)
+	baseline := runtime.NumGoroutine()
+
+	for i := range cycles {
+		ctx, cancel := context.WithCancel(t.Context())
+		workspace := multicluster.ClusterName(fmt.Sprintf("churn-%d", i))
+		if err := w.Engage(ctx, workspace, nil); err != nil {
+			cancel()
+			t.Fatalf("Engage %s: %v", workspace, err)
+		}
+		waitForEngaged(t, w, workspace)
+		cancel()
+		waitForEmpty(t, w)
+	}
+
+	mu.Lock()
+	started := runnables
+	mu.Unlock()
+
+	if len(started) != cycles {
+		t.Fatalf("started %d runnables, want %d", len(started), cycles)
+	}
+	for i, r := range started {
+		select {
+		case <-r.stopped:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("runnable %d never stopped: work for a departed workspace outlives it", i)
+		}
+	}
+
+	settle(t)
+	// A small allowance absorbs runtime bookkeeping; the failure this guards
+	// against is growth proportional to cycles, not a handful of stragglers.
+	if grew := runtime.NumGoroutine() - baseline; grew > cycles/10 {
+		t.Errorf("goroutines grew by %d over %d engage/disengage cycles (baseline %d): per-workspace state is surviving disengagement",
+			grew, cycles, baseline)
+	}
+}
+
+// settle gives stopping goroutines a chance to finish before they are counted.
+// Without it the check races teardown and reports leaks that are not leaks.
+func settle(t *testing.T) {
+	t.Helper()
+	for range 20 {
+		runtime.GC()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func waitForEngaged(t *testing.T, w *Wiring, want ...multicluster.ClusterName) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

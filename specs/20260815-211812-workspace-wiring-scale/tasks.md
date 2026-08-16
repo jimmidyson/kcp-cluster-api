@@ -49,9 +49,9 @@ ordinary work.
 
 **Purpose**: Package skeletons and the task-runner surface
 
-- [ ] T001 [P] Create `internal/scaleharness/` package with doc.go stating its purpose, its reuse of `internal/verify`'s outcome contract, and that it is not a CI gate (per contracts/scale-harness.md non-goals)
-- [ ] T002 [P] Create `internal/workspacetelemetry/` package with doc.go stating the cardinality constraint from FR-017
-- [ ] T003 Add `test:scale` target to `Taskfile.yaml` accepting profile, workspace count, tolerance and duration as variables, alongside existing `test:unit` / `test:integration` / `verify`
+- [x] T001 [P] Create `internal/scaleharness/` package with doc.go stating its purpose, its reuse of `internal/verify`'s outcome contract, and that it is not a CI gate (per contracts/scale-harness.md non-goals)
+- [x] T002 [P] Create `internal/workspacetelemetry/` package with doc.go stating the cardinality constraint from FR-017
+- [x] T003 Add `test:scale` target to `Taskfile.yaml` accepting profile, workspace count, tolerance and duration as variables, alongside existing `test:unit` / `test:integration` / `verify`
 
 ---
 
@@ -66,14 +66,14 @@ not expose. Today it exposes none — `SkipNameValidation`
 a name, so metrics aggregate across tenants by construction. Nothing in Phase 3
 works until this phase does.
 
-- [ ] T004 Evaluate and decide the telemetry cardinality approach for R7 in `specs/20260815-211812-workspace-wiring-scale/research.md`, recording the decision against the three named candidates: bounded top-N with aggregate remainder; exemplar/log attribution with aggregate metrics; full labelling with an operator-set cap and explicit shedding. Record rationale and rejected alternatives
-- [ ] T005 [P] Write failing unit tests for per-workspace attribution in `internal/workspacetelemetry/telemetry_test.go`: attribution is correct per workspace, and series count stays bounded as workspace count grows
-- [ ] T006 Implement `internal/workspacetelemetry/telemetry.go` per T004's decision, satisfying FR-017 (attributable, bounded cardinality)
+- [x] T004 Evaluate and decide the telemetry cardinality approach for R7 in `specs/20260815-211812-workspace-wiring-scale/research.md`, recording the decision against the three named candidates: bounded top-N with aggregate remainder; exemplar/log attribution with aggregate metrics; full labelling with an operator-set cap and explicit shedding. Record rationale and rejected alternatives
+- [x] T005 [P] Write failing unit tests for per-workspace attribution in `internal/workspacetelemetry/telemetry_test.go`: attribution is correct per workspace, and series count stays bounded as workspace count grows
+- [x] T006 Implement `internal/workspacetelemetry/telemetry.go` per T004's decision, satisfying FR-017 (attributable, bounded cardinality)
 - [ ] T007 Wire telemetry into `internal/coremanager/setup.go` controller options and `internal/providerwiring/wiring.go` engagement paths, exposing engaged count, engagement progress and failures per FR-018
-- [ ] T008 [P] Write failing unit test in `internal/providerwiring/wiring_test.go` asserting disengagement releases every acquired resource — event registrations, telemetry series, per-workspace clients (FR-012, **unconditional seam property**)
-- [ ] T009 Make disengagement release everything T008 asserts in `internal/providerwiring/wiring.go` (FR-012)
-- [ ] T010 [P] Make `MaxConcurrentReconciles` configurable in `internal/coremanager/setup.go` with a default chosen for many-tenant operation, replacing the hardcoded `10` inherited from single-tenant upstream `main.go`, and surface the flag in `cmd/core-manager/main.go` (FR-010)
-- [ ] T011 [P] Update `internal/coremanager/setup_test.go`, which currently asserts `MaxConcurrentReconciles == 10`, to assert the new configurable default instead
+- [x] T008 [P] Write failing unit test in `internal/providerwiring/wiring_test.go` asserting disengagement releases every acquired resource — event registrations, telemetry series, per-workspace clients (FR-012, **unconditional seam property**)
+- [x] T009 Make disengagement release everything T008 asserts in `internal/providerwiring/wiring.go` (FR-012)
+- [x] T010 [P] Make `MaxConcurrentReconciles` configurable in `internal/coremanager/setup.go` with a default chosen for many-tenant operation, replacing the hardcoded `10` inherited from single-tenant upstream `main.go`, and surface the flag in `cmd/core-manager/main.go` (FR-010)
+- [x] T011 [P] Update `internal/coremanager/setup_test.go`, which currently asserts `MaxConcurrentReconciles == 10`, to assert the new configurable default instead
 
 **Checkpoint**: the process can attribute load per workspace with bounded
 cardinality, and releases everything on disengagement. Measurement can begin.
