@@ -145,6 +145,17 @@ tasks:
         -args -profile={{.PROFILE}} -points={{.POINTS}} -tolerance={{.TOLERANCE}}
         -watches-per-workspace={{.WATCHES}} -evidence-dir="{{.ROOT_DIR}}/{{.EVIDENCE_DIR}}" {{.SCALE_FLAGS}}
 
+  scale:model:
+    desc: Fit resource models to the committed sweep runs and report held-out accuracy
+    # Arithmetic over committed evidence, not a measurement: it needs no kcp and
+    # runs in milliseconds, so a figure can be re-derived or corrected without
+    # re-running a sweep. That separation is the point — the runs are the
+    # evidence, this is the reading of them.
+    vars:
+      EVIDENCE_DIR: '{{.EVIDENCE_DIR | default "specs/20260815-211812-workspace-wiring-scale/evidence"}}'
+    cmds:
+      - go run ./cmd/scalemodel -runs={{.EVIDENCE_DIR}} -out={{.EVIDENCE_DIR}}/model-accuracy.md
+
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]

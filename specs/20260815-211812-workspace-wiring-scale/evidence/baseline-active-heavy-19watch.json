@@ -9,19 +9,19 @@
   "points": [
     {
       "workspaces": 8,
-      "value": 16272320
+      "value": 16263872
     },
     {
       "workspaces": 16,
-      "value": 28487400
+      "value": 28644016
     },
     {
       "workspaces": 32,
-      "value": 52906328
+      "value": 53330848
     },
     {
       "workspaces": 64,
-      "value": 101561480
+      "value": 102621664
     }
   ],
   "departure": {
@@ -33,39 +33,47 @@
   "measurements": [
     {
       "workspaces": 8,
-      "heapBytes": 16272320,
+      "heapBytes": 16263872,
       "goroutines": 1740,
-      "loadDuration": 47963661,
+      "loadDuration": 43638112,
       "events": 8,
-      "deliveryP50": 6076339,
-      "deliveryP99": 6253463
+      "processBytes": 48425240,
+      "stackBytes": 7831552,
+      "deliveryP50": 5538850,
+      "deliveryP99": 6020620
     },
     {
       "workspaces": 16,
-      "heapBytes": 28487400,
+      "heapBytes": 28644016,
       "goroutines": 3428,
-      "loadDuration": 87962816,
+      "loadDuration": 89547943,
       "events": 16,
-      "deliveryP50": 5638860,
-      "deliveryP99": 5968787
+      "processBytes": 82901288,
+      "stackBytes": 13041664,
+      "deliveryP50": 5640578,
+      "deliveryP99": 6698880
     },
     {
       "workspaces": 32,
-      "heapBytes": 52906328,
+      "heapBytes": 53330848,
       "goroutines": 6804,
-      "loadDuration": 215666940,
+      "loadDuration": 175554319,
       "events": 32,
-      "deliveryP50": 6807052,
-      "deliveryP99": 8396760
+      "processBytes": 163383608,
+      "stackBytes": 25133056,
+      "deliveryP50": 5570195,
+      "deliveryP99": 6527164
     },
     {
       "workspaces": 64,
-      "heapBytes": 101561480,
+      "heapBytes": 102621664,
       "goroutines": 13556,
-      "loadDuration": 391981097,
+      "loadDuration": 376727262,
       "events": 64,
-      "deliveryP50": 6044814,
-      "deliveryP99": 8115567
+      "processBytes": 256801096,
+      "stackBytes": 49577984,
+      "deliveryP50": 6011744,
+      "deliveryP99": 8031570
     }
   ],
   "listenersPerWorkspace": 19

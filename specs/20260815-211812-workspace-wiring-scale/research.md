@@ -660,34 +660,70 @@ is per listener, which makes 64 workspaces × 19 watches the listener count of
 1,216 workspaces at one watch — and concentrated on a **single** informer, which
 is harsher than a real deployment spreads it.
 
-| Workspaces | Heap | Goroutines | Deliver p50 | Deliver p99 | Missed |
-|---|---|---|---|---|---|
-| 8 | 15.5 MiB | 1,740 | 6.08 ms | 6.25 ms | 0 |
-| 16 | 27.2 MiB | 3,428 | 5.64 ms | 5.97 ms | 0 |
-| 32 | 50.5 MiB | 6,804 | 6.81 ms | 8.40 ms | 0 |
-| 64 | 96.9 MiB | 13,556 | 6.04 ms | 8.12 ms | 0 |
+| Workspaces | Live heap | Footprint | Goroutines | Deliver p50 | Deliver p99 | Missed |
+|---|---|---|---|---|---|---|
+| 8 | 15.5 MiB | 46.2 MiB | 1,740 | 5.54 ms | 6.02 ms | 0 |
+| 16 | 27.3 MiB | 79.1 MiB | 3,428 | 5.64 ms | 6.70 ms | 0 |
+| 32 | 50.9 MiB | 155.8 MiB | 6,804 | 5.57 ms | 6.53 ms | 0 |
+| 64 | 97.9 MiB | 244.9 MiB | 13,556 | 6.01 ms | 8.03 ms | 0 |
+
+The same sweep was run at `idle-heavy`, which turned out to matter more than
+expected — see below.
 
 ### What it found
 
-**Delivery latency does not grow with fleet size.** p50 stays within 5.6–6.8 ms
+**Delivery latency does not grow with fleet size.** p50 stays within 5.5–6.0 ms
 across an 8× increase, with nothing missed, and moves without trending. Against
-a ~6 ms baseline dominated by the round trip to kcp, a per-listener filter — a
+a baseline dominated by the round trip to kcp, a per-listener filter — a
 closure, a comparison, a channel send — is not detectable at these scales.
 
-**Footprint is exactly linear, and large.** ~1.49 MiB heap and **211
-goroutines** per workspace, with goroutine deltas of 211 at every single step
-and no drift. Extrapolating: ~211,000 goroutines and ~1.5 GiB at 1,000
-workspaces.
+**Footprint is exactly linear, and large.** 3.54 MiB of process footprint and
+**211 goroutines** per workspace, with goroutine deltas of exactly 211 at every
+step. Extrapolating: ~211,000 goroutines and ~3.5 GiB at 1,000 workspaces.
 
-**The coefficients reproduce.** Each configuration was run twice. Goroutine
-counts came back identical at every point and heap deltas agreed to under one
-percent — which is the property that makes them usable for sizing at all.
+**Live heap is not the sizing figure, and using it would under-provision.** It
+excludes goroutine stacks, and stacks grow with the fleet — 733 KiB per
+workspace against 1.47 MiB of heap. Process footprint (`MemStats.Sys`) runs
+1.9× to 2.4× live heap. The sweep now records both.
+
+**An idle workspace costs nearly what a busy one does.** 2.72 against 3.54 MiB
+of footprint at the same listener count, and *identical* goroutine counts.
+Listener registration is the cost; ten objects and one event per second add
+about 800 KiB on top. FR-026 is right that the profiles differ, but by 1.3×
+rather than the order of magnitude the requirement's framing implies — and that
+makes the idle case, not the active one, the figure a shard is bounded by.
+
+**The coefficients reproduce, once sampled correctly.** Repeated runs agree to
+0.1% at every point and goroutine counts come back identical — but only after
+the sampling defect below was fixed. An earlier claim in this file that they
+agreed "to under one percent" was made from two runs that happened to agree; a
+third did not.
 
 **This inverts the feature's working assumption.** The suspected super-linear
 dispatch cost did not appear. What binds a shard is the linear-but-large
 per-workspace footprint — which is what FR-003 (bounded per-workspace watch
 cost) and FR-009/FR-011 (idle cost) address, and is now the requirement set with
 measured support behind it. No departure from linear was found in any run.
+
+### A third defect, caught by held-out validation rather than by a test
+
+The first 19-listener run fitted badly — R²=0.957 on live heap, and holding out
+the smallest point mispredicted it by **54%** — while 1-listener runs from the
+same build fitted at R²=1.0000.
+
+`sample()` ran a single `runtime.GC()` before reading `MemStats`. One cycle
+queues finalizers but does not run them, so objects awaiting one are still
+reachable and get counted as live; how much that inflates the reading depends on
+what happened to be in flight, which at 1,216 listeners is a great deal.
+Sampling after two cycles fixed it, and two consecutive repeats then agreed to
+0.1% at every point.
+
+Two things make this worth recording beyond the fix. The bad numbers were **not
+implausible** — 78 MiB where 98 MiB belonged looks like an ordinary
+measurement, and nothing but the held-out error flagged it. And the error ran in
+the direction that under-reports memory, which is the direction that produces an
+under-provisioned limit. Held-out validation earned its place in FR-035 on its
+first real use.
 
 ### Two defects the instrument exposed
 
@@ -734,4 +770,6 @@ than the profiles currently drive.
 | Environment sweep ceiling (R10) | RESOLVED — ≥256 workspaces, cost flat | None; sweep points 8..256 are on measured ground |
 | G4 workspace resolution (R12) | VERIFIED — identity is present | Live test of a real `AdmissionReview` as G4's first TDD cycle |
 | Per-event delivery cost (R14, R15) | MEASURED — flat to 1,216 listeners | None for FR-001's determination; the measurement exists |
-| Per-workspace footprint (R15) | MEASURED — 1.46 MiB, 211 goroutines, linear | None; this is the binding constraint the gate now weighs |
+| Per-workspace footprint (R15) | MEASURED — 2.72–3.54 MiB, 211 goroutines, linear | None; this is the binding constraint the gate now weighs |
+| Idle vs active cost (R15) | MEASURED — 1.3× apart, identical goroutines | None; it reframes FR-026's premise rather than contradicting it |
+| Fitted model and held-out accuracy | MEASURED — worst error 0.39% | None; `cmd/scalemodel` re-derives it from committed runs |

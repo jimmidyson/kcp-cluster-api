@@ -63,6 +63,21 @@ type Measurement struct {
 	LoadDuration time.Duration `json:"loadDuration"`
 	Events       int           `json:"events"`
 
+	// ProcessBytes is everything the Go runtime has obtained from the OS
+	// (`MemStats.Sys`), and StackBytes the goroutine-stack part of it.
+	//
+	// Live heap is what a shard is *holding*; this is what it *occupies*, and
+	// the two diverge by more than a constant. Stacks in particular scale with
+	// workspace count and are absent from HeapAlloc entirely, so a container
+	// sized from heap alone would be under-provisioned by a term that grows
+	// with the fleet.
+	//
+	// Neither is resident set size — the runtime returns pages to the OS
+	// lazily, so Sys is an over-estimate of RSS at any instant and the right
+	// direction to err in when setting a limit.
+	ProcessBytes uint64 `json:"processBytes,omitempty"`
+	StackBytes   uint64 `json:"stackBytes,omitempty"`
+
 	// DeliveryP50 and DeliveryP99 are how long an event took to travel from
 	// the write to the controller that wanted it.
 	//
@@ -229,10 +244,12 @@ func measurePoint(ctx context.Context, opts SweepOptions, workspaces int) (Measu
 		p50, p99 = Percentile(latencies, 0.50), Percentile(latencies, 0.99)
 	}
 
-	heap, goroutines := sample()
+	heap, process, stack, goroutines := sample()
 	return Measurement{
 		Workspaces:       workspaces,
 		HeapBytes:        heap,
+		ProcessBytes:     process,
+		StackBytes:       stack,
 		Goroutines:       goroutines,
 		LoadDuration:     loadDuration,
 		Events:           events,
@@ -280,15 +297,31 @@ func driveEvents(ctx context.Context, opts SweepOptions, clients []Workspace) (e
 	return events, timed, nil
 }
 
-// sample reads live heap and goroutine count.
+// sample reads the process's footprint.
 //
-// GC runs first so the figure is what the process is holding rather than what
-// it has not yet collected. Without it, a later point looks larger simply for
-// having allocated more garbage since the last cycle, which would manufacture a
-// departure point out of collector timing.
-func sample() (heapBytes uint64, goroutines int) {
+// GC runs first so the heap figure is what the process is holding rather than
+// what it has not yet collected. Without it, a later point looks larger simply
+// for having allocated more garbage since the last cycle, which would
+// manufacture a departure point out of collector timing.
+//
+// Three quantities rather than one, because live heap alone cannot be sized
+// from. `HeapAlloc` excludes goroutine stacks, and at hundreds of goroutines
+// per workspace stacks are not a rounding error — they are comparable to the
+// heap term. `Sys` is everything the runtime has obtained from the OS, which is
+// the closest in-process proxy to resident size there is; `StackSys` is
+// recorded separately because it is the part that scales with workspace count
+// and so the part a reader needs to see growing.
+func sample() (heapBytes, processBytes, stackBytes uint64, goroutines int) {
+	// Twice, which is the standard way to get a settled reading rather than
+	// superstition: the first cycle queues finalizers, and objects awaiting one
+	// are still reachable when it ends. A single GC therefore reports some
+	// garbage as live, and how much depends on what happened to be in flight —
+	// which is exactly the sort of workload-dependent variation that would show
+	// up as a fictitious per-workspace cost.
 	runtime.GC()
+	runtime.GC()
+
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
-	return stats.HeapAlloc, runtime.NumGoroutine()
+	return stats.HeapAlloc, stats.Sys, stats.StackSys, runtime.NumGoroutine()
 }
