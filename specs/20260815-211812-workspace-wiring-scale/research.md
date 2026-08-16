@@ -755,6 +755,76 @@ than the profiles currently drive.
 
 ---
 
+## R16 — The wildcard cache is not the cost; per-workspace controllers are — MEASURED
+
+**Question**: the `apiexport` provider already uses a wildcard cache — one
+informer per type for the whole fleet. So why does a workspace cost 211
+goroutines, and is that duplication better sharing would remove?
+
+**Answer: no.** Five configurations against a real kcp, varying only how the
+same 19 watches are distributed across controllers and how many workers each
+runs, decompose it exactly. Full method and tables in
+`evidence/goroutine-decomposition.md`.
+
+```
+goroutines/workspace = 2  (engagement)
+                     + 7  × controllers
+                     + 1  × workers × controllers
+                     + 2  × watches
+```
+
+All four coefficients close against all five measured configurations, and the
+engagement term was measured directly at zero controllers rather than inferred.
+The per-watch coefficient of 2 is exactly `client-go`'s `processorListener`
+starting a `run` and a `pop` goroutine per registration
+(`shared_informer.go:1063-1064`, R2) — the measurement and the source agree.
+
+### The finding that matters for the gate
+
+At the real shape — 19 watches across 19 controllers, 2 workers each:
+
+| Cost | Goroutines | Share | Removable by cache interposition? |
+|---|---|---|---|
+| Informer registrations | 38 | **18%** | **Yes** (R1, R2) |
+| Controller machinery | 133 | 63% | No |
+| Workers | 38 | 18% | No |
+| Engagement | 2 | 1% | No |
+
+The wildcard cache is doing its job: engagement costs 2 goroutines and 464 KiB
+per workspace, and there is no duplicated informer to remove.
+
+**This corrects an assumption running through the plan.** FR-003's mechanism —
+replacing per-workspace registrations with map entries in an interposed cache —
+targets the 38. It leaves 171 that are controller-runtime instantiating a full
+controller per workspace, which a cache cannot reach. The listener fan-out was
+taken to be the dominant per-workspace cost; measured, it is the **smallest** of
+the three controller-side terms.
+
+### What does move the rest
+
+1. **Fewer controllers per workspace** — 19 watches on one controller costs 49
+   goroutines instead of 211, a 77% cut with the listener count unchanged. But
+   the topology is upstream Cluster API's, and changing it is the divergence
+   Principle I counts.
+2. **Fewer workers** — 2→1 saves 9%. Already configurable; trades throughput.
+3. **One controller set for the whole fleet** — goroutines become O(1) in
+   workspace count. This is exactly the alternative R1 recorded and rejected,
+   because it means not running upstream reconcilers unmodified.
+
+Ordered by saving and by cost in divergence, and those orders are the same. The
+feature's central tension is now quantified rather than argued.
+
+### An unexplained fixed cost, flagged not resolved
+
+The first controller-and-watch in a workspace costs about **415 KiB more** than
+each subsequent one, on top of the 464 KiB of engagement. The marginal terms
+account for only ~33 KiB of the gap. The plausible candidate is per-workspace
+scoped informer and cache-reader instantiation, but that is a hypothesis this
+measurement does not test — **ASSUMED**, and worth a source read before any
+figure is built on it.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -773,3 +843,5 @@ than the profiles currently drive.
 | Per-workspace footprint (R15) | MEASURED — 2.72–3.54 MiB, 211 goroutines, linear | None; this is the binding constraint the gate now weighs |
 | Idle vs active cost (R15) | MEASURED — 1.3× apart, identical goroutines | None; it reframes FR-026's premise rather than contradicting it |
 | Fitted model and held-out accuracy | MEASURED — worst error 0.39% | None; `cmd/scalemodel` re-derives it from committed runs |
+| Goroutine decomposition (R16) | MEASURED — cache interposition reaches 18% of it | None; it reframes FR-003's determination |
+| First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |

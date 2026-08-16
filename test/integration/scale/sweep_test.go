@@ -75,6 +75,13 @@ var (
 		"How many watches each workspace registers. Dispatch cost is per listener, so this multiplies "+
 			"the fan-out without needing more workspaces: 64 workspaces at 19 watches is the same listener "+
 			"count as 1216 workspaces at one. The wired Cluster API set registers roughly 19.")
+	watchesPerController = flag.Int("watches-per-controller", 1,
+		"How many watches each controller registers. One means a controller per watch, which is how "+
+			"the real set is wired. Raising it holds the listener count constant while cutting the "+
+			"number of workqueues and worker pools, which is how the two costs are told apart.")
+	workersPerController = flag.Int("workers-per-controller", 2,
+		"MaxConcurrentReconciles for each probe controller. Workers start eagerly, so this multiplies "+
+			"directly into the per-workspace goroutine count.")
 	engageTimeout = flag.Duration("engage-timeout", 5*time.Minute,
 		"How long to wait for every provisioned workspace to be engaged before a point is abandoned.")
 	evidenceDir = flag.String("evidence-dir", "",
@@ -388,11 +395,22 @@ func setupWatches(probe *scaleharness.DeliveryProbe) providerwiring.SetupFunc {
 }
 
 func probeController(ctx context.Context, workspace multicluster.ClusterName, mgr manager.Manager, probe *scaleharness.DeliveryProbe) error {
-	// One controller per watch, matching how the real set is wired: Cluster API
-	// registers its watches across several controllers, each with its own queue
-	// and workers, so collapsing them into one controller with many watches
-	// would understate everything except the listener count.
-	for i := range *watchesPerWorkspace {
+	// The default is one controller per watch, matching how the real set is
+	// wired: Cluster API registers its watches across several controllers, each
+	// with its own queue and workers.
+	//
+	// Both knobs exist to separate two costs that the default conflates. A
+	// watch costs an event-handler registration on the shared informer; a
+	// controller costs a workqueue and an eagerly-started worker pool. Holding
+	// the watch count fixed while varying how they are distributed across
+	// controllers, and separately varying the worker count, attributes the
+	// per-workspace goroutine figure to one or the other — which decides
+	// whether interposing a cache can reduce it, since a cache can only touch
+	// the registration half.
+	perController := max(*watchesPerController, 1)
+	remaining := *watchesPerWorkspace
+
+	for i := 0; remaining > 0; i++ {
 		c, err := controller.New(fmt.Sprintf("scale-probe-%d", i), mgr, controller.Options{
 			Reconciler: reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
 				// The clock stops here. This is the first moment the event has
@@ -401,15 +419,18 @@ func probeController(ctx context.Context, workspace multicluster.ClusterName, mg
 				probe.Delivered(string(workspace))
 				return reconcile.Result{}, nil
 			}),
-			MaxConcurrentReconciles: 2,
+			MaxConcurrentReconciles: max(*workersPerController, 1),
 			SkipNameValidation:      ptr.To(true),
 		})
 		if err != nil {
 			return fmt.Errorf("creating probe controller %d: %w", i, err)
 		}
-		if err := c.Watch(source.Kind(mgr.GetCache(), &clusterv1.Cluster{},
-			&handler.TypedEnqueueRequestForObject[*clusterv1.Cluster]{})); err != nil {
-			return fmt.Errorf("watching from probe controller %d: %w", i, err)
+		for range min(perController, remaining) {
+			if err := c.Watch(source.Kind(mgr.GetCache(), &clusterv1.Cluster{},
+				&handler.TypedEnqueueRequestForObject[*clusterv1.Cluster]{})); err != nil {
+				return fmt.Errorf("watching from probe controller %d: %w", i, err)
+			}
+			remaining--
 		}
 	}
 	return nil
