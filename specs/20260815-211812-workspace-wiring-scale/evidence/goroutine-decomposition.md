@@ -23,9 +23,14 @@ point.
 | C | 19 | 19 | 1 | 192.0 | 1,494 KiB |
 | D | 1 | 1 | 2 | 13.0 | 911 KiB |
 | E | 0 | 0 | — | **2.0** | 464 KiB |
+| F | 19 | 4 | 2 | **76.0** | 1,324 KiB |
 
-A is the real shape: the wired Cluster API set registers roughly 19 watches
-across 5 controllers, each with its own queue and eagerly-started workers.
+**F is the wired shape** — the Cluster API set spreads roughly 19 watches across
+about 4 controllers, not 19. A was the first probe and overstates by 2.8×;
+`fleet-wide-controllers.md` carries the correction and what follows from it.
+
+F is also the formula's out-of-sample check: it was **predicted at 76.0 before
+being run**, from coefficients derived entirely from A–E.
 
 ## The decomposition
 
@@ -52,13 +57,21 @@ goroutines/workspace = 2  (engagement)
 
 Checks: A = 2 + 19·7 + 19·2 + 19·2 = 211 ✓. B = 2 + 7 + 2 + 38 = 49 ✓.
 C = 2 + 133 + 19 + 38 = 192 ✓. D = 2 + 7 + 2 + 2 = 13 ✓.
+And out of sample, F = 2 + 4·7 + 4·2 + 19·2 = 76 ✓, measured 76.0.
 
 The internal breakdown of the 7 per controller is not enumerated here — it is a
 measured coefficient, not a reading of controller-runtime's source.
 
 ## What this means for the wildcard cache
 
-At the real shape, of 211 goroutines per workspace:
+> **Read this section with `fleet-wide-controllers.md`.** The shares below are
+> computed at **19 controllers**, which is the probe's shape, not the wired
+> one. The wired set spreads 19 watches across roughly **4** controllers, where
+> the total is **76** goroutines and registrations are **half** of it rather
+> than 18%. The formula is unchanged and predicted 76 exactly; only the mix
+> differs. Config A is retained here because it is what was measured.
+
+At 19 controllers, of 211 goroutines per workspace:
 
 | Cost | Goroutines | Share | Can an interposed cache remove it? |
 |---|---|---|---|
@@ -72,7 +85,8 @@ workspace, and that is the whole per-workspace cache cost: one reflector, one
 indexer, one watch connection to kcp, shared across the fleet. There is no
 duplicated informer to remove.
 
-**Cache interposition removes 18% of the goroutines, not most of them.** FR-003's
+**Cache interposition removes 18% of the goroutines at this shape** — but 50% at
+the wired shape, where there are fewer controllers to dilute it. FR-003's
 planned mechanism — replacing per-workspace event-handler registrations with map
 entries in an interposed cache (R1, R2) — targets the 38. It leaves the 171 that
 are controller-runtime instantiating a full controller per workspace, because a
@@ -82,13 +96,13 @@ This is a correction to an assumption running through the plan: that the
 listener fan-out is the dominant per-workspace cost. Measured, it is the
 *smallest* of the three controller-side terms.
 
-## The levers that do move the 82%
+## The levers, and what each is worth
 
 1. **Fewer controllers per workspace.** B shows it: 19 watches on one controller
-   costs 49 goroutines instead of 211, a 77% cut, with the listener count
-   unchanged. But controller topology is upstream Cluster API's — five
-   controllers with their own queues is how it is written — and changing it is
-   exactly the divergence Principle I counts. Not ours to choose.
+   costs 49 goroutines instead of 211, with the listener count unchanged. But
+   controller topology is upstream Cluster API's, and changing it is exactly the
+   divergence Principle I counts. Not ours to choose — and the wired set already
+   spends only 4, which is why F is 76 rather than 211.
 
 2. **Fewer workers.** Already configurable (`-max-concurrent-reconciles`, added
    earlier in this feature). Going from 2 to 1 saves 19 goroutines per
@@ -125,5 +139,6 @@ this measurement does not test. It is worth a source read before any figure is
 built on it.
 
 Together the two fixed costs — 464 KiB engaged, ~415 KiB on first watch — are
-about 58% of a workspace's 1.5 MiB at the real shape. The per-watch and
-per-controller terms are the small part.
+about 66% of a workspace's 1.32 MiB at the wired shape (F). The per-watch and
+per-controller terms are the small part, which is why memory does not fall
+nearly as fast as goroutines do when controllers are collapsed.
