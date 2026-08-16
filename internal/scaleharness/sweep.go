@@ -114,6 +114,12 @@ type SweepOptions struct {
 	// DeliveryTimeout bounds how long a point waits for its events to arrive.
 	// Zero means DefaultDeliveryTimeout.
 	DeliveryTimeout time.Duration
+
+	// ListenersPerWorkspace is how many watches the caller's wiring registers
+	// per workspace. Recorded on the run rather than used by it: the harness
+	// does not register watches, but every coefficient it produces depends on
+	// how many the caller did.
+	ListenersPerWorkspace int
 }
 
 // DefaultDeliveryTimeout bounds the wait for events to reach controllers.
@@ -150,9 +156,10 @@ func Sweep(ctx context.Context, opts SweepOptions) (SweepRun, error) {
 	slices.Sort(counts)
 
 	run := SweepRun{
-		Service: opts.Service.Name(),
-		Profile: opts.Profile,
-		Mode:    opts.Mode,
+		Service:               opts.Service.Name(),
+		Profile:               opts.Profile,
+		Mode:                  opts.Mode,
+		ListenersPerWorkspace: opts.ListenersPerWorkspace,
 	}
 
 	for _, n := range counts {

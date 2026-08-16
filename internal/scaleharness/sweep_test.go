@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,6 +304,26 @@ func TestSendIsDeclinedWhileOneIsInFlight(t *testing.T) {
 	p.Delivered("ws")
 	if !p.Sent("ws") {
 		t.Error("a send was declined after the previous one had been delivered")
+	}
+}
+
+// Every listener-driven cost in a run scales with how many watches the wiring
+// registered, so a coefficient quoted without that number cannot be compared
+// with another run or applied to a different wiring. It has to travel with the
+// figures rather than live in whoever ran the sweep.
+func TestRunCarriesItsListenerDensity(t *testing.T) {
+	opts := sweepOpts(1, 2, 4, 8)
+	opts.ListenersPerWorkspace = 19
+
+	run, err := Sweep(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if run.ListenersPerWorkspace != 19 {
+		t.Errorf("run recorded %d listeners per workspace, want 19", run.ListenersPerWorkspace)
+	}
+	if !strings.Contains(run.Summary(), "19 listeners per workspace") {
+		t.Errorf("summary omits listener density: %q", run.Summary())
 	}
 }
 

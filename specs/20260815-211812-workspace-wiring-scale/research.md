@@ -540,7 +540,10 @@ workspace, one watch on `Cluster`, `MaxConcurrentReconciles: 2`.
 
 ### What these numbers do not establish
 
-Three limits, stated because the flatness is easy to over-read:
+Three limits, stated because the flatness is easy to over-read. **The first two
+have since been closed by R15**; they are left here rather than edited away,
+because what a measurement could not see at the time it was taken is part of
+its record.
 
 1. **Event *delivery* cost is not measured.** `LoadDuration` times how long it
    takes to *issue* mutations, and a write returns once the apiserver has
@@ -549,15 +552,15 @@ Three limits, stated because the flatness is easy to over-read:
    appear in any column above. **This is a gap in the harness, not evidence
    about the system**, and closing it needs delivery latency — write to
    reconcile — rather than write duration. FR-001's determination cannot be made
-   from this run.
+   from this run. *(Closed by R15.)*
 2. **One watch, not nineteen.** The probe registers a single watch; the wired
    Cluster API set registers roughly nineteen across five controllers. The
    listener-driven terms should be expected to scale with that, so 13
    goroutines per workspace is a floor for the wiring, not a figure for
-   `core-manager`.
+   `core-manager`. *(Closed by R15.)*
 3. **64 workspaces, not 256.** The fixture reaches at least 256 (R10), so the
    swept range was limited by measurement time rather than by capability. Any
-   figure quoted above 64 is an extrapolation.
+   figure quoted above 64 is an extrapolation. *(Still open.)*
 
 ### A methodological finding about the departure point procedure
 
@@ -631,6 +634,91 @@ characterise a running deployment.
 
 ---
 
+## R15 — Delivery is flat; footprint is what binds — MEASURED
+
+Closes the first two limits R14 recorded against itself. Full run in
+`evidence/baseline-2026-08-16.md`.
+
+### The instrument
+
+`internal/scaleharness/delivery.go`. The clock starts when the harness issues a
+mutation and stops when a controller is invoked for it, attributed per
+workspace. This is deliberately not the write duration R14 reported: a write
+returns once kcp has accepted it, and the dispatch through every registered
+listener — the O(W) term this feature exists to bound — happens entirely after
+the writer has stopped looking.
+
+An event that never arrives is a finding, so the timeout returns the shortfall
+alongside the latencies already collected rather than failing the run or
+waiting indefinitely.
+
+### The listener density
+
+The wired Cluster API set registers roughly nineteen watches across five
+controllers, so the sweep was re-run at 19 watches per workspace. Dispatch cost
+is per listener, which makes 64 workspaces × 19 watches the listener count of
+1,216 workspaces at one watch — and concentrated on a **single** informer, which
+is harsher than a real deployment spreads it.
+
+| Workspaces | Heap | Goroutines | Deliver p50 | Deliver p99 | Missed |
+|---|---|---|---|---|---|
+| 8 | 15.5 MiB | 1,740 | 6.08 ms | 6.25 ms | 0 |
+| 16 | 27.2 MiB | 3,428 | 5.64 ms | 5.97 ms | 0 |
+| 32 | 50.5 MiB | 6,804 | 6.81 ms | 8.40 ms | 0 |
+| 64 | 96.9 MiB | 13,556 | 6.04 ms | 8.12 ms | 0 |
+
+### What it found
+
+**Delivery latency does not grow with fleet size.** p50 stays within 5.6–6.8 ms
+across an 8× increase, with nothing missed, and moves without trending. Against
+a ~6 ms baseline dominated by the round trip to kcp, a per-listener filter — a
+closure, a comparison, a channel send — is not detectable at these scales.
+
+**Footprint is exactly linear, and large.** ~1.49 MiB heap and **211
+goroutines** per workspace, with goroutine deltas of 211 at every single step
+and no drift. Extrapolating: ~211,000 goroutines and ~1.5 GiB at 1,000
+workspaces.
+
+**The coefficients reproduce.** Each configuration was run twice. Goroutine
+counts came back identical at every point and heap deltas agreed to under one
+percent — which is the property that makes them usable for sizing at all.
+
+**This inverts the feature's working assumption.** The suspected super-linear
+dispatch cost did not appear. What binds a shard is the linear-but-large
+per-workspace footprint — which is what FR-003 (bounded per-workspace watch
+cost) and FR-009/FR-011 (idle cost) address, and is now the requirement set with
+measured support behind it. No departure from linear was found in any run.
+
+### Two defects the instrument exposed
+
+Both were invisible without it, and both would have silently corrupted a
+published figure:
+
+1. **`Touch` wrote a non-monotonic value.** It set an annotation to the object's
+   `Generation`, which does not increment on a metadata-only change — so repeat
+   touches were no-ops the server discarded. Exactly half of all events at each
+   accumulating point were never generated at all, while `LoadDuration` happily
+   reported the time taken to issue them.
+2. **Percentiles were truncating.** `int((n-1)*p)` returns the third of four
+   samples for p99. It understates worst precisely at the tail, which is where a
+   fan-out cost would first appear. Now nearest-rank.
+
+### What it still does not establish
+
+64 workspaces, not the 256 the fixture reaches (R10) — anything above 64 is an
+extrapolation. The reconciler is a stub: what is measured is the cost of
+registering watches and starting workers, to which a production reconciler adds
+its own.
+
+And the **tail percentile rests on very few samples**. At one event per
+workspace a point yields 8 to 64 latencies, so its p99 is the slowest of a
+handful; the single 8.40 ms at 32 workspaces is one slow round trip rather than
+a shape. The p99 column is worth keeping — the tail is where a fan-out cost
+appears first — but establishing a trend in it needs many more events per point
+than the profiles currently drive.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -645,3 +733,5 @@ characterise a running deployment.
 | REST mapper sharing (R5) | VERIFIED as blocked | Principle II finding — raise, do not work around |
 | Environment sweep ceiling (R10) | RESOLVED — ≥256 workspaces, cost flat | None; sweep points 8..256 are on measured ground |
 | G4 workspace resolution (R12) | VERIFIED — identity is present | Live test of a real `AdmissionReview` as G4's first TDD cycle |
+| Per-event delivery cost (R14, R15) | MEASURED — flat to 1,216 listeners | None for FR-001's determination; the measurement exists |
+| Per-workspace footprint (R15) | MEASURED — 1.46 MiB, 211 goroutines, linear | None; this is the binding constraint the gate now weighs |

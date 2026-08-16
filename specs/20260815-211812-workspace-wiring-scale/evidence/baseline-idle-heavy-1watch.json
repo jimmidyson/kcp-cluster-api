@@ -1,0 +1,64 @@
+{
+  "service": "cluster-api-core",
+  "profile": {
+    "name": "idle-heavy",
+    "objectsPerWorkspace": 0,
+    "eventsPerWorkspacePerSecond": 0
+  },
+  "mode": "synthetic",
+  "points": [
+    {
+      "workspaces": 8,
+      "value": 10616920
+    },
+    {
+      "workspaces": 16,
+      "value": 17727464
+    },
+    {
+      "workspaces": 32,
+      "value": 31938560
+    },
+    {
+      "workspaces": 64,
+      "value": 60335080
+    }
+  ],
+  "departure": {
+    "found": false,
+    "reason": "no point exceeded the linear projection by more than 25% within the swept range (up to 64 workspaces)",
+    "tolerance": 0.25,
+    "points": 4
+  },
+  "measurements": [
+    {
+      "workspaces": 8,
+      "heapBytes": 10616920,
+      "goroutines": 156,
+      "loadDuration": 182,
+      "events": 0
+    },
+    {
+      "workspaces": 16,
+      "heapBytes": 17727464,
+      "goroutines": 260,
+      "loadDuration": 171,
+      "events": 0
+    },
+    {
+      "workspaces": 32,
+      "heapBytes": 31938560,
+      "goroutines": 468,
+      "loadDuration": 228,
+      "events": 0
+    },
+    {
+      "workspaces": 64,
+      "heapBytes": 60335080,
+      "goroutines": 884,
+      "loadDuration": 92,
+      "events": 0
+    }
+  ],
+  "listenersPerWorkspace": 1
+}

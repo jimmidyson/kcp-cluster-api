@@ -20,8 +20,11 @@ package scale_test
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -74,6 +77,9 @@ var (
 			"count as 1216 workspaces at one. The wired Cluster API set registers roughly 19.")
 	engageTimeout = flag.Duration("engage-timeout", 5*time.Minute,
 		"How long to wait for every provisioned workspace to be engaged before a point is abandoned.")
+	evidenceDir = flag.String("evidence-dir", "",
+		"Where to write the run as JSON. Empty writes nothing. A capacity figure has to be "+
+			"re-derivable from the points that produced it, and a test log is not a record.")
 )
 
 // TestSweep measures what a workspace costs the process that reconciles it.
@@ -179,13 +185,14 @@ func TestSweep(t *testing.T) {
 	}
 
 	run, err := scaleharness.Sweep(ctx, scaleharness.SweepOptions{
-		Service:    capiservice.Service{Prefix: "sweep"},
-		Profile:    profile,
-		Workspaces: points,
-		Provision:  fleet.Provision,
-		Mode:       scaleharness.ModeSynthetic,
-		Departure:  scaleharness.DepartureOptions{Tolerance: *sweepTolerance},
-		Probe:      probe,
+		Service:               capiservice.Service{Prefix: "sweep"},
+		Profile:               profile,
+		Workspaces:            points,
+		Provision:             fleet.Provision,
+		Mode:                  scaleharness.ModeSynthetic,
+		Departure:             scaleharness.DepartureOptions{Tolerance: *sweepTolerance},
+		Probe:                 probe,
+		ListenersPerWorkspace: *watchesPerWorkspace,
 	})
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -193,6 +200,7 @@ func TestSweep(t *testing.T) {
 	if err := run.Validate(); err != nil {
 		t.Fatalf("sweep produced an unquotable run: %v", err)
 	}
+	writeEvidence(t, run)
 
 	t.Logf("%s", run.Summary())
 	t.Logf("  watches per workspace: %d (listeners at the largest point: %d)",
@@ -224,6 +232,42 @@ func TestSweep(t *testing.T) {
 		t.Logf("  Any capacity quoted above %d workspaces is an extrapolation and must be labelled one.",
 			points[len(points)-1])
 	}
+}
+
+// writeEvidence commits the run to disk as JSON.
+//
+// The prose write-up states what was found; this is what it was found from. A
+// later question — fitting a resource model, validating a prediction against a
+// held-out point, comparing a change to its baseline — needs the points
+// themselves, and re-running a sweep to recover numbers that were already
+// measured is both expensive and no longer the same measurement.
+//
+// Failing to write is fatal rather than logged: a run whose evidence was
+// silently not recorded looks exactly like one that was.
+func writeEvidence(t *testing.T, run scaleharness.SweepRun) {
+	t.Helper()
+	if *evidenceDir == "" {
+		return
+	}
+
+	if err := os.MkdirAll(*evidenceDir, 0o755); err != nil {
+		t.Fatalf("creating evidence directory: %v", err)
+	}
+	// Named for the profile and the listener density, because those are the two
+	// parameters that make one run's coefficients inapplicable to another's.
+	// Writing both to one filename would let the second silently replace the
+	// first.
+	name := fmt.Sprintf("baseline-%s-%dwatch.json", run.Profile.Name, run.ListenersPerWorkspace)
+	path := filepath.Join(*evidenceDir, name)
+
+	data, err := json.MarshalIndent(run, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding run: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+	t.Logf("  evidence: %s", path)
 }
 
 // perWorkspace reports the marginal cost of a workspace between the smallest

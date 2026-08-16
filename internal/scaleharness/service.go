@@ -78,10 +78,10 @@ type Service interface {
 // wrongly in one direction or the other.
 type Profile struct {
 	// Name distinguishes this shape in reports and published figures.
-	Name string
+	Name string `json:"name"`
 
 	// ObjectsPerWorkspace is how many objects each workspace holds.
-	ObjectsPerWorkspace int
+	ObjectsPerWorkspace int `json:"objectsPerWorkspace"`
 
 	// EventsPerWorkspacePerSecond is the sustained mutation rate applied
 	// during measurement.
@@ -90,7 +90,7 @@ type Profile struct {
 	// times workspace count times listeners per workspace, so an inferred
 	// value would silently bake a workload assumption into a published
 	// capacity figure.
-	EventsPerWorkspacePerSecond float64
+	EventsPerWorkspacePerSecond float64 `json:"eventsPerWorkspacePerSecond"`
 }
 
 // IdleHeavy is the shape a kcp installation is expected to have most of:

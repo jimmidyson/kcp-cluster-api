@@ -42,8 +42,8 @@ const (
 
 // Point is one measured quantity at one workspace count.
 type Point struct {
-	Workspaces int
-	Value      float64
+	Workspaces int     `json:"workspaces"`
+	Value      float64 `json:"value"`
 }
 
 // DepartureOptions parameterises detection. Both fields are recorded in the result,
@@ -62,19 +62,19 @@ type DepartureOptions struct {
 // it. Comparable, so a test can assert determinism directly.
 type Departure struct {
 	// Found reports whether cost departed from linear within the swept range.
-	Found bool
+	Found bool `json:"found"`
 	// Workspaces is the smallest count at which it did. Meaningful only when
 	// Found.
-	Workspaces int
+	Workspaces int `json:"workspaces,omitempty"`
 	// CouldNotRun distinguishes "the sweep could not answer this" from "cost
 	// was linear". Conflating them would let too short a sweep masquerade as
 	// evidence of headroom.
-	CouldNotRun bool
+	CouldNotRun bool `json:"couldNotRun,omitempty"`
 	// Reason explains a Found=false outcome.
-	Reason string
+	Reason string `json:"reason,omitempty"`
 	// Tolerance and Points are the parameters used, recorded per FR-030.
-	Tolerance float64
-	Points    int
+	Tolerance float64 `json:"tolerance"`
+	Points    int     `json:"points"`
 }
 
 // FindDeparture finds the smallest swept workspace count at which a measured

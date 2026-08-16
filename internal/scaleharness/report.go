@@ -70,6 +70,18 @@ type SweepRun struct {
 	// the departure point was taken over; these are everything that was recorded, so a
 	// later question can be asked of an existing run without re-measuring.
 	Measurements []Measurement `json:"measurements,omitempty"`
+
+	// ListenersPerWorkspace is how many watches the service's controllers
+	// registered for each workspace.
+	//
+	// Recorded because it changes the answer rather than describing it. Every
+	// cost this run reports that scales with listeners — dispatch fan-out,
+	// goroutines, informer bookkeeping — scales with this number too, so two
+	// runs at different densities produce different coefficients for the same
+	// system. A per-workspace figure quoted without it cannot be compared with
+	// another, and cannot be applied to a wiring that registers a different
+	// number.
+	ListenersPerWorkspace int `json:"listenersPerWorkspace,omitempty"`
 }
 
 // Validate rejects a run that could not be safely quoted.
@@ -122,6 +134,9 @@ func (r SweepRun) Extrapolated(workspaces int) bool {
 func (r SweepRun) Summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s / %s / %s: %d points", r.Service, r.Profile.Name, r.Mode, len(r.Points))
+	if r.ListenersPerWorkspace > 0 {
+		fmt.Fprintf(&b, ", %d listeners per workspace", r.ListenersPerWorkspace)
+	}
 
 	switch {
 	case r.Departure.CouldNotRun:

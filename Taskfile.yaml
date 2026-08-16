@@ -126,12 +126,24 @@ tasks:
       POINTS: '{{.POINTS | default "1,2,4,8"}}'
       # Fractional deviation from the linear projection that counts as the departure point.
       TOLERANCE: '{{.TOLERANCE | default "0.25"}}'
+      # How many watches each workspace registers. Dispatch cost is per
+      # listener, so this multiplies fan-out without needing more workspaces.
+      # The wired Cluster API set registers roughly 19.
+      WATCHES: '{{.WATCHES | default "1"}}'
+      # Where the run is written as JSON. A capacity figure has to be
+      # re-derivable from the points that produced it, and a test log is not a
+      # record — so this defaults to on rather than being opt-in.
+      EVIDENCE_DIR: '{{.EVIDENCE_DIR | default "specs/20260815-211812-workspace-wiring-scale/evidence"}}'
       # Extra flags, e.g. --probe-ceiling to report only what this environment
       # can host before designing a sweep against it.
       SCALE_FLAGS: '{{.SCALE_FLAGS | default ""}}'
     cmds:
+      # -evidence-dir is absolute: `go test` runs each package in its own
+      # directory, so a relative path would land under test/integration/scale
+      # rather than in the spec's evidence directory.
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m ./test/integration/scale/...
-        -args -profile={{.PROFILE}} -points={{.POINTS}} -tolerance={{.TOLERANCE}} {{.SCALE_FLAGS}}
+        -args -profile={{.PROFILE}} -points={{.POINTS}} -tolerance={{.TOLERANCE}}
+        -watches-per-workspace={{.WATCHES}} -evidence-dir="{{.ROOT_DIR}}/{{.EVIDENCE_DIR}}" {{.SCALE_FLAGS}}
 
   tools:
     desc: Install pinned tooling into bin/
