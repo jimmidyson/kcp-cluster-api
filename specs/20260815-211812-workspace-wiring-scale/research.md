@@ -313,7 +313,57 @@ not a silent permanent.
 
 ---
 
-## R10 — Can the environment host a meaningful sweep? — OPEN, and gates everything
+## R10 — Can the environment host a meaningful sweep? — RESOLVED (T012/T013)
+
+**Measured**, by `test/integration/scale/ceiling_test.go` against a real kcp
+v0.32.3:
+
+| Workspaces | Create p50 / p99 | Bind p50 / p99 | Total p50 | Bind drift, first quarter → last |
+|---|---|---|---|---|
+| 32 | 533 ms / 737 ms | 516 ms / 519 ms | 1.049 s | 1.141 s → 517 ms (0.45×) |
+| 256 | 532 ms / 935 ms | 516 ms / 528 ms | 1.048 s | 594 ms → 517 ms (0.87×) |
+
+**Answer: at least 256 bound workspaces, with per-workspace cost flat.** No
+failure was reached at either size; both runs stopped because they hit the
+requested target. The p50 is identical at 32 and 256, so nothing in workspace
+creation or binding degrades across an order of magnitude.
+
+The drift ratios are **below 1.0** — onboarding got *faster* through the run,
+not slower. That is warm-up: the first binds wait for export machinery to
+settle. It is worth stating plainly because a naive reading of "cost grows with
+fleet size" would predict the opposite, and this is evidence that **kcp's side
+of onboarding is not where the quadratic lives**.
+
+### What this does and does not bound
+
+**Does**: the fixture ceiling. A sweep may use geometrically spaced points up to
+256 without leaving measured ground.
+
+**Does not**: the controller ceiling. This test runs no manager — it creates and
+binds workspaces and stops. The costs this feature exists to find (listener
+fan-out, store replay under `blockDeltas`, engagement serialisation) are all in
+`core-manager`'s engagement path and are untouched here. **The knee this feature
+is looking for is not in these numbers, and their flatness is not evidence that
+it does not exist.**
+
+### Consequences for sweep design
+
+- **Usable points**: 8, 16, 32, 64, 128, 256. Six geometrically spaced points,
+  comfortably more than FR-030 needs to project a trend.
+- **Cost**: about 1.05 s of setup per workspace, so a full sweep over those
+  points is roughly nine minutes of workspace creation before any measurement,
+  plus about 25 s of kcp startup per run.
+- **Above 256 is unmeasured.** A thousand workspaces would need roughly 17.5
+  minutes of setup alone. Reachable, but any capacity figure derived above 256
+  is an extrapolation and FR-035 requires it be labelled one.
+- Wall clock, not resource exhaustion, is the binding constraint at this scale —
+  which is a much better problem to have than the alternative, and means the
+  sweep can be designed against the controller's limits rather than the
+  fixture's.
+
+---
+
+## R10 (original statement) — Can the environment host a meaningful sweep?
 
 **Question**: FR-030 needs a sweep across geometrically spaced workspace counts
 on a real kcp server (Principle III forbids validating this on vanilla envtest,
@@ -475,7 +525,7 @@ a wrapper that resolves per request replaces that binding.
 | Sharded coordinator (R3) | Exists; behaviour ASSUMED | Integration spike on fencing + provider composition |
 | Backpressure via shared limiter (R8) | ASSUMED | Source read + unit test |
 | `HasSynced` semantics (R6) | OPEN | First TDD cycle of demux work |
-| Telemetry cardinality (R7) | OPEN | Design task in P1 |
+| Telemetry cardinality (R7) | RESOLVED — bounded top-N + remainder | None; implemented and tested |
 | REST mapper sharing (R5) | VERIFIED as blocked | Principle II finding — raise, do not work around |
-| Environment sweep ceiling (R10) | OPEN | **Blocks harness design and the whole gate** |
+| Environment sweep ceiling (R10) | RESOLVED — ≥256 workspaces, cost flat | None; sweep points 8..256 are on measured ground |
 | G4 workspace resolution (R12) | VERIFIED — identity is present | Live test of a real `AdmissionReview` as G4's first TDD cycle |

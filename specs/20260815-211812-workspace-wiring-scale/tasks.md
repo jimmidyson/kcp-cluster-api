@@ -95,8 +95,8 @@ if every gated requirement closes.
 
 ### R10 first — the blocker within this phase
 
-- [ ] T012 [US1] Measure achievable workspace ceiling against a real kcp in `test/integration/scale/ceiling_test.go`: how many workspaces this environment can create and bind, and creation cost per workspace, using `internal/kcpfixtures`' existing `PublishAPIExport`, `BindExport` and `WaitForAPIExportEndpointSlice`
-- [ ] T013 [US1] Record T012's ceiling in `research.md` under R10, resolving it from OPEN. **Do not proceed to T014 before this number exists** — a harness designed against an unachievable range cannot run
+- [x] T012 [US1] Measure achievable workspace ceiling against a real kcp in `test/integration/scale/ceiling_test.go`: how many workspaces this environment can create and bind, and creation cost per workspace, using `internal/kcpfixtures`' existing `PublishAPIExport`, `BindExport` and `WaitForAPIExportEndpointSlice`
+- [x] T013 [US1] Record T012's ceiling in `research.md` under R10, resolving it from OPEN. **Do not proceed to T014 before this number exists** — a harness designed against an unachievable range cannot run
 
 ### Harness
 
