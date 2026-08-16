@@ -81,7 +81,10 @@ var (
 	webhookCertName    string
 	webhookKeyName     string
 	healthAddr         string
-	logOptions         = logs.NewOptions()
+
+	maxConcurrentReconciles int
+
+	logOptions = logs.NewOptions()
 )
 
 func init() {
@@ -122,6 +125,13 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "Webhook cert name.")
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key", "Webhook key name.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+
+	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultMaxConcurrentReconciles,
+		"Worker goroutines per controller, per workspace. This is paid once for every engaged workspace, "+
+			"not once for the process, and controller-runtime starts the workers eagerly — so the total is "+
+			"this value times the number of controllers times the number of workspaces, whether or not those "+
+			"workspaces hold any objects. Upstream's single-tenant default of 10 is deliberately not used here. "+
+			"Raise it for a small fleet with busy workspaces; leave it alone for a large one.")
 
 	// cluster.Reconciler and machine.Reconciler unconditionally watch every
 	// core type gated by a feature flag they support (e.g. MachinePool,
@@ -200,7 +210,9 @@ func main() {
 	// meantime - without an error, and without a log line.
 	if _, err := providerwiring.AddToManager(mgr, func(ctx context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
 		setupLog.Info("Wiring reconcilers onto a workspace", "clusterName", workspace)
-		return coremanager.SetupReconcilers(ctx, wsMgr, dev)
+		return coremanager.SetupReconcilers(ctx, wsMgr, dev, coremanager.SetupOptions{
+			MaxConcurrentReconciles: maxConcurrentReconciles,
+		})
 	}, providerwiring.Options{Log: ctrl.Log.WithName("providerwiring")}); err != nil {
 		setupLog.Error(err, "Unable to register per-workspace wiring")
 		os.Exit(1)

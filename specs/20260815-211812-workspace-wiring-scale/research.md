@@ -199,7 +199,53 @@ paper.
 
 ---
 
-## R7 — Per-workspace telemetry without unbounded cardinality — OPEN
+## R7 — Per-workspace telemetry without unbounded cardinality — RESOLVED (T004)
+
+**Decision: bounded top-N with an aggregate remainder.** Track counters
+internally for every engaged workspace; export aggregates unconditionally, plus
+a labelled series for the busiest N workspaces and one remainder series
+aggregating everything else. N is configurable with a small default.
+
+**Rationale — the two consumers want different things.** This is what makes the
+asymmetry principled rather than a compromise:
+
+- Capacity and scaling decisions (FR-028, FR-032) want *totals*. They need no
+  per-workspace breakdown at all, so they are served by cardinality-free
+  aggregates.
+- Diagnosis (SC-008) wants to know *which workspace is hot*, which in practice
+  means the outliers. Nobody diagnoses a fleet by reading one series per tenant;
+  the long tail has no diagnostic value and unbounded cost.
+
+Bounded top-N is the only one of the three candidates that satisfies "cardinality
+bounded as workspace count grows" **by construction** rather than by an operator
+remembering to configure it.
+
+**Alternatives considered and rejected:**
+
+- *Full labelling with an operator-set cap and shedding.* Rejected: which series
+  get shed is arbitrary, so the hot workspace — the one series that matters —
+  can be the one dropped. Making shedding load-aware turns it into top-N, so
+  this is either worse than top-N or identical to it.
+- *Aggregate metrics plus log/exemplar attribution.* Rejected as the primary
+  mechanism: logs cannot be alerted on cheaply and answering "which workspace is
+  hot" requires log-aggregation infrastructure this project cannot assume.
+  Retained as a *complement* — structured logs still carry the workspace, which
+  is how the long tail stays diagnosable when it matters.
+
+**Consequence that must be handled, not assumed away:** top-N membership
+changes, and a metrics client will happily keep exporting a series for a
+workspace that has dropped out — so displaced series must be actively deleted on
+each refresh, and deleted on disengagement. Otherwise "bounded" becomes "bounded
+in the top N, unbounded in the residue", which is the original problem wearing a
+hat. This is asserted by test rather than left to review.
+
+**Refresh is periodic, not per-event.** Recomputing a ranking on every reconcile
+would put the cost of attribution into the hot path this feature exists to make
+cheaper.
+
+---
+
+## R7 (original statement) — Per-workspace telemetry without unbounded cardinality
 
 **Question**: FR-017 wants reconcile and queue telemetry attributable to a
 workspace, with volume and cardinality bounded as workspace count grows. Those

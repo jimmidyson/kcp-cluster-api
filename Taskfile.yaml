@@ -105,6 +105,34 @@ tasks:
     cmds:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/coremanager/...
 
+  test:scale:
+    desc: Measure per-shard capacity against a real kcp server — evidence, not a gate
+    deps: [tools]
+    # Deliberately not part of `verify` or `check`. Its output is evidence for
+    # capacity decisions, not a pass/fail on every change: making the
+    # done-condition depend on a multi-workspace kcp environment would hold
+    # unrelated work hostage to it, for the same reason the drift check does not
+    # run on every pull request.
+    #
+    # Read the outcome from bin/verify-result.json, not the exit status. A
+    # workspace count this environment cannot host reports "could not run",
+    # which is never a pass.
+    vars:
+      # Load profile to measure. Capacity is stated per profile because idle and
+      # active workspaces are not interchangeable units of load.
+      PROFILE: '{{.PROFILE | default "idle-heavy"}}'
+      # Comma-separated workspace counts to sweep, geometrically spaced. The
+      # knee is derived from these, so the set is recorded with the result.
+      POINTS: '{{.POINTS | default "1,2,4,8"}}'
+      # Fractional deviation from the linear projection that counts as the knee.
+      TOLERANCE: '{{.TOLERANCE | default "0.25"}}'
+      # Extra flags, e.g. --probe-ceiling to report only what this environment
+      # can host before designing a sweep against it.
+      SCALE_FLAGS: '{{.SCALE_FLAGS | default ""}}'
+    cmds:
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m ./test/integration/scale/...
+        -args -profile={{.PROFILE}} -points={{.POINTS}} -tolerance={{.TOLERANCE}} {{.SCALE_FLAGS}}
+
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]

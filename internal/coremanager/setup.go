@@ -67,7 +67,40 @@ const (
 	// skeleton doesn't expose the full flag surface core/main.go does.
 	defaultRemoteConnectionGracePeriod = 50 * time.Second
 	defaultRemoteConditionsGracePeriod = 5 * time.Minute
+
+	// DefaultMaxConcurrentReconciles is the per-controller worker count a
+	// workspace gets unless an operator raises it.
+	//
+	// Upstream's core/main.go uses 10. That is the right order of magnitude
+	// when it is the whole process's budget; here it is paid once per
+	// controller *per workspace*, and controller-runtime starts every worker
+	// eagerly rather than on demand. At five controllers, 10 means fifty
+	// goroutines per workspace before a single object exists — a cost paid by
+	// every idle tenant.
+	//
+	// Two is chosen so a workspace can still make progress on independent
+	// objects without one slow reconcile stalling it, at a twenty-fifth of the
+	// inherited footprint.
+	//
+	// This value is provisional and deliberately so: it is reasoned, not
+	// measured. The sweep is what should set it, and revisiting it against
+	// that evidence is part of this feature rather than a follow-up.
+	DefaultMaxConcurrentReconciles = 2
 )
+
+// SetupOptions configures what SetupReconcilers wires.
+type SetupOptions struct {
+	// MaxConcurrentReconciles is the per-controller worker count for each
+	// workspace. Zero means DefaultMaxConcurrentReconciles.
+	MaxConcurrentReconciles int
+}
+
+func (o SetupOptions) maxConcurrentReconciles() int {
+	if o.MaxConcurrentReconciles <= 0 {
+		return DefaultMaxConcurrentReconciles
+	}
+	return o.MaxConcurrentReconciles
+}
 
 // inmemoryScheme is the scheme for the docker/dev infrastructure provider's
 // in-memory workload-cluster backend (its own apiserver-like resources), kept
@@ -151,10 +184,15 @@ func NewDevInfrastructure(ctx context.Context) (*DevInfrastructure, error) {
 // CRD-shaped source of truth (the APIResourceSchema) lives in the exporting
 // workspace instead. Running it here would be reconciling a concept that
 // doesn't apply under kcp's APIBinding model.
-func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastructure) error {
+func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if dev == nil {
 		return errors.New("DevInfrastructure must not be nil: create it once per process with NewDevInfrastructure")
 	}
+
+	// Read once so every controller in this workspace shares one budget, and
+	// so the figure appears at a single place when it is revisited against the
+	// sweep.
+	concurrency := opts.maxConcurrentReconciles()
 
 	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
 		HTTPClient: mgr.GetHTTPClient(),
@@ -169,7 +207,7 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastruct
 		Client: clustercache.ClientOptions{
 			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
 		},
-	}, controllerOptions(10))
+	}, controllerOptions(concurrency))
 	if err != nil {
 		return fmt.Errorf("creating ClusterCache: %w", err)
 	}
@@ -179,7 +217,7 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastruct
 		APIReader:                   mgr.GetAPIReader(),
 		ClusterCache:                clusterCache,
 		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
+	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
 		return fmt.Errorf("creating Cluster controller: %w", err)
 	}
 
@@ -188,7 +226,7 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastruct
 		APIReader:                   mgr.GetAPIReader(),
 		ClusterCache:                clusterCache,
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
+	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
 		return fmt.Errorf("creating Machine controller: %w", err)
 	}
 
@@ -197,7 +235,7 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastruct
 		ContainerRuntime: dev.containerRuntime,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
+	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
 		return fmt.Errorf("creating DevCluster controller: %w", err)
 	}
 
@@ -207,7 +245,7 @@ func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastruct
 		ClusterCache:     clusterCache,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
+	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
 		return fmt.Errorf("creating DevMachine controller: %w", err)
 	}
 

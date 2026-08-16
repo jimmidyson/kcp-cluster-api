@@ -298,7 +298,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 		t.Fatalf("failed to set up the dev infrastructure provider backend: %v", err)
 	}
 
-	if err := coremanager.SetupReconcilers(mgrCtx, wsMgr, dev); err != nil {
+	if err := coremanager.SetupReconcilers(mgrCtx, wsMgr, dev, coremanager.SetupOptions{}); err != nil {
 		t.Fatalf("failed to set up reconcilers: %v", err)
 	}
 	coremanager.ResetWebhookWorkspaceForTest()
@@ -337,7 +337,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second workspace was never engaged by the provider: %v", err)
 	}
-	if err := coremanager.SetupReconcilers(mgrCtx, secondWsMgr, dev); err != nil {
+	if err := coremanager.SetupReconcilers(mgrCtx, secondWsMgr, dev, coremanager.SetupOptions{}); err != nil {
 		t.Fatalf("failed to set up reconcilers for a second workspace: %v", err)
 	}
 
