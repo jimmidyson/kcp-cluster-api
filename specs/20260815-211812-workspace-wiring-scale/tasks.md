@@ -22,6 +22,10 @@ cannot validate anything here.
 - **`GATED(FR-xxx)`**: **This task only exists if T034's determination for that
   requirement is `build`.** If the determination is `close`, the task is struck
   and the determination is the deliverable.
+- **Suffixed IDs** (`T027a`, `T078a`): tasks inserted after the review gate
+  passed on `T001`–`T079`. Renumbering would silently invalidate the task
+  references in [REVIEWERS.md](REVIEWERS.md) and in the dependency graph below,
+  so insertions keep their neighbour's number with a suffix.
 
 ---
 
@@ -114,8 +118,9 @@ if every gated requirement closes.
 
 ### Capacity reporting at runtime
 
-- [ ] T026 [P] [US1] Write failing unit tests in `internal/scaleharness/capacity_test.go` for a process reporting its position against configured capacity (FR-028)
-- [ ] T027 [US1] Implement runtime capacity position reporting, surfaced through T006's telemetry, and a configurable capacity setting in `cmd/core-manager/main.go` (FR-028)
+- [ ] T026 [P] [US1] Write failing unit tests in `internal/scaleharness/capacity_test.go` for a **machine-readable** capacity surface: configured limit, observed load in FR-027's units, position between them, and which of the two limits is being approached (FR-028, FR-032). Assert it is consumable by a process other than the one measured — no log parsing (SC-016)
+- [ ] T027 [US1] Implement the capacity surface in `internal/scaleharness/capacity.go`, surfaced through T006's telemetry, with a configurable capacity setting in `cmd/core-manager/main.go` (FR-028, FR-032). Distinguish throughput-bound from workspace-count/cache-bound, since the remedies differ — more replicas versus another shard (FR-016)
+- [ ] T027a [US1] Review the capacity surface against FR-033: it must not assume a workspace's shard is permanent, since rebalancing is deferred rather than rejected ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A1). Record the review outcome in `evidence/capacity.md`
 - [ ] T028 [US1] Make exceeding capacity observable rather than silent in `internal/scaleharness/capacity.go` and its telemetry surface (FR-029). **Do not implement enforcement**: refusing to engage would leave a bound workspace silently unreconciled, and admission-time enforcement needs G4, which is unbuilt
 
 ### 🚦 THE GATE
@@ -259,7 +264,7 @@ aggregate rate respects the ceiling and degrades without collapsing.
 — deferral is a recorded decision.
 
 - [ ] T070 [P] Write `docs/site/content/en/docs/design/workspace-scale.md`: the cost model, what was measured, and **FR-016's two limits stated where they cannot be missed** — workspaces per shard bounds cached state, replicas per shard bounds throughput, and adding replicas does not reduce cached state because every replica caches every workspace in its endpoint slice (R4)
-- [ ] T071 [P] Write `docs/site/content/en/docs/user/capacity-planning.md` publishing T025's per-profile capacity figures in FR-027's units, with workspace guidance as the derived secondary figure, plus headroom and whether each figure is extrapolated (FR-026, contracts/capacity-report.md)
+- [ ] T071 [P] Write `docs/site/content/en/docs/user/capacity-planning.md` publishing T025's per-profile capacity figures in FR-027's units, with workspace guidance as the derived secondary figure, plus headroom and whether each figure is extrapolated (FR-026, contracts/capacity-report.md). Document the machine-readable surface alongside the figures, and link [ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) as the architecture it feeds
 - [ ] T072 Update `docs/site/content/en/docs/design/per-workspace-wiring.md`, whose cost description is superseded by this feature's measurements
 - [ ] T073 [P] Record every `close` determination as a deferral with its trigger in `docs/conversion-plan.md` and the design doc (FR-025)
 - [ ] T074 [P] Update `docs/conversion-plan.md`'s open question "How many workspaces this needs to scale to in practice" with the measured answer and the regional-shard deployment model
@@ -274,6 +279,7 @@ aggregate rate respects the ceiling and degrades without collapsing.
 > here because they validate the feature as a whole, not because they must wait.
 
 - [ ] T078 Add integration test in `test/integration/scale/tenancy_at_capacity_test.go` against real kcp demonstrating that the per-workspace wiring feature's tenancy and lifecycle guarantees still hold **at stated per-shard capacity**, not merely at two workspaces: no workspace observes another's objects or events, everything registered for a workspace stops when it goes away, and no workspace-scoped value reaches process-global state (FR-024 — the spec requires these be *demonstrated* at capacity rather than assumed to survive)
+- [ ] T078a **G4 spike ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A3)** — determine whether an incoming `AdmissionReview` carries enough identity for kcp's routing to resolve it to its source workspace, recording the finding in `research.md`. This does **not** build G4; it establishes whether G4 is contained work or a redesign, which gates the appliance roadmap. An appliance cannot serve its tenants' defaulting, validation or `v1beta1`↔`v1beta2` conversion until G4 exists. Retains G4's human review checkpoint — a defect there is cross-tenant bleed
 - [ ] T079 Add a sustained-churn measurement to `test/integration/scale/churn_test.go`: bind and unbind workspaces continuously for a stated duration at a stated rate, asserting goroutine count, resident memory and telemetry series count are flat at the end — a slow leak under churn is invisible to T008's unit test and to any single-shot measurement (SC-009, FR-012)
 
 ---

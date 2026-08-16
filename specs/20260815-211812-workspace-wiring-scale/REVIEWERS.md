@@ -8,6 +8,17 @@
 > outcome, not an unfinished task.** A requirement closed *without* figures is a
 > finding. See "The gate" below before reviewing any implementation PR.
 
+> **Where this fits.** The target architecture is a **shard appliance** — a
+> self-contained box of known capacity, where a region grows by adding another
+> box and the system reports when scaling is needed
+> ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md)). This feature is
+> that architecture's prerequisite and is deliberately scoped short of it: an
+> appliance cannot declare a capacity nobody has measured. The ADR asks one
+> thing of this feature — that capacity be machine-readable rather than merely
+> published (FR-028, FR-032, FR-033, SC-016) — because that is cheap now and
+> structural to retrofit. Provisioning, the regional scaling controller and
+> appliance packaging are **not** in this PR.
+
 ## Why This Change
 
 `core-manager` reconciles every workspace bound to the project's `APIExport`

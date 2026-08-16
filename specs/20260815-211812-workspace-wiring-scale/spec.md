@@ -41,6 +41,20 @@ reached by **regional shards, each bounded, with replicas scaled per shard**.
 That framing is load-bearing for everything below, so its consequences are
 stated rather than left implicit.
 
+**Where this is going.** The shard is intended to become an *appliance* — a
+self-contained unit of known capacity, where a region grows by adding another
+box rather than by enlarging one, and where the system reports that it needs
+scaling rather than waiting to be asked. That target architecture is recorded in
+[ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md).
+
+**This feature is that architecture's prerequisite**, and is scoped deliberately
+short of it: an appliance cannot declare a capacity nobody has measured. What
+the ADR requires of *this* feature is one thing only — that capacity be
+machine-readable rather than merely published (FR-028, FR-032, FR-033), because
+that is cheap now and structural to retrofit. Provisioning, the regional scaling
+controller, appliance packaging and G4's admission routing are all out of scope
+here and tracked in the ADR.
+
 **What it solves.** The independent variable for a single process becomes
 "workspaces in this shard", not "workspaces in the fleet". Cached state is
 bounded by shard capacity, which is a number an operator sets, rather than by
@@ -538,6 +552,20 @@ set.
   their own shard rather than against an assumed shape.
 - **FR-028**: A running process MUST report its own position against its stated
   capacity, so exceeding it is observable rather than inferred from degradation.
+  That report MUST be **machine-readable**: the configured limit, the observed
+  load in FR-027's units, and the position between them, consumable by a process
+  other than the one being measured. Publishing the figure for humans remains
+  necessary and is no longer sufficient — see FR-032.
+- **FR-032**: The capacity surface MUST indicate **which** limit is being
+  approached — reconcile throughput, or workspace count and cached state —
+  because the two have different remedies: more replicas within a shard, or
+  another shard. A single undifferentiated "utilisation" figure cannot be acted
+  on, since it does not say which lever to pull (FR-016's two limits).
+- **FR-033**: The capacity surface MUST NOT be designed in a way that precludes
+  workspaces later moving between shards. Rebalancing is deferred, not rejected
+  ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A1), and a surface
+  that assumes a workspace's shard is permanent would have to be redesigned to
+  allow it.
 - **FR-029**: Exceeding stated capacity MUST degrade observably rather than
   silently. This feature MUST NOT claim to enforce a limit it cannot enforce:
   workspace placement onto shards is kcp's, and admission-time enforcement
@@ -634,6 +662,10 @@ result.
 - **SC-015**: Under load against a constrained shard, the process's aggregate
   request rate respects its configured ceiling and backs off when the shard
   signals pressure, rather than amplifying.
+- **SC-016**: A process other than the one being measured can read a running
+  `core-manager`'s configured capacity, its observed load in FR-027's units, and
+  which of the two limits it is approaching — without parsing logs or scraping
+  documentation.
 
 ## Clarifications
 
