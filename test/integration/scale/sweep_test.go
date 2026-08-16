@@ -68,6 +68,10 @@ var (
 		"Comma-separated workspace counts, geometrically spaced. The departure point is derived from these, so the set is recorded with the result.")
 	sweepTolerance = flag.Float64("tolerance", scaleharness.DefaultTolerance,
 		"Fractional excess over the linear projection that counts as a departure.")
+	watchesPerWorkspace = flag.Int("watches-per-workspace", 1,
+		"How many watches each workspace registers. Dispatch cost is per listener, so this multiplies "+
+			"the fan-out without needing more workspaces: 64 workspaces at 19 watches is the same listener "+
+			"count as 1216 workspaces at one. The wired Cluster API set registers roughly 19.")
 	engageTimeout = flag.Duration("engage-timeout", 5*time.Minute,
 		"How long to wait for every provisioned workspace to be engaged before a point is abandoned.")
 )
@@ -155,7 +159,8 @@ func TestSweep(t *testing.T) {
 	}
 
 	telemetry := workspacetelemetry.New(workspacetelemetry.Options{})
-	wiring := startManager(t, ctx, rootCfg, scheme, telemetry)
+	probe := scaleharness.NewDeliveryProbe()
+	wiring := startManager(t, ctx, rootCfg, scheme, telemetry, probe)
 
 	// Engagement is asynchronous, so a point must not be measured until every
 	// workspace it provisioned is actually wired. Measuring early would report
@@ -180,6 +185,7 @@ func TestSweep(t *testing.T) {
 		Provision:  fleet.Provision,
 		Mode:       scaleharness.ModeSynthetic,
 		Departure:  scaleharness.DepartureOptions{Tolerance: *sweepTolerance},
+		Probe:      probe,
 	})
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -189,10 +195,13 @@ func TestSweep(t *testing.T) {
 	}
 
 	t.Logf("%s", run.Summary())
-	t.Logf("  %-12s %-14s %-12s %-14s %s", "workspaces", "heap", "goroutines", "load", "events")
+	t.Logf("  watches per workspace: %d (listeners at the largest point: %d)",
+		*watchesPerWorkspace, *watchesPerWorkspace*points[len(points)-1])
+	t.Logf("  %-12s %-12s %-12s %-12s %-12s %s", "workspaces", "heap", "goroutines", "deliver p50", "deliver p99", "missed")
 	for _, m := range run.Measurements {
-		t.Logf("  %-12d %-14s %-12d %-14s %d",
-			m.Workspaces, humanBytes(m.HeapBytes), m.Goroutines, m.LoadDuration.Round(time.Millisecond), m.Events)
+		t.Logf("  %-12d %-12s %-12d %-12s %-12s %d",
+			m.Workspaces, humanBytes(m.HeapBytes), m.Goroutines,
+			m.DeliveryP50.Round(time.Microsecond), m.DeliveryP99.Round(time.Microsecond), m.DeliveriesMissed)
 	}
 
 	perWorkspace(t, run)
@@ -248,13 +257,13 @@ type kcpFleet struct {
 	baseCfg *rest.Config
 	scheme  *runtime.Scheme
 
-	clients         []client.Client
+	clients         []scaleharness.Workspace
 	awaitEngagement func(want int) error
 }
 
-func (f *kcpFleet) Provision(ctx context.Context, workspaces int) ([]client.Client, error) {
+func (f *kcpFleet) Provision(ctx context.Context, workspaces int) ([]scaleharness.Workspace, error) {
 	for len(f.clients) < workspaces {
-		wsPath, _ := kcptesting.NewWorkspaceFixture(f.t, f.server, logicalcluster.NewPath("root"))
+		wsPath, ws := kcptesting.NewWorkspaceFixture(f.t, f.server, logicalcluster.NewPath("root"))
 		cfg := kcpclient.SetCluster(rest.CopyConfig(f.baseCfg), wsPath)
 		c, err := client.New(cfg, client.Options{Scheme: f.scheme})
 		if err != nil {
@@ -268,7 +277,13 @@ func (f *kcpFleet) Provision(ctx context.Context, workspaces int) ([]client.Clie
 		}); err != nil {
 			return nil, fmt.Errorf("binding workspace %d: %w", len(f.clients), err)
 		}
-		f.clients = append(f.clients, c)
+		// The logical cluster name, not the path: it is what the provider
+		// engages under and what a controller sees, so it is the only
+		// identity a delivery can be matched against.
+		f.clients = append(f.clients, scaleharness.Workspace{
+			Name:   ws.Spec.Cluster,
+			Client: c,
+		})
 	}
 
 	if f.awaitEngagement != nil {
@@ -281,7 +296,7 @@ func (f *kcpFleet) Provision(ctx context.Context, workspaces int) ([]client.Clie
 
 // startManager runs a real multicluster manager with per-workspace wiring, so
 // the heap the sweep samples contains the machinery under measurement.
-func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, scheme *runtime.Scheme, telemetry *workspacetelemetry.Recorder) *providerwiring.Wiring {
+func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, scheme *runtime.Scheme, telemetry *workspacetelemetry.Recorder, probe *scaleharness.DeliveryProbe) *providerwiring.Wiring {
 	t.Helper()
 
 	provider, err := apiexport.New(rootCfg, exportName, apiexport.Options{Scheme: scheme})
@@ -297,7 +312,7 @@ func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, schem
 		t.Fatalf("manager: %v", err)
 	}
 
-	wiring, err := providerwiring.AddToManager(mgr, setupWatches, providerwiring.Options{
+	wiring, err := providerwiring.AddToManager(mgr, setupWatches(probe), providerwiring.Options{
 		Log:       ctrl.Log.WithName("providerwiring"),
 		Telemetry: telemetry,
 	})
@@ -322,17 +337,38 @@ func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, schem
 // shared informer, a workqueue, and MaxConcurrentReconciles workers started
 // eagerly. The reconciler behind it does nothing, because what it does is not
 // what is being measured.
-func setupWatches(ctx context.Context, _ multicluster.ClusterName, mgr manager.Manager) error {
-	c, err := controller.New("scale-probe", mgr, controller.Options{
-		Reconciler:              reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) { return reconcile.Result{}, nil }),
-		MaxConcurrentReconciles: 2,
-		SkipNameValidation:      ptr.To(true),
-	})
-	if err != nil {
-		return fmt.Errorf("creating probe controller: %w", err)
+func setupWatches(probe *scaleharness.DeliveryProbe) providerwiring.SetupFunc {
+	return func(ctx context.Context, workspace multicluster.ClusterName, mgr manager.Manager) error {
+		return probeController(ctx, workspace, mgr, probe)
 	}
-	return c.Watch(source.Kind(mgr.GetCache(), &clusterv1.Cluster{},
-		&handler.TypedEnqueueRequestForObject[*clusterv1.Cluster]{}))
+}
+
+func probeController(ctx context.Context, workspace multicluster.ClusterName, mgr manager.Manager, probe *scaleharness.DeliveryProbe) error {
+	// One controller per watch, matching how the real set is wired: Cluster API
+	// registers its watches across several controllers, each with its own queue
+	// and workers, so collapsing them into one controller with many watches
+	// would understate everything except the listener count.
+	for i := range *watchesPerWorkspace {
+		c, err := controller.New(fmt.Sprintf("scale-probe-%d", i), mgr, controller.Options{
+			Reconciler: reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
+				// The clock stops here. This is the first moment the event has
+				// travelled all the way through dispatch to the controller that
+				// wanted it, which is the interval the fan-out cost lives in.
+				probe.Delivered(string(workspace))
+				return reconcile.Result{}, nil
+			}),
+			MaxConcurrentReconciles: 2,
+			SkipNameValidation:      ptr.To(true),
+		})
+		if err != nil {
+			return fmt.Errorf("creating probe controller %d: %w", i, err)
+		}
+		if err := c.Watch(source.Kind(mgr.GetCache(), &clusterv1.Cluster{},
+			&handler.TypedEnqueueRequestForObject[*clusterv1.Cluster]{})); err != nil {
+			return fmt.Errorf("watching from probe controller %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func profileByName(name string) (scaleharness.Profile, error) {

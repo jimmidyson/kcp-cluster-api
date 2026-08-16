@@ -19,16 +19,21 @@ package scaleharness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func fakeProvision(_ context.Context, workspaces int) ([]client.Client, error) {
-	out := make([]client.Client, workspaces)
+func fakeProvision(_ context.Context, workspaces int) ([]Workspace, error) {
+	out := make([]Workspace, workspaces)
 	for i := range out {
-		out[i] = fake.NewClientBuilder().Build()
+		out[i] = Workspace{
+			Name:   fmt.Sprintf("ws-%d", i),
+			Client: fake.NewClientBuilder().Build(),
+		}
 	}
 	return out, nil
 }
@@ -172,7 +177,7 @@ func TestSweepRejectsAnIncoherentProfile(t *testing.T) {
 
 func TestProvisioningFailureIsReportedNotSwallowed(t *testing.T) {
 	opts := sweepOpts(1, 2, 4, 8)
-	opts.Provision = func(context.Context, int) ([]client.Client, error) {
+	opts.Provision = func(context.Context, int) ([]Workspace, error) {
 		return nil, errors.New("no workspaces today")
 	}
 
@@ -199,5 +204,138 @@ func (s *countingService) Populate(_ context.Context, _ client.Client, objects i
 
 func (s *countingService) Touch(context.Context, client.Client) error {
 	s.touched++
+	return nil
+}
+
+// Delivery latency is the measurement that answers FR-001, so a sweep given a
+// probe must actually populate it — and one whose events never arrive must say
+// so rather than report a flattering silence.
+func TestSweepRecordsDeliveryLatency(t *testing.T) {
+	probe := NewDeliveryProbe()
+	opts := sweepOpts(1, 2, 4, 8)
+	opts.Probe = probe
+	opts.DeliveryTimeout = 2 * time.Second
+
+	// Stand in for the controllers: acknowledge every event as it is sent.
+	opts.Service = &acknowledgingService{probe: probe}
+
+	run, err := Sweep(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for _, m := range run.Measurements {
+		if m.Events == 0 {
+			t.Fatalf("point %d generated no events", m.Workspaces)
+		}
+		if m.DeliveriesMissed != 0 {
+			t.Errorf("point %d missed %d deliveries", m.Workspaces, m.DeliveriesMissed)
+		}
+		if m.DeliveryP99 < m.DeliveryP50 {
+			t.Errorf("point %d has p99 %s below p50 %s", m.Workspaces, m.DeliveryP99, m.DeliveryP50)
+		}
+	}
+}
+
+func TestUndeliveredEventsAreRecordedNotHidden(t *testing.T) {
+	opts := sweepOpts(1, 2, 4, 8)
+	opts.Probe = NewDeliveryProbe()
+	opts.DeliveryTimeout = 50 * time.Millisecond
+	// No acknowledgement at all: every event goes missing.
+
+	run, err := Sweep(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for _, m := range run.Measurements {
+		if m.DeliveriesMissed != m.Events {
+			t.Errorf("point %d recorded %d missed of %d events; undelivered events must be visible",
+				m.Workspaces, m.DeliveriesMissed, m.Events)
+		}
+	}
+}
+
+// A profile issuing several events per workspace generates more events than the
+// probe can time, because latency is attributed by workspace and only one event
+// per workspace is in flight at a time. The shortfall must be counted against
+// what was timed, not against what was issued — otherwise a fleet delivering
+// everything it was asked to would be reported as dropping half of it, which is
+// precisely the false alarm that would send someone hunting a dispatch bug that
+// is not there.
+func TestUntimedEventsAreNotCountedAsMissed(t *testing.T) {
+	probe := NewDeliveryProbe()
+	opts := sweepOpts(1, 2, 4, 8)
+	opts.Probe = probe
+	opts.DeliveryTimeout = 2 * time.Second
+	opts.Profile.EventsPerWorkspacePerSecond = 4
+	opts.Service = &acknowledgingService{probe: probe}
+
+	run, err := Sweep(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for _, m := range run.Measurements {
+		if m.Events != m.Workspaces*4 {
+			t.Fatalf("point %d issued %d events, want %d", m.Workspaces, m.Events, m.Workspaces*4)
+		}
+		if m.DeliveriesMissed != 0 {
+			t.Errorf("point %d reported %d missed deliveries though every timed event was acknowledged",
+				m.Workspaces, m.DeliveriesMissed)
+		}
+	}
+}
+
+// A second event for a workspace already in flight must not restart its clock:
+// the delivery that eventually arrives belongs to the first event, and timing it
+// from the second would report a latency shorter than any event actually took.
+func TestSendIsDeclinedWhileOneIsInFlight(t *testing.T) {
+	p := NewDeliveryProbe()
+
+	if !p.Sent("ws") {
+		t.Fatal("first send was declined")
+	}
+	if p.Sent("ws") {
+		t.Error("a second send was accepted while the first was still in flight")
+	}
+
+	p.Delivered("ws")
+	if !p.Sent("ws") {
+		t.Error("a send was declined after the previous one had been delivered")
+	}
+}
+
+// A sweep without a probe still measures footprint. It must not fail, but it is
+// a weaker measurement and the zero latencies say so.
+func TestSweepWithoutAProbeStillMeasuresFootprint(t *testing.T) {
+	run, err := Sweep(t.Context(), sweepOpts(1, 2, 4, 8))
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	for _, m := range run.Measurements {
+		if m.DeliveryP50 != 0 || m.DeliveryP99 != 0 {
+			t.Errorf("point %d reported latency without a probe", m.Workspaces)
+		}
+		if m.HeapBytes == 0 {
+			t.Errorf("point %d measured no heap", m.Workspaces)
+		}
+	}
+}
+
+// acknowledgingService plays the part of the controllers: every event it is
+// asked to generate is reported as delivered.
+type acknowledgingService struct {
+	configMapService
+	probe *DeliveryProbe
+}
+
+func (s *acknowledgingService) Touch(ctx context.Context, c client.Client) error {
+	if err := s.configMapService.Touch(ctx, c); err != nil {
+		return err
+	}
+	// The probe keys on workspace, and this stand-in has only one outstanding
+	// send at a time, so acknowledging the most recent is unambiguous.
+	s.probe.DeliverAllOutstanding()
 	return nil
 }

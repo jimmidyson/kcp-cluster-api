@@ -28,6 +28,8 @@ package capiservice
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -123,9 +125,19 @@ func (s Service) Touch(ctx context.Context, c client.Client) error {
 	if cluster.Labels == nil {
 		cluster.Labels = map[string]string{}
 	}
-	// A monotonically changing value, so consecutive touches are distinct
-	// updates rather than no-ops the apiserver may discard.
-	cluster.Labels["scaleharness-touch"] = fmt.Sprint(cluster.Generation)
+	// A timestamp, and specifically not Generation.
+	//
+	// Generation looks like the obvious monotonic value and is not one: it
+	// counts spec changes, so a metadata-only update leaves it alone. Writing
+	// it back produced an identical object, the server discarded the update as
+	// a no-op, and no watch event fired — so the event the harness thought it
+	// had generated never existed.
+	//
+	// That failed silently for exactly as long as nothing looked. It surfaced
+	// only once delivery latency was instrumented, as precisely half of all
+	// events going missing: a sweep accumulates workspaces, so at each point
+	// the half touched at the previous point wrote the same value again.
+	cluster.Labels["scaleharness-touch"] = strconv.FormatInt(time.Now().UnixNano(), 10)
 	if err := c.Update(ctx, cluster); err != nil {
 		return fmt.Errorf("updating Cluster %s: %w", key.Name, err)
 	}

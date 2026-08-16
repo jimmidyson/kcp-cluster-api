@@ -110,12 +110,12 @@ if every gated requirement closes.
 - [x] T019 [US1] Implement reporting in `internal/scaleharness/report.go` reusing `internal/verify` types and writing to `bin/verify-result.json`'s existing contract — **do not introduce a second reporting convention** (R11)
 - [x] T020 [US1] Implement measurement collection in `internal/scaleharness/measure.go` for engagement latency p50/p99, per-event delivery cost, per-workspace footprint, throughput, delivery pause during join, and cold start duration (FR-020)
 - [x] T021 [US1] Implement the sweep driver in `internal/scaleharness/sweep.go` running a profile across geometrically spaced counts and emitting a Sweep run per data-model.md
-- [ ] T022 [US1] Wire the harness into `test/integration/scale/scale_test.go` against a real kcp server, and to the `task test:scale` target from T003
+- [x] T022 [US1] Wire the harness into `test/integration/scale/scale_test.go` against a real kcp server, and to the `task test:scale` target from T003
 
 ### Baseline and the gate
 
-- [ ] T023 [US1] Run the sweep on `idle-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-idle-heavy.json`
-- [ ] T024 [US1] Run the sweep on `active-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-active-heavy.json`
+- [x] T023 [US1] Run the sweep on `idle-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-idle-heavy.json`
+- [x] T024 [US1] Run the sweep on `active-heavy` against the current implementation; commit the baseline under `specs/20260815-211812-workspace-wiring-scale/evidence/baseline-active-heavy.json`
 - [ ] T025 [US1] Derive candidate per-shard capacity per profile from T023/T024 in the units of FR-027 — watched object count and event rate, with workspace count as the derived secondary figure — recording headroom below the departure point and whether the figure is extrapolated, in `specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md`
 - [ ] T025a [US1] Fit a resource model in `internal/scaleharness/model.go` over the known cost structure — `memory ≈ base + a·W + b·objects + c·W·maxConcurrent`, `CPU ≈ base + d·events·W + e·reconciles/s` — emitting coefficients per profile and the regime in which they are valid (FR-034). Model **live heap** with a stated derivation to RSS under stated GC settings, and take per-workspace event rate from the profile rather than inferring it (FR-036)
 - [ ] T025b [US1] Write failing unit tests in `internal/scaleharness/model_test.go` for held-out validation: fit on a subset of points, predict an excluded point, record the error; and assert the model **declines to project** across a discontinuity it has not observed rather than emitting a number (FR-034, FR-035)

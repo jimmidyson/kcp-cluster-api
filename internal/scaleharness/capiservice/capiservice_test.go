@@ -18,6 +18,9 @@ package capiservice
 
 import (
 	"testing"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -135,5 +138,37 @@ func TestPopulateIsIdempotent(t *testing.T) {
 	}
 	if len(list.Items) != 4 {
 		t.Errorf("holds %d Clusters after three populates, want 4", len(list.Items))
+	}
+}
+
+// Consecutive touches must be genuinely distinct updates. Generation was used
+// here originally and is not monotonic for metadata-only changes, so repeat
+// touches wrote the same value, the server discarded them as no-ops, and no
+// watch event fired — an event the harness counted but never generated.
+func TestConsecutiveTouchesAreDistinctUpdates(t *testing.T) {
+	svc := Service{Prefix: "run"}
+	c := newClient(t).Build()
+	ctx := t.Context()
+
+	if err := svc.Populate(ctx, c, 1); err != nil {
+		t.Fatalf("Populate: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for i := range 3 {
+		if err := svc.Touch(ctx, c); err != nil {
+			t.Fatalf("Touch %d: %v", i, err)
+		}
+		got := &clusterv1.Cluster{}
+		key := client.ObjectKey{Namespace: Namespace, Name: "run-0"}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		value := got.Labels["scaleharness-touch"]
+		if seen[value] {
+			t.Fatalf("touch %d repeated the value %q: an update the server discards generates no event", i, value)
+		}
+		seen[value] = true
+		time.Sleep(time.Millisecond)
 	}
 }
