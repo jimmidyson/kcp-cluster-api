@@ -65,6 +65,11 @@ type SweepRun struct {
 	Mode    LoadMode   `json:"mode"`
 	Points  []Point    `json:"points"`
 	Knee    KneeResult `json:"knee"`
+
+	// Measurements are the raw per-point costs. Points is the single quantity
+	// the knee was taken over; these are everything that was recorded, so a
+	// later question can be asked of an existing run without re-measuring.
+	Measurements []Measurement `json:"measurements,omitempty"`
 }
 
 // Validate rejects a run that could not be safely quoted.
