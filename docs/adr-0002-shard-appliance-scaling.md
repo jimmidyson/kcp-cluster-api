@@ -24,41 +24,76 @@ holds it: a shard knows its own capacity, reports its position against it, and
 a region grows by adding another appliance rather than by making an existing
 one bigger.
 
-## The appliance
+## The appliance is a rack, not a box
 
-A **shard appliance** is a complete, self-contained unit of capacity:
+A **shard appliance** is a unit of regional capacity comprising:
 
-- a kcp shard,
-- the project's `APIExport`, its `APIExportEndpointSlice`, and the `Partition`
-  selecting that shard,
-- `core-manager` replicas sized for the shard,
-- the provider controllers, their identity and RBAC.
+- a kcp shard, and
+- a set of **independently scaled controller units**, each with its own
+  `APIExport`, its own `APIExportEndpointSlice`, its own replica count, and its
+  own identity and RBAC.
 
-A region is one or more appliances. **Horizontal scale is another appliance, not
-a bigger one.** This is the whole point: an appliance has a known, measured,
-uniform capacity, so regional capacity planning becomes arithmetic rather than
-estimation.
+A controller unit is one deployment serving one service: core Cluster API
+controllers, the infrastructure provider, the bootstrap and control-plane
+providers, and — as they arrive — unrelated services such as VMs-as-a-service or
+databases-as-a-service.
 
-That uniformity is a real property rather than an aspiration, and it follows
-from something already verified: every `core-manager` replica caches every
-workspace in its endpoint slice, and it does so whether or not it is doing work
-(`controller-runtime@v0.24.1` `pkg/manager/internal.go:446` starts caches;
-`:477` starts leader-election runnables afterwards). So an appliance's binding
-limit is a **memory** limit, and it is the same on every replica in the box.
+This decomposition is deliberate, and it is not merely organisational. Each unit
+already selects its own slice through `--endpoint-slice-name`, so the seam
+exists; using it deliberately is what makes the units independently sizeable.
 
-## Two scaling axes, and which lever to pull
+A region is one or more appliances. **Horizontal scale at regional level is
+another appliance, not a bigger one** — but within an appliance, each controller
+unit scales on its own terms, because their cost drivers are unrelated. Core
+controllers scale with `Cluster` and `Machine` counts; an infrastructure
+provider scales with real infrastructure; a database service scales with
+databases. Blending them into one number would size all of them wrongly.
 
-These are separate, and the distinction is the scaling logic, not a
-technicality:
+## Three scaling axes
 
-| Bound by | Lever | Why the other lever fails |
+| Axis | Divides | Mechanism |
 |---|---|---|
-| Reconcile throughput | Add replicas **within** the appliance | A new appliance does not help work that is already assigned to this shard |
-| Workspace count or memory | Add an **appliance** | Replicas do not divide cached state — every replica holds the whole shard |
+| Add a shard | kcp capacity, and everything on it | `Partition` / endpoint-slice topology |
+| Add replicas to a controller unit | that unit's reconcile throughput | sharded coordinator — HRW assignment with per-cluster Lease fencing |
+| Separate `APIExport`s per service | **which types a unit caches at all** | one export per controller unit |
 
-A scaling decision therefore requires knowing *which* limit is being approached,
-which is why the capacity report is stated in the units that consume capacity
-(watched object count, event rate) rather than as a single workspace number.
+**Only the third axis reduces memory.** This follows from something already
+verified: every replica caches every workspace in its endpoint slice, and does
+so whether or not it is doing work (`controller-runtime@v0.24.1`
+`pkg/manager/internal.go:446` starts caches; `:477` starts leader-election
+runnables afterwards). Replicas therefore buy throughput and availability, never
+memory. But a unit's wildcard cache covers only the types in *its* `APIExport`,
+so separating services means each unit stops caching the others' objects
+entirely.
+
+A scaling decision therefore requires knowing **which** limit is being
+approached and **for which unit** — which is why capacity is stated per unit, in
+the units that consume it (watched object count, event rate), rather than as one
+blended workspace number.
+
+### What this does not solve
+
+**Within one shard and one `APIExport`, cache memory is irreducible.** Not by
+replicas, and not by partitions, which select shards rather than workspaces. The
+remaining levers are fewer workspaces per shard, or a narrower export. This is
+what ultimately bounds a controller unit.
+
+**Cluster API's core and infrastructure providers cannot fully separate.**
+`external.ObjectTracker` makes the `Cluster` and `Machine` reconcilers add
+dynamic watches on whatever `infrastructureRef` and `bootstrap.configRef` point
+at, so the core unit necessarily caches `DevCluster`/`DevMachine`. Genuinely
+independent services decouple cleanly; contract-coupled Cluster API providers
+decouple only partially. That is upstream's design, not something to engineer
+around.
+
+**Permission claims cut against the separation, and this is now urgent.**
+[ADR-0001](adr-0001-per-workspace-manager-pool.md)'s D3 claims *all* `Secret`
+and `ConfigMap` objects, recording the trigger: "narrow it with a selector later
+once real usage patterns are known." **That trigger has arrived.** Under service
+separation every unit claiming all Secrets means every unit caches every Secret
+in every workspace, which would silently undo much of the memory benefit
+separation buys. Invisible at two workspaces; likely one of the largest terms in
+the model at a full shard.
 
 ## Decisions
 
@@ -216,6 +251,58 @@ cross-tenant bleed rather than an ordinary bug — and because the spike's own
 remaining unknowns (an unengaged workspace, a request during engagement) are
 precisely where that bleed would occur.
 
+### A4 — Capacity is delivered as a fitted resource model, per controller unit
+
+The deliverable is not a single measured number but a **resource model with
+fitted coefficients**, produced per controller unit and per load profile, with
+two consumers: published sizing tables for planning, and the appliance's own
+runtime capacity signal (A2). The operator sizes with the model, and the box
+then reports its position against the same arithmetic.
+
+**Why a model rather than a table of measurements.** The cost structure is known
+analytically from source reading, not inferred from a black box, so coefficients
+are fitted to a *structural* form:
+
+```
+memory ≈ base + a·W + b·objects_cached + c·W·maxConcurrentReconciles [ + ClusterCache terms ]
+CPU    ≈ base + d·events_total·W + e·reconciles_per_second
+```
+
+Two consequences worth stating. The CPU term is **quadratic in disguise** —
+total events scale with workspace count, and each event costs O(W) to dispatch —
+which is the knee expressed algebraically. And if the workspace-scale feature's
+gated demux work is built, that term collapses to linear, so **the model must be
+re-fitted afterwards**; that before-and-after refit is exactly the evidence
+SC-010 already requires.
+
+**Per unit, additively.** Each controller unit gets its own coefficients. This
+resolves where workload-cluster cost belongs without a separate rule:
+`ClusterCache` holds a connection and cache per workload cluster, so its terms
+appear in the models of the units that hold it — core and infrastructure — and
+are simply absent from a database or VM service's model.
+
+**Extrapolation is permitted, bounded, and labelled.** Structural models
+extrapolate defensibly where a curve fit does not, but three limits are
+binding:
+
+1. **Never project across an unobserved knee.** The model is valid within its
+   measured regime; past a discontinuity it has not seen, it must decline rather
+   than emit a number.
+2. **Model live heap, not RSS.** Go's resident size is not a clean function of
+   allocation — GOGC, fragmentation and lazy return intervene. Derive RSS from
+   live heap with a stated multiplier and stated GC settings.
+3. **Per-workspace event rate is a declared profile parameter, never inferred.**
+   The quadratic term is highly sensitive to it, and inferring it would silently
+   encode a workload assumption the operator does not share.
+
+**Accuracy is measured, not asserted.** Coefficients are fitted on a subset of
+sweep points and validated against a **held-out** point that was not fitted,
+with the prediction error recorded. Without that, a resource model is curve
+fitting with extra ceremony; with it, every published figure carries a stated
+accuracy at a stated extrapolation factor. This is the runnable acceptance
+condition Principle IV requires, and it is what makes a recommendation
+trustworthy rather than merely plausible.
+
 ## What this requires of work already under way
 
 The [workspace-scale specification](../specs/20260815-211812-workspace-wiring-scale/spec.md)
@@ -266,4 +353,14 @@ the figure for humans remains necessary; it is no longer sufficient.
 3. **What provisions an appliance?** A2 defers the mechanism deliberately. When
    it is built, it must own shard provisioning, topology, identity and rollback.
 4. **How is utilisation aggregated regionally** without the cardinality problem
-   the scale feature is already solving per-process?
+   the scale feature is already solving per-process? Now compounded by A4: the
+   aggregation is per controller unit as well as per appliance.
+5. **How narrow can permission claims be?** D3's "claim all Secrets and
+   ConfigMaps" is now a measured concern rather than a deferred tidy-up — see
+   "What this does not solve". Narrowing needs to know which secrets each
+   controller unit actually reads, which the scale harness is positioned to
+   observe.
+6. **How many controller units is too many?** Each is a deployment, an
+   `APIExport`, an identity and a set of claims. Service separation reduces
+   cached state per unit but multiplies the operational surface, and the
+   crossover point is unmeasured.

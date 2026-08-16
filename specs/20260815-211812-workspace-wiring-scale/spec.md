@@ -582,6 +582,28 @@ set.
   FR-030's measurement before implementation begins: built, because the cost
   binds at or below a plausible capacity; or closed, because it does not. A
   closed requirement MUST record the figures that closed it.
+- **FR-034**: Capacity MUST be expressed as a **fitted resource model** —
+  coefficients over the known cost structure — and not only as a table of
+  measured points, so that a fleet shape which was not measured can still be
+  sized. The model MUST state the regime in which it is valid and MUST decline
+  to project across a discontinuity it has not observed
+  ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A4).
+- **FR-035**: The model's accuracy MUST be established by **held-out
+  validation** — coefficients fitted on a subset of measured points, then used
+  to predict a point deliberately excluded from the fit, with the prediction
+  error recorded. Every published figure MUST carry that error and, where it is
+  a projection rather than a measurement, its extrapolation factor.
+- **FR-036**: Memory MUST be modelled in terms of live heap with a stated
+  derivation to resident size, under stated garbage-collector settings, because
+  resident size is not a clean function of allocation. Per-workspace event rate
+  MUST be a declared parameter of a load profile and MUST NOT be inferred, since
+  the event-dispatch term is highly sensitive to it.
+- **FR-037**: Where more than one controller deployment serves a shard, the
+  model MUST be produced **per deployment** rather than blended, since their cost
+  drivers are unrelated. Costs proportional to real infrastructure rather than to
+  workspace count — a per-workload-cluster connection and cache — belong to the
+  models of the deployments that hold them and MUST be absent from those that do
+  not.
 
 ### Key Entities
 
@@ -666,6 +688,14 @@ result.
   `core-manager`'s configured capacity, its observed load in FR-027's units, and
   which of the two limits it is approaching — without parsing logs or scraping
   documentation.
+- **SC-017**: A fitted resource model predicts a held-out measurement point that
+  was excluded from its fit, and the prediction error is recorded and within a
+  stated bound. Published sizing figures carry that error and, where projected,
+  the extrapolation factor.
+- **SC-018**: Sizing guidance for an operator and the runtime capacity signal of
+  SC-016 are derived from the **same** fitted model, so a deployment sized from
+  the published tables reports its position against the arithmetic it was sized
+  with.
 
 ## Clarifications
 
