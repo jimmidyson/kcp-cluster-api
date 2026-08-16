@@ -65,8 +65,15 @@ which is why the capacity report is stated in the units that consume capacity
 ### A1 — Placement is additive now; rebalancing is deferred
 
 A new appliance absorbs **new** workspaces. It does not relieve an existing hot
-shard, because relieving one requires moving a logical cluster between shards,
-which is kcp's capability and not this project's.
+shard.
+
+**The rationale for this changed once kcp's migration machinery was read**, and
+the original reason was wrong. This decision was first taken on the assumption
+that moving a logical cluster between shards might not be possible at all. It
+is: kcp v0.32.3 ships a complete `logicalclustermigration` reconciler, a
+`LogicalClusterMigration` API, a dedicated virtual workspace and front-proxy
+filters. The deferral stands on narrower and more concrete grounds — see
+"Migration, as it actually exists" below.
 
 Consequences, stated plainly rather than discovered later:
 
@@ -78,17 +85,69 @@ Consequences, stated plainly rather than discovered later:
 - The capacity and utilisation surface MUST NOT be designed in a way that
   precludes rebalancing later.
 
-**Trigger to revisit**: kcp gaining supported workspace migration between
-shards, or a measured case of a shard filling and staying full.
+**Trigger to revisit**: the `LogicalClusterMigration` feature gate graduating
+past alpha and defaulting on, or a measured case of a shard filling and staying
+full.
 
-Our half of rebalancing is more tractable than the conversion plan assumed.
+#### Migration, as it actually exists
+
+Verified against kcp v0.32.3:
+
+- **Alpha, and off by default.** `LogicalClusterMigration` is registered at
+  `{Default: false, PreRelease: featuregate.Alpha}`
+  (`pkg/features/kcp_features.go:150-152`). Building the appliance's scaling
+  story on it today would mean depending on an experimental, disabled feature.
+- **Admin-initiated, never automatic.** Nothing in kcp creates a
+  `LogicalClusterMigration`; the package documentation says it "is created by an
+  admin anywhere". So kcp supplies the *mechanism* and the *decision* would be
+  ours — which fits A2's progression exactly: the regional controller that
+  eventually provisions appliances is also the thing that would decide to
+  rebalance.
+- **Disruptive, not live.** Every client request to a migrating logical cluster
+  is rejected with `503` and `Retry-After: 1`, except the system shard-admin
+  group (`WithBlockMigratingLogicalClusters`,
+  `pkg/server/filters/migratinglogicalcluster.go`). Active connections to the
+  cluster are cancelled, informer stores purged, and origin data finally deleted
+  **directly from etcd**, bypassing the apiserver (`deleteOriginData`,
+  `datacleanup.go`).
+- **kcp is defending against controllers like ours.** The filter's comment is
+  explicit: migration "requires that no client except other shards can access
+  the logical cluster, otherwise operators running with admin rights might
+  modify objects after they were migrated, producing an inconsistent state."
+
+#### What an appliance would see, and why that is encouraging
+
+The `APIBinding` lives in the migrating workspace. So it leaves the origin
+shard's wildcard view and appears in the destination's, which this project's
+provider turns into a **disengage** followed by an **engage** — precisely the
+lifecycle `internal/providerwiring` already implements, tests, and binds
+runnables to. Where origin and destination belong to different appliances, that
+is one appliance releasing a workspace and another adopting it: the appliance
+model working as intended, with no new mechanism on our side.
+
+Our half of the topology is likewise already in place.
 `multicluster-provider`'s `endpointSliceUpdate`
 (`pkg/provider/provider.go:259-293`) reconciles the watched endpoint set on
-every slice change — adding watches for new URLs and cancelling those no longer
-listed — so an appliance already reacts live to topology changes. The plan
-recorded this as unverified and to be confirmed in a spike; it is now verified by
-reading the source. What remains unknown is kcp's half: whether a logical
-cluster can move at all.
+every slice change, adding watches for new URLs and cancelling those no longer
+listed. The conversion plan recorded this as unverified pending a spike; it is
+now verified by source.
+
+**So rebalancing would need less new code from us than expected** — the
+decision logic and the creation of migration objects, not the lifecycle
+handling.
+
+#### What must be verified before relying on it
+
+1. Raw etcd deletion of the origin's data emits DELETE watch events. Cluster API
+   reconcilers should be inert (a reconcile whose `Get` returns `NotFound`
+   returns without action), but the docker/dev provider's in-memory backend keys
+   listeners by cluster name and is the likely exception. **Unverified.**
+2. Writes during the migration window fail with `503`. Reconcile errors and
+   backoff should be safe, but this is noise a hot shard would see across every
+   workspace being moved.
+3. Whether a wildcard watch survives `cancelLogicalClusterConnections`, which
+   cancels per-logical-cluster connections while our reads come from a
+   `/clusters/*` watch.
 
 ### A2 — The scaling signal is advisory, and shaped for autonomy
 
@@ -191,10 +250,13 @@ the figure for humans remains necessary; it is no longer sufficient.
 
 ## Open questions
 
-1. **Can a logical cluster move between shards in kcp at all?** Decides whether
-   A1's deferral is temporary or permanent. Note kcp v0.32.3 carries a
-   `logicalclustermigration` reconciler, so this may be closer than assumed —
-   worth reading before the next scaling decision.
+1. ~~**Can a logical cluster move between shards in kcp at all?**~~ **Resolved:
+   yes** — kcp v0.32.3 implements it, alpha and default-off, admin-initiated and
+   disruptive. See "Migration, as it actually exists" under A1. A1's deferral is
+   therefore **temporary**, and its trigger is now a concrete external event (the
+   feature gate graduating) rather than an open capability question. What remains
+   open is narrower: the three verification items listed there, chiefly whether
+   the origin's raw etcd deletion is inert for the dev infrastructure provider.
 2. ~~**Does an `AdmissionReview` carry resolvable workspace identity?**~~
    **Resolved** by A3's spike: yes, via the `kcp.io/cluster` annotation. See
    [R12](../specs/20260815-211812-workspace-wiring-scale/research.md#r12--g4-spike-can-an-admission-request-be-resolved-to-its-workspace--verified-answer-is-yes).
