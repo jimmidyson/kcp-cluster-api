@@ -604,6 +604,20 @@ set.
   workspace count — a per-workload-cluster connection and cache — belong to the
   models of the deployments that hold them and MUST be absent from those that do
   not.
+- **FR-038**: The harness's **service-specific** parts — how a profile's objects
+  are constructed, and how a controller's watch set and engaged count are
+  obtained — MUST sit behind a narrow interface, separate from the
+  service-agnostic sweep, fit and knee-detection machinery. This feature does
+  **not** build a general-purpose characterisation utility: there is one
+  controller today, and Principle VIII prohibits the abstraction before a second
+  caller. **Trigger to generalise: the conversion plan's P1**
+  ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A5).
+- **FR-039**: Every measured or fitted figure MUST record how its load was
+  produced — **synthetic** (objects generated for the sweep) or **observed**
+  (a running deployment's real load). Synthetic load can under-measure when
+  generated objects fail validation or take cheap error paths rather than real
+  reconcile paths, so a figure that does not state its mode MUST NOT be used for
+  sizing.
 
 ### Key Entities
 
@@ -696,6 +710,13 @@ result.
   SC-016 are derived from the **same** fitted model, so a deployment sized from
   the published tables reports its position against the arithmetic it was sized
   with.
+- **SC-019**: The sweep, fit and knee-detection machinery runs against a
+  service-specific implementation supplied through an interface, demonstrated by
+  a second implementation in tests that constructs different objects — evidence
+  that characterising another controller later is a matter of supplying that
+  implementation rather than rewriting the harness.
+- **SC-020**: Every figure the harness reports, and every figure published from
+  it, states whether its load was synthetic or observed.
 
 ## Clarifications
 

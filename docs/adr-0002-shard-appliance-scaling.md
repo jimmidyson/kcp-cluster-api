@@ -303,6 +303,53 @@ accuracy at a stated extrapolation factor. This is the runnable acceptance
 condition Principle IV requires, and it is what makes a recommendation
 trustworthy rather than merely plausible.
 
+### A5 — Scale characterisation is a seam, generalised when the second service arrives
+
+Adding a service to an appliance (A4's controller units) means knowing what it
+costs before committing capacity to it. The intent is a utility that can be
+pointed at a controller and return its scaling characteristics and thresholds.
+
+**This generalises, and for a reason worth stating.** The cost structure
+established by source reading is a property of the *architecture* — the
+per-workspace wiring over a shared wildcard cache — not of any particular
+controller. Listener count, cached object count, worker count and dispatch cost
+have the same form for every controller built on `providerwiring`'s `SetupFunc`
+seam. Only the coefficients differ. So characterising a new service is fitting
+known-shape coefficients, not discovering an unknown function, and threshold
+derivation is the knee procedure operating on a curve rather than on service
+semantics.
+
+**Two measurement modes, and every figure records which produced it:**
+
+- **Synthetic** — generate objects from the service's `APIResourceSchema`
+  OpenAPI, drive a sweep. Works before a service has users, which is when
+  planning matters most. Its weakness is real: generated objects may fail
+  validation or take cheap error paths rather than genuine reconcile paths, so
+  synthetic figures can under-measure. A figure that does not say it is
+  synthetic is not usable for sizing.
+- **Observation** — fit coefficients from a running deployment's natural
+  variation in workspace and object counts. Always measures real work, but
+  yields nothing for a service that is not yet deployed and nothing from a fleet
+  that does not vary.
+
+**Built as a seam now; generalised at the second caller.** Constitution
+Principle VIII prohibits building an abstraction ahead of a second real caller,
+and today there is one controller. So the harness is built for `core-manager`
+with the service-specific parts — object synthesis, profile definition, watch-set
+reporting — behind a narrow interface, and generalised into a utility when the
+conversion plan's P1 (the bootstrap provider port) arrives as the second caller.
+
+The trigger is real rather than hypothetical: P1, P2 and P3 are planned second,
+third and fourth callers. **Trigger to generalise: P1.**
+
+**Consequence for the seam.** The capacity and telemetry surface (A4, and the
+scale feature's FR-017/FR-018/FR-028/FR-032) should be part of the
+`providerwiring` contract rather than bespoke to `core-manager`. Then adding a
+service means implementing `SetupFunc` and getting scale characterisation for
+free — which is how every other obligation at that seam already works. A
+controller not built on the seam falls back to generic controller-runtime
+metrics and a correspondingly weaker model.
+
 ## What this requires of work already under way
 
 The [workspace-scale specification](../specs/20260815-211812-workspace-wiring-scale/spec.md)
