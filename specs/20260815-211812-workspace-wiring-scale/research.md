@@ -310,6 +310,115 @@ would violate Principle IV's intent and create two contracts where one exists.
 
 ---
 
+## R12 — G4 spike: can an admission request be resolved to its workspace? — VERIFIED, answer is yes
+
+**Question** ([ADR-0002](../../docs/adr-0002-shard-appliance-scaling.md) A3, task
+T078a): does an incoming request carry enough identity to resolve it to its
+source workspace? This gates the appliance roadmap, because an appliance that
+cannot serve admission for its own tenants is not an appliance.
+
+**Answer: yes, and G4 is contained work rather than a redesign.** Verified
+against kcp v0.32.3 and its forked apiserver at the pinned revision.
+
+### The fan-in is kcp's design, not an accident
+
+For a type provided through an `APIBinding`, kcp looks up the
+`ValidatingWebhookConfiguration` / `MutatingWebhookConfiguration` in **the
+`APIExport`'s workspace, not the consumer's** —
+`getSourceClusterForGroupResource` returns
+`apiBinding.Status.APIExportClusterName` for any group-resource that came from a
+binding (kcp `pkg/admission/validatingwebhook/plugin.go:166-181`, and the same
+in `mutatingwebhook/plugin.go:166`).
+
+So **one** webhook configuration in this project's provider workspace serves
+**every** consuming workspace. That is exactly the fan-in G4 must handle, and it
+is intended behaviour rather than something to work around.
+
+### The logical cluster is on the object
+
+Two complementary mechanisms, which together cover every operation:
+
+1. **From storage, always.** `annotateDecodedObjectWith` sets
+   `kcp.io/cluster` (and the shard annotation) on every object decoded from
+   etcd — `k8s.io/apiserver` fork `pkg/storage/etcd3/store_kcp.go:169-193`,
+   called from `store.go:1182`, `store.go:1205`, `watcher.go:738` and
+   `watcher.go:760`. The comment states the design outright: *"we don't store
+   the cluster name and the shard name in the objects in storage. Instead, they
+   are derived from the storage key, and then applied after retrieving the
+   object from storage."*
+2. **On create, explicitly.** A create has no stored object, so kcp sets the
+   annotation on the incoming object before dispatching to the webhook and undoes
+   it afterwards — `SetClusterAnnotation`, called at
+   `validatingwebhook/plugin.go:132-141` and `mutatingwebhook/plugin.go:133-138`.
+
+Consequence: `oldObject` always carries the annotation (it came from storage),
+and `object` carries it on create. **The resolution rule is: read
+`kcp.io/cluster` from `request.object`, falling back to `request.oldObject`.**
+
+### Conversion also carries it — and needs it less than expected
+
+`ConversionReview` objects carry the same annotation, because kcp delegates
+every non-`apis.kcp.io` group to the stock converter
+(`pkg/server/conversion_webhook.go:60-68`), which passes the raw objects through
+untouched (`apiextensions-apiserver` fork
+`pkg/apiserver/conversion/webhook_converter.go:132-142` — no cluster handling at
+all), and the objects were annotated at storage decode.
+
+Two further findings about conversion:
+
+- **It is mandatory, not optional.** A schema with multiple versions and no
+  conversion strategy is a hard error — `apibinding_reconcile.go:792`. Cluster
+  API serves `v1beta1` and `v1beta2`, so this is forced.
+- **The client config accepts a bare URL only** —
+  `apibinding_reconcile.go:801-808` sets `ClientConfig.URL` with no service
+  reference, confirming ADR-0001's note.
+
+### G4's real surface is one handler
+
+The blanket refusal in `SetupWebhooks` is conservative, and correctly so given
+that controller-runtime silently skips an already-registered path. But the
+actual tenancy hazard is confined to handlers holding workspace-scoped state,
+and in the currently wired set that is **exactly one**:
+
+| Handler | Workspace state | Safe to serve all workspaces from one registration? |
+|---|---|---|
+| `coreadmission.Cluster` | `Client client.Reader`, `ClusterCacheReader` (`core/webhooks/admission/cluster.go:75-80`) | **No** — this is G4's actual case |
+| `coreadmission.Machine` | `struct{}` (`machine.go:52`) | Yes — stateless |
+| `infrawebhooks.DevCluster` | `struct{}` (`devcluster.go:34`) | Yes — stateless |
+| `infrawebhooks.DevMachine` | `struct{}` (`devmachine.go:31`) | Yes — stateless |
+| conversion (`/convert`) | scheme + converter registry only (`controller-runtime` `pkg/builder/webhook.go:317`, `conversion.NewWebhookHandler`) | Yes — pure function of the object |
+
+**This corrects a claim made in ADR-0002 before this spike ran**: that an
+appliance cannot serve the `v1beta1`↔`v1beta2` conversion webhook. It can.
+controller-runtime's conversion is Hub/Spoke scheme-based and holds no client,
+so it is already multi-tenant-safe. The ADR has been amended.
+
+### What G4 therefore is
+
+Not new kcp capability, and not a redesign. It is: register the webhook paths
+once for the process rather than per workspace, and give the one stateful
+handler a client resolved **per request** from the object's `kcp.io/cluster`
+annotation, looked up in the pool of engaged workspaces. The current obstacle is
+that controller-runtime's builder binds `mgr.GetClient()` at registration time —
+a wrapper that resolves per request replaces that binding.
+
+### Remaining unknowns — these belong to G4's own design, not to this spike
+
+1. **A request for a workspace that is not engaged.** Needs an explicit policy;
+   it must fail closed, because the alternative is serving a tenant with another
+   tenant's client — the exact failure Principle VIII was written about.
+2. **Requests arriving during engagement.** The webhook server is process-wide
+   and starts before any workspace engages.
+3. **A blind `PUT` whose `object` lacks the annotation.** The `oldObject`
+   fallback covers it, but the rule must be written down rather than assumed.
+4. **Not yet demonstrated by a live test.** Principle V accepts source
+   verification, and this is source verification. A test asserting the
+   annotation's presence on a real `AdmissionReview` and `ConversionReview`
+   should still be G4's first TDD cycle, since the cost of being wrong here is
+   cross-tenant bleed.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -323,3 +432,4 @@ would violate Principle IV's intent and create two contracts where one exists.
 | Telemetry cardinality (R7) | OPEN | Design task in P1 |
 | REST mapper sharing (R5) | VERIFIED as blocked | Principle II finding — raise, do not work around |
 | Environment sweep ceiling (R10) | OPEN | **Blocks harness design and the whole gate** |
+| G4 workspace resolution (R12) | VERIFIED — identity is present | Live test of a real `AdmissionReview` as G4's first TDD cycle |

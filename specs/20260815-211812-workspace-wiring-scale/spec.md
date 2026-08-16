@@ -698,12 +698,16 @@ resolutions are recorded because each changed the shape of the feature.
 
 ## Known deviations
 
-- **The admission ceiling is unchanged.** Reconciliation will scale to stated
-  per-shard capacity; admission will still be served for at most one workspace,
-  or none, until G4 exists. A deployment needing Cluster API's defaulting and
-  validation webhooks is therefore still limited to one workspace, and this
-  feature does not change that. Recorded here so the scale claim is not read as
-  a claim about the whole system. **Trigger for removal**: G4.
+- **The admission ceiling is unchanged by this feature.** Reconciliation will
+  scale to stated per-shard capacity; admission is still served for at most one
+  workspace, or none, until G4 exists. A deployment needing Cluster API's
+  defaulting and validation is therefore still limited to one workspace, and
+  this feature does not change that. Recorded here so the scale claim is not
+  read as a claim about the whole system. **Trigger for removal**: G4 — whose
+  feasibility spike has now run and found the work contained rather than
+  structural, see [R12](research.md#r12--g4-spike-can-an-admission-request-be-resolved-to-its-workspace--verified-answer-is-yes).
+  Note the ceiling is narrower than previously stated: version conversion is
+  already multi-tenant-safe, so only defaulting and validation are affected.
 - **The measurement environment may not reach stated capacity.** The harness is
   required to report honestly when it cannot host a requested workspace count
   (FR-022). Bounds this feature claims are therefore bounds at the largest count

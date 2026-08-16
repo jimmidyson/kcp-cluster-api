@@ -108,7 +108,7 @@ the standard autoscaler progression, and there is no reason to skip it here.
 **Trigger to revisit**: the signal proving accurate in operation, and a
 provisioning mechanism existing to drive.
 
-### A3 — G4 is an appliance gate, and its spike comes first
+### A3 — G4 is an appliance gate; its spike has run, and G4 is contained work
 
 An appliance is meant to be self-contained. Today `core-manager` serves
 admission for **one workspace or none** — `SetupWebhooks` refuses a second with
@@ -116,24 +116,46 @@ admission for **one workspace or none** — `SetupWebhooks` refuses a second wit
 already-registered path rather than rejecting it, which would leave the first
 workspace's handlers serving every tenant.
 
-So an appliance serving many tenants currently cannot provide, for those
-tenants:
-
-- Cluster API's defaulting,
-- Cluster API's validation,
-- the `v1beta1`↔`v1beta2` conversion webhook — which is not optional while both
-  versions are served.
-
 **An appliance that cannot do admission for its own tenants is not an
 appliance.** G4 was correctly out of scope for making reconciliation cheaper; it
-is not optional for shipping a box.
+is not optional for shipping a box. The decision taken was therefore not "build
+G4 now" but "find out what G4 costs now".
 
-The decision is not "build G4 now" but "find out what G4 costs now": spike
-whether an incoming `AdmissionReview` carries enough identity for kcp's routing
-to resolve it to its source workspace. That answer separates a contained piece
-of work from a redesign, and it is unverified today. G4 retains the human review
-checkpoint the conversion plan gives it, because a defect there is cross-tenant
-bleed rather than an ordinary bug.
+**The spike has run.** Findings are recorded in full as
+[R12](../specs/20260815-211812-workspace-wiring-scale/research.md#r12--g4-spike-can-an-admission-request-be-resolved-to-its-workspace--verified-answer-is-yes);
+the load-bearing results:
+
+- **The identity is present.** Every object decoded from storage carries a
+  `kcp.io/cluster` annotation, applied by kcp's forked apiserver at the storage
+  layer (`pkg/storage/etcd3/store_kcp.go:169-193`), and kcp explicitly sets it on
+  the incoming object for creates, where no stored object exists
+  (`SetClusterAnnotation`). So an admission request is resolvable from
+  `object`, falling back to `oldObject`.
+- **The fan-in is kcp's design.** For `APIBinding`-provided types kcp reads
+  webhook configuration from the **`APIExport`'s** workspace, not the consumer's
+  (`getSourceClusterForGroupResource`). One configuration in the provider
+  workspace serves every tenant, by design.
+- **G4's real surface is one handler.** Of the wired admission handlers only
+  `coreadmission.Cluster` holds workspace-scoped state; `Machine`, `DevCluster`
+  and `DevMachine` are empty structs, for which serving every workspace from one
+  registration is correct rather than a defect.
+
+**Correction to this ADR as originally written.** It claimed an appliance cannot
+serve the `v1beta1`↔`v1beta2` conversion webhook. **That was wrong.**
+controller-runtime's conversion handler holds only a scheme and a converter
+registry (`pkg/builder/webhook.go:317`) — it is a pure function of the object and
+is already multi-tenant-safe. Conversion *is* mandatory for Cluster API's
+multi-version schemas (`apibinding_reconcile.go:792` makes it a hard error), but
+it is not part of the gap. The gap is defaulting and validation for the one
+stateful handler.
+
+G4 is therefore **contained work, not a redesign**: register the webhook paths
+once per process, and resolve the stateful handler's client per request from the
+object annotation against the pool of engaged workspaces. It retains the human
+review checkpoint the conversion plan gives it, because a defect there is
+cross-tenant bleed rather than an ordinary bug — and because the spike's own
+remaining unknowns (an unengaged workspace, a request during engagement) are
+precisely where that bleed would occur.
 
 ## What this requires of work already under way
 
@@ -159,15 +181,26 @@ the figure for humans remains necessary; it is no longer sufficient.
   per-workspace telemetry design the scale feature is deciding.
 - Each appliance needs its own identity and RBAC provisioning, per ADR-0001's
   D5.
-- Until A3's spike resolves, the appliance's admission gap is a stated
-  limitation rather than a plan.
+- The appliance's admission gap now has a plan rather than a question mark, and
+  the gap is narrower than this ADR first stated: conversion already works for
+  every tenant; defaulting and validation for one handler do not.
+- The conversion webhook must be reachable from kcp at a **bare URL** — the
+  bound CRD's client config carries no service reference
+  (`apibinding_reconcile.go:801-808`). That is a deployment constraint on the
+  appliance: the box must expose a resolvable, CA-trusted URL to its own shard.
 
 ## Open questions
 
 1. **Can a logical cluster move between shards in kcp at all?** Decides whether
-   A1's deferral is temporary or permanent.
-2. **Does an `AdmissionReview` carry resolvable workspace identity?** A3's
-   spike. Gates the appliance roadmap.
+   A1's deferral is temporary or permanent. Note kcp v0.32.3 carries a
+   `logicalclustermigration` reconciler, so this may be closer than assumed —
+   worth reading before the next scaling decision.
+2. ~~**Does an `AdmissionReview` carry resolvable workspace identity?**~~
+   **Resolved** by A3's spike: yes, via the `kcp.io/cluster` annotation. See
+   [R12](../specs/20260815-211812-workspace-wiring-scale/research.md#r12--g4-spike-can-an-admission-request-be-resolved-to-its-workspace--verified-answer-is-yes).
+   What remains is G4's own design: the policy for a request naming a workspace
+   that is not engaged, and for requests arriving mid-engagement. Both must fail
+   closed.
 3. **What provisions an appliance?** A2 defers the mechanism deliberately. When
    it is built, it must own shard provisioning, topology, identity and rollback.
 4. **How is utilisation aggregated regionally** without the cardinality problem
