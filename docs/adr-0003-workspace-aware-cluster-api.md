@@ -212,6 +212,20 @@ better position than 2.6% of modified lines, and it applies to the builder too:
 a new `util/controller/builder_workspace.go` alongside the existing one, rather
 than making the existing type generic.
 
+**This is not hypothetical — it is already how the fork carries divergence.**
+`jimmidyson/cluster-api` branch `kcp/v1.15` is one commit over its recorded base
+`281e4e3`, and that commit is **+112 / −0**:
+
+| Path | Change |
+|---|---|
+| `controllers/external/metadata.go` | **added** — 73 lines |
+| `internal/contract/version.go` | modified — 39 added, **0 deleted** |
+
+One new file, and one modification that only appends. `DRIFT.md` can describe
+the fork's contract as "upstream at base commit plus recorded patches, nothing
+else" precisely because nothing has yet been rewritten in place. The additive
+strategy proposed here extends an existing practice rather than introducing one.
+
 **The hazard this trades into, and it must not be waved away.** A textual
 conflict is loud; a purely additive parallel implementation goes **silently
 stale**. If upstream adds a `Watches(&clusterv1.Foo{}, …)` to
