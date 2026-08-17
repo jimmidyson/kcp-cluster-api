@@ -37,6 +37,22 @@ controller reconciles through that workspace's own manager. A sweep over
 workspaces that are merely bound would measure the cheapest possible case,
 and the claim being tested is about the expensive one.
 
+Two workload shapes are measured, through one instrument and one set of
+assertions, because a single number would answer the wrong question:
+
+- **One controller, one watched type.** What the wiring and the shared cache
+  cost per workspace, with as little else in the measurement as possible.
+  Cheap enough to gate every pull request and to sweep wide.
+- **The reconciler set `cmd/core-manager` wires**, on the dev infrastructure
+  provider's in-memory backend. What a deployment actually pays. The docker
+  backend is deliberately not used: it would measure container provisioning
+  and image pulls rather than the manager, and would put a container runtime
+  on the critical path of a measurement that does not need one.
+
+The difference between the two is the point. Only the second sizes a
+deployment; only the first isolates a change to this project's own code from
+a change in what upstream's reconcilers watch.
+
 ## Out of Scope
 
 - **A performance budget.** This feature measures and asserts the design's
@@ -143,6 +159,15 @@ serving one.
   attributable to this project's own code.
 - **FR-010**: The sweep MUST be a step of the verification harness, reported
   by name, and MUST NOT be satisfiable from the test cache.
+- **FR-011**: The production reconciler set MUST be measured by wiring the
+  same function a provider binary calls, not a reimplementation of it. A
+  measurement of wiring that no deployment runs is a fiction.
+- **FR-012**: Each shape MUST be sized independently, so that widening one
+  sweep does not silently widen another whose cost per workspace is an order
+  of magnitude higher.
+- **FR-013**: Each sample MUST record how long the step that produced it
+  took. A cost that is flat in memory and rising in wall clock has still
+  failed to scale.
 
 ### Key Entities
 
@@ -170,27 +195,54 @@ serving one.
   server, and is a flat two goroutines per workspace, fully reclaimed.
 - **SC-005**: `task verify` names the sweep as a step and reports pass, fail
   or could-not-run for it.
+- **SC-006**: The reconciler set `cmd/core-manager` wires is measured through
+  its own setup function, with per-workspace figures reported the same way,
+  so the two shapes can be compared.
+- **SC-007**: The single-type shape is swept to at least 100 active
+  workspaces, and the per-workspace figures hold across that range rather
+  than being an extrapolation from a handful of points.
 
 ## Findings
 
 Recorded here because the measurement's result is part of its deliverable,
 not a separate concern.
 
-- **The O(types) claim holds.** Three watch streams served four active
-  workspaces, none addressed to a tenant's logical cluster, with no
-  per-workspace LISTs, discovery or requests of any kind.
-- **A workspace costs 12 goroutines and ~106 KiB**, exactly linear in the
-  workspace count, for one controller watching one type.
-- **Two goroutines per departed workspace per watched type are not
-  reclaimed.** controller-runtime's `Kind` source adds an event handler to
-  the informer it watches through and never removes it; because that informer
-  belongs to the shared wildcard cache rather than to the workspace, the
-  handler outlives the workspace. This is the one part of user story 3 that
-  does not hold, it accumulates with churn rather than with the workspace
-  count, and it is now measured on every run and asserted not to grow. Fixing
-  it means interposing on the cache handed to a `SetupFunc` the way `Add` is
-  already interposed on — a change to this project's own seam, deferred with
-  its trigger recorded in the design page.
+- **The O(types) claim holds, in both shapes.** Three watch streams served a
+  hundred active single-type workspaces; eight served the full reconciler set.
+  None in either sweep was addressed to a tenant's logical cluster, and
+  neither shape paid a per-workspace LIST.
+- **A workspace costs 12 goroutines** for one controller on one type, and
+  **140** for the reconciler set `cmd/core-manager` wires. Both exactly
+  linear — the single-type figure across a hundred points, with no bend and no
+  rise in engagement time.
+- **The production shape pays about six discovery requests per workspace**,
+  for the `RESTMapper` the provider builds per engaged workspace. The
+  single-type shape pays none: it resolves too few types for the lazy mapper
+  to do any work.
+- **Two goroutines per event-handler registration are not reclaimed** — 2 per
+  departed workspace in the single-type shape, 30 in the production one.
+  controller-runtime's `Kind` source adds an event handler to the informer it
+  watches through and never removes it; because that informer belongs to the
+  shared wildcard cache rather than to the workspace, the handler outlives the
+  workspace. The unit is the registration, not the type: several controllers
+  watch the same type and each registers its own handler. This is the one part
+  of user story 3 that does not hold, it accumulates with churn rather than
+  with the workspace count, and it is now measured on every run and asserted
+  not to grow. Fixing it means interposing on the cache handed to a
+  `SetupFunc` the way `Add` is already interposed on — a change to this
+  project's own seam, deferred with its trigger recorded in the design page.
+- **Discovery is the one quantity that is neither flat nor linear.** In the
+  production shape it cost about 5.5 requests per workspace over the first
+  five workspaces and about 10.8 over the last five of twenty. It is small in
+  absolute terms (172 requests to serve twenty workspaces) and it is recorded
+  on every run, but it is the one curve that would matter at a much larger
+  workspace count, and its mechanism has not been confirmed against source.
+- **A stream must be counted by what it watches, not by how it was opened.**
+  The hundred-workspace run outlived the shard's watch timeouts, and each
+  informer re-opened its stream as a plain watch where it had begun as a
+  streaming list. Counting requests made that read as per-workspace watch
+  growth when it was elapsed time. The instrument now counts distinct
+  cluster-and-resource pairs, and a unit test holds it there.
 
 ## Known deviations
 

@@ -102,10 +102,15 @@ cache/transport per workspace.
 
 > **Measured, and it holds.** Both halves of that paragraph are now
 > demonstrated rather than argued, against a real kcp server, by
-> `task test:sweep` (`test/integration/sweep`). Four active workspaces were
-> served by the same three watch streams as one, none of them addressed to a
-> tenant's logical cluster, with no per-workspace LISTs, discovery or extra
-> requests of any kind. See
+> `task test:sweep` (`test/integration/sweep`), in two shapes: one controller
+> on one type, and the whole reconciler set `cmd/core-manager` wires on the
+> dev provider's in-memory backend.
+>
+> A hundred active workspaces were served by the same three watch streams as
+> one, and the full reconciler set by the same eight; none in either sweep was
+> addressed to a tenant's logical cluster, and neither shape paid a
+> per-workspace LIST. Engaging the hundredth workspace took no longer than the
+> first. See
 > [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
 > for the numbers, the method, and the one thing that does *not* come back
 > when a workspace leaves.
@@ -141,12 +146,20 @@ rather than assumed:
   (workqueue, goroutines, rate limiter) once `SetupWithManager` runs
   against its `GetManager()` result — cheap relative to a duplicated
   cache, but not free; matters mainly at very high workspace counts.
-  **Now quantified**: 12 goroutines and ~106 KiB of retained heap per active
-  workspace, for one controller watching one type, exactly linear in W. The
-  same sweep found the one cost that is not reclaimed on disengagement —
-  two goroutines per departed workspace per watched type, retained by an
-  event handler controller-runtime's `Kind` source never removes — which
-  accumulates with workspace *churn* rather than with W.
+  **Now quantified**, exactly linear in W in both cases: 12 goroutines per
+  active workspace for one controller watching one type (measured to W=100),
+  and **140 goroutines** for the five controllers `SetupReconcilers` wires —
+  ClusterCache, Cluster, Machine, DevCluster, DevMachine — plus about six
+  discovery requests per workspace for the `RESTMapper` the provider builds
+  per engaged workspace. That is the number that decides how many workspaces
+  one replica should serve.
+
+  The same sweeps found the one cost that is not reclaimed on disengagement:
+  **two goroutines per event-handler registration** — 2 for the single-type
+  shape, 30 for the production one — retained by a handler
+  controller-runtime's `Kind` source adds to the shared wildcard cache's
+  informer and never removes. It accumulates with workspace *churn* rather
+  than with W, and is released when the wildcard cache stops.
 - **Library maturity.** `kcp-dev/multicluster-provider` is explicitly
   documented as experimental and pre-1.0 (currently v0.8.x). Pinning
   production multi-tenancy on it is an adoption risk to weigh

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTrafficOf(t *testing.T) {
@@ -98,6 +99,23 @@ func TestPerWorkspace(t *testing.T) {
 				t.Errorf("PerWorkspace() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A sweep that is flat in memory and rising in wall clock has still failed to
+// scale, so every sample carries how long the step that produced it took.
+func TestAddTimesEachStep(t *testing.T) {
+	report := &Report{}
+
+	report.Add(Sample{Label: "first"})
+	time.Sleep(10 * time.Millisecond)
+	report.Add(Sample{Label: "second"})
+
+	if got := report.Samples[0].StepSeconds; got != 0 {
+		t.Errorf("the first sample reports a step of %v, want 0: there was no previous sample to time against", got)
+	}
+	if got := report.Samples[1].StepSeconds; got < 0.01 {
+		t.Errorf("the second sample reports a step of %v, want at least the 10ms that elapsed", got)
 	}
 }
 

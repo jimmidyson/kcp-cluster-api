@@ -31,9 +31,24 @@ limitations under the License.
 // had a number.
 //
 // The workspaces here are active, not merely bound: each one holds objects
-// that a real controller reconciles through the workspace's own manager. A
-// sweep over idle workspaces would measure the cheapest possible case and
-// prove nothing about the one that matters.
+// that real controllers reconcile through the workspace's own manager. A sweep
+// over idle workspaces would measure the cheapest possible case and prove
+// nothing about the one that matters.
+//
+// # Two shapes, one harness
+//
+// This file is the harness. The shapes it sweeps live beside it:
+//
+//   - TestActiveWorkspaceSweep, in single_type_sweep_test.go: one controller
+//     watching one type. The floor — what the wiring itself costs, with as
+//     little else in the measurement as possible. Cheap enough to gate every
+//     pull request.
+//   - TestCoreReconcilerWorkspaceSweep, in coremanager_sweep_test.go: the real
+//     reconciler set cmd/core-manager wires, on the dev provider's in-memory
+//     backend. What a deployment actually pays.
+//
+// Both go through [runSweep], so the two are comparable: same instrument, same
+// settling rules, same assertions, different workload.
 package sweep_test
 
 import (
@@ -46,25 +61,17 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr/testr"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
@@ -79,38 +86,13 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 const (
-	exportName  = "cluster-api-sweep"
 	bindingName = "cluster-api-sweep"
 
-	// defaultWorkspaces is how far the sweep goes when nothing says otherwise.
-	// Four points are enough to tell a flat curve from a rising one, and keep
-	// this inside the time an ordinary pull request run can afford. A
-	// quantifying run sets SWEEP_WORKSPACES higher; see docs/site's
-	// workspace resource usage page.
-	defaultWorkspaces = 4
-
-	// defaultObjects is how many Cluster objects each workspace holds. The
-	// point is that reconcilers run and workqueues have something in them, not
-	// to measure throughput.
-	defaultObjects = 5
-
-	// watchedTypes is how many types each workspace's controllers watch. One,
-	// here: the sweep wires a single Cluster controller. Retained-goroutine
-	// arithmetic is per watched type, so this is a factor rather than a
-	// comment.
-	watchedTypes = 1
-
-	// retainedGoroutinesPerWatchedType is what a departing workspace does not
-	// give back, per type it watched, measured rather than budgeted. See the
-	// assertion that uses it for why it is not zero.
-	retainedGoroutinesPerWatchedType = 2
-
 	pollInterval = 250 * time.Millisecond
-	pollTimeout  = 120 * time.Second
+	pollTimeout  = 180 * time.Second
 
 	// settleQuiet is how long the goroutine count must hold still before a
 	// sample is taken. Engaging a workspace keeps starting things well after
@@ -118,28 +100,77 @@ const (
 	// streams open — so a sample taken the instant Engage returns attributes
 	// the tail of one workspace's cost to the next one.
 	settleQuiet   = 2 * time.Second
-	settleTimeout = 60 * time.Second
+	settleTimeout = 120 * time.Second
+
+	// retainedGoroutinesPerEventHandler is what one event-handler registration
+	// costs after the workspace that made it has gone: the processorListener
+	// run/pop pair kcp's informers start per handler. Measured rather than
+	// budgeted; see the assertion in runSweep for why it is not zero.
+	//
+	// The unit is the registration, not the type. Several controllers commonly
+	// watch the same type — each registers its own handler on the one shared
+	// informer — which is why a shape's retention is stated as its own
+	// constant rather than derived from how many types it watches.
+	retainedGoroutinesPerEventHandler = 2
 )
 
-// coreCRDs is the smallest set that makes a workspace active: one type to
-// publish, bind, create objects of, and reconcile.
-var coreCRDs = []string{"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml"}
+// sweepConfig is one workload shape to measure. Everything that differs
+// between the two sweeps is here; everything that must not differ — the
+// instrument, the settling, the assertions — is in [runSweep].
+type sweepConfig struct {
+	// title and reportName name the run and the files it writes to bin/.
+	title      string
+	reportName string
+	// exportName is the APIExport this sweep publishes and binds.
+	exportName string
 
-// keepOneVersion trims the published CRD to v1beta2 alone: a multi-version CRD
-// needs a conversion webhook before kcp accepts it as an APIResourceSchema,
-// and this sweep deliberately serves no webhooks — they are single-workspace
-// by construction (FR-008) and so have nothing to say about a curve.
-func keepOneVersion(crd *apiextensionsv1.CustomResourceDefinition) {
-	if crd.Spec.Group != clusterv1.GroupVersion.Group {
-		return
-	}
-	kept := crd.Spec.Versions[:0]
-	for _, v := range crd.Spec.Versions {
-		if v.Name == clusterv1.GroupVersion.Version {
-			kept = append(kept, v)
-		}
-	}
-	crd.Spec.Versions = kept
+	// workspacesEnv and objectsEnv are the environment variables that size
+	// this sweep, named per shape so that widening the cheap sweep does not
+	// silently widen the expensive one.
+	workspacesEnv     string
+	objectsEnv        string
+	defaultWorkspaces int
+	defaultObjects    int
+
+	// watchedTypes is how many published types one workspace's controllers
+	// watch. Reported, so a per-workspace figure can be read against the size
+	// of the workload that produced it.
+	watchedTypes int
+	// eventHandlers is how many event-handler registrations one workspace's
+	// controllers make: the number that decides how much a departure fails to
+	// give back. It is usually larger than watchedTypes, because several
+	// controllers watch the same type. Both are declared rather than inferred
+	// — the assertion is what catches a shape whose wiring has changed
+	// underneath the number.
+	eventHandlers int
+	// facts describing this shape, recorded with the numbers.
+	facts map[string]string
+
+	// scheme is used for the manager, the provider and the fixture clients.
+	scheme *k8sruntime.Scheme
+	// crds resolves the CRD manifests to publish.
+	crds func(t *testing.T) []string
+	// crdTransform is applied to each CRD before it is published.
+	crdTransform func(*apiextensionsv1.CustomResourceDefinition)
+
+	// newSetup builds the per-workspace wiring under measurement. It is called
+	// once, before the manager starts, so anything process-global it needs is
+	// installed exactly once.
+	newSetup func(t *testing.T, ctx context.Context) providerwiring.SetupFunc
+
+	// activate writes the objects that make one workspace active, and active
+	// reports whether that workspace's controllers have finished acting on
+	// them. Both use the workspace's own client rather than the manager's, so
+	// that what the counter sees is the manager's traffic alone.
+	activate func(t *testing.T, ctx context.Context, tn *tenant, objects int)
+	active   func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool
+}
+
+// tenant is one workspace in the sweep: its logical cluster name, and a client
+// that talks to it directly rather than through the manager.
+type tenant struct {
+	name         multicluster.ClusterName
+	directClient client.Client
 }
 
 func must(t *testing.T, err error) {
@@ -160,35 +191,6 @@ func envInt(t *testing.T, name string, fallback int) int {
 		t.Fatalf("%s=%q is not a positive integer", name, raw)
 	}
 	return value
-}
-
-// reconcileLog records which objects each workspace's controller has
-// reconciled. It is how the sweep knows a workspace is active rather than
-// merely bound: until a workspace's own controller has reconciled the objects
-// written into that workspace, the sample would be of a process that has not
-// yet started doing the work being measured.
-type reconcileLog struct {
-	mu   sync.Mutex
-	seen map[multicluster.ClusterName]map[string]struct{}
-}
-
-func newReconcileLog() *reconcileLog {
-	return &reconcileLog{seen: map[multicluster.ClusterName]map[string]struct{}{}}
-}
-
-func (l *reconcileLog) record(workspace multicluster.ClusterName, name string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.seen[workspace] == nil {
-		l.seen[workspace] = map[string]struct{}{}
-	}
-	l.seen[workspace][name] = struct{}{}
-}
-
-func (l *reconcileLog) count(workspace multicluster.ClusterName) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.seen[workspace])
 }
 
 func eventually(t *testing.T, describe string, condition func() bool) {
@@ -226,7 +228,7 @@ func sample(t *testing.T, report *sweep.Report, counter *sweep.Counter, phase sw
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("creating the profile directory %s: %v", dir, err)
 	}
-	name := filepath.Join(dir, fmt.Sprintf("goroutines-%02d-%s.txt", len(report.Samples), strings.ReplaceAll(label, " ", "-")))
+	name := filepath.Join(dir, fmt.Sprintf("goroutines-%03d-%s.txt", len(report.Samples), strings.ReplaceAll(label, " ", "-")))
 	f, err := os.Create(name) //nolint:gosec // the path is developer-supplied, not user input.
 	if err != nil {
 		t.Fatalf("creating %s: %v", name, err)
@@ -248,84 +250,87 @@ func settle(t *testing.T, what string) {
 	}
 }
 
-// tenant is one workspace in the sweep: its logical cluster name, and a
-// client that talks to it directly rather than through the manager.
-type tenant struct {
-	name         multicluster.ClusterName
-	directClient client.Client
+// keepStorageVersion trims a CRD to the single version kcp will store.
+//
+// A multi-version CRD needs a conversion strategy before kcp accepts it as an
+// APIResourceSchema, and a conversion strategy means a webhook server. These
+// sweeps deliberately serve no webhooks: webhook wiring is single-workspace by
+// construction (the specification's FR-008), so it has nothing to say about
+// how cost scales with workspace count, and standing a server up would add a
+// fixed cost to every measurement for no measured claim.
+func keepStorageVersion(crd *apiextensionsv1.CustomResourceDefinition) {
+	kept := crd.Spec.Versions[:0]
+	for _, v := range crd.Spec.Versions {
+		if v.Storage {
+			kept = append(kept, v)
+		}
+	}
+	crd.Spec.Versions = kept
 }
 
-// TestActiveWorkspaceSweep is the measurement. It engages workspaces one at a
-// time, makes each one active, samples the process after every step, then
-// unbinds them one at a time and samples again.
+// runSweep engages workspaces one at a time, makes each one active, samples
+// the process after every step, then unbinds them one at a time and samples
+// again.
 //
 // What it asserts is only what the design claims. The rest — heap, goroutines
-// per workspace, discovery traffic — is reported rather than bounded, because
-// no requirement states a budget for them and inventing one here would make
-// this test fail for a reason nobody had agreed on. The numbers are the
-// deliverable; see bin/sweep-report.md after a run.
-func TestActiveWorkspaceSweep(t *testing.T) {
+// per workspace, step times — is reported rather than bounded, because no
+// requirement states a budget for them and inventing one here would make a
+// test fail for a reason nobody had agreed on. The numbers are the
+// deliverable; see bin/<reportName>.md after a run.
+func runSweep(t *testing.T, cfg sweepConfig) {
 	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: false}))
 	ctx := t.Context()
 
-	workspaceCount := envInt(t, "SWEEP_WORKSPACES", defaultWorkspaces)
-	objectCount := envInt(t, "SWEEP_OBJECTS", defaultObjects)
+	workspaceCount := envInt(t, cfg.workspacesEnv, cfg.defaultWorkspaces)
+	objectCount := envInt(t, cfg.objectsEnv, cfg.defaultObjects)
 
-	report := &sweep.Report{Title: "Active workspace sweep"}
+	report := &sweep.Report{Title: cfg.title}
+	for key, value := range cfg.facts {
+		report.AddFact(key, value)
+	}
 	report.AddFact("workspaces", fmt.Sprint(workspaceCount))
 	report.AddFact("objectsPerWorkspace", fmt.Sprint(objectCount))
-	report.AddFact("reconciledTypes", "cluster.x-k8s.io/clusters")
-	report.AddFact("watchedTypesPerWorkspace", fmt.Sprint(watchedTypes))
+	report.AddFact("watchedTypesPerWorkspace", fmt.Sprint(cfg.watchedTypes))
+	report.AddFact("eventHandlersPerWorkspace", fmt.Sprint(cfg.eventHandlers))
 	report.AddFact("goMaxProcs", fmt.Sprint(runtime.GOMAXPROCS(0)))
 	report.AddFact("goVersion", runtime.Version())
 	t.Cleanup(func() {
 		t.Logf("\n%s", report.Markdown())
 		dir := reportDir(t)
-		if err := report.Write(dir, "sweep-report"); err != nil {
+		if err := report.Write(dir, cfg.reportName); err != nil {
 			t.Errorf("writing the sweep report: %v", err)
 			return
 		}
-		t.Logf("sweep report written to %s", filepath.Join(dir, "sweep-report.md"))
+		t.Logf("sweep report written to %s", filepath.Join(dir, cfg.reportName+".md"))
 	})
-
-	crdPaths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreCRDs...)
-	must(t, err)
 
 	_, server := kcpenvtest.EnvironmentAndServer(t, "")
 	baseCfg := server.BaseConfig(t)
-
-	scheme := k8sruntime.NewScheme()
-	must(t, clientgoscheme.AddToScheme(scheme))
-	must(t, apiextensionsv1.AddToScheme(scheme))
-	must(t, apisv1alpha1.AddToScheme(scheme))
-	must(t, clusterv1.AddToScheme(scheme))
 
 	// Fixture traffic is deliberately not counted. The counter goes on the
 	// config the provider and the manager are built from, and nowhere else, so
 	// that what it reports is what serving workspaces costs rather than what
 	// this test's own setup costs.
 	rootCfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), logicalcluster.NewPath("root"))
-	rootClient, err := client.New(rootCfg, client.Options{Scheme: scheme})
+	rootClient, err := client.New(rootCfg, client.Options{Scheme: cfg.scheme})
 	must(t, err)
 
 	must(t, kcpfixtures.PublishAPIExport(ctx, rootClient, kcpfixtures.PublishAPIExportOptions{
-		ExportName:   exportName,
+		ExportName:   cfg.exportName,
 		SchemaPrefix: "v1",
-		CRDPaths:     crdPaths,
-		CRDTransform: keepOneVersion,
+		CRDPaths:     cfg.crds(t),
+		CRDTransform: cfg.crdTransform,
 	}))
 
-	// --- The workspaces. All are created and bound up front, because creating
-	// a workspace is kcp's cost rather than the manager's, and paying it in
-	// the middle of the sweep would show up as the manager's.
-	//
-	// Binding is what makes a workspace engage, so that is done one at a time
-	// below.
+	// --- The workspaces. All are created up front, because creating a
+	// workspace is kcp's cost rather than the manager's, and paying it in the
+	// middle of the sweep would show up as the manager's. Binding is what
+	// makes a workspace engage, so that is done one at a time below.
 	tenants := make([]*tenant, 0, workspaceCount)
 	for range workspaceCount {
 		wsPath, ws := kcptesting.NewWorkspaceFixture(t, server, logicalcluster.NewPath("root"))
-		cfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), wsPath)
-		directClient, err := client.New(cfg, client.Options{Scheme: scheme})
+		wsCfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), wsPath)
+		directClient, err := client.New(wsCfg, client.Options{Scheme: cfg.scheme})
 		must(t, err)
 		tenants = append(tenants, &tenant{
 			name:         multicluster.ClusterName(ws.Spec.Cluster),
@@ -337,37 +342,17 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 	counter := sweep.NewCounter()
 	countedCfg := counter.WrapConfig(rootCfg)
 
-	provider, err := apiexport.New(countedCfg, exportName, apiexport.Options{Scheme: scheme})
+	provider, err := apiexport.New(countedCfg, cfg.exportName, apiexport.Options{Scheme: cfg.scheme})
 	must(t, err)
 
 	mgr, err := mcmanager.New(countedCfg, provider, ctrl.Options{
-		Scheme:                 scheme,
+		Scheme:                 cfg.scheme,
 		HealthProbeBindAddress: "0",
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 	})
 	must(t, err)
 
-	reconciled := newReconcileLog()
-	setup := func(_ context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
-		// A real controller, wired the way a provider binary wires one: its
-		// watch, its workqueue, its rate limiter and its goroutines are what
-		// the per-workspace cost in the report is made of.
-		//
-		// The name is per workspace because controller-runtime records
-		// controller names in a process-global set that is never emptied, and
-		// SkipNameValidation is set because that set is never emptied on
-		// disengagement either — a re-engaged workspace would otherwise fail.
-		return builder.ControllerManagedBy(wsMgr).
-			For(&clusterv1.Cluster{}).
-			Named(fmt.Sprintf("cluster-%s", workspace)).
-			WithOptions(controller.Options{SkipNameValidation: ptr.To(true)}).
-			Complete(reconcile.Func(func(_ context.Context, req reconcile.Request) (reconcile.Result, error) {
-				reconciled.record(workspace, req.Name)
-				return reconcile.Result{}, nil
-			}))
-	}
-
-	wiring, err := providerwiring.AddToManager(mgr, setup, providerwiring.Options{
+	wiring, err := providerwiring.AddToManager(mgr, cfg.newSetup(t, ctx), providerwiring.Options{
 		Log: ctrl.Log.WithName("providerwiring"),
 	})
 	must(t, err)
@@ -396,10 +381,10 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 		must(t, kcpfixtures.BindExport(ctx, tn.directClient, kcpfixtures.BindExportOptions{
 			BindingName: bindingName,
 			ExportPath:  "root",
-			ExportName:  exportName,
+			ExportName:  cfg.exportName,
 		}))
 		if i == 0 {
-			must(t, kcpfixtures.WaitForAPIExportEndpointSlice(ctx, rootClient, exportName, 60*time.Second))
+			must(t, kcpfixtures.WaitForAPIExportEndpointSlice(ctx, rootClient, cfg.exportName, 60*time.Second))
 		}
 
 		eventually(t, fmt.Sprintf("workspace %s to be engaged", tn.name), func() bool {
@@ -408,24 +393,9 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 		settle(t, fmt.Sprintf("with %d workspaces engaged and idle", count))
 		sample(t, report, counter, sweep.PhaseEngaged, fmt.Sprintf("%d bound, idle", count), count)
 
-		// Now make it active. The objects are written by a client of this
-		// test's own, not by the manager's, so that what the manager does with
-		// them is all that the counter sees.
-		for n := range objectCount {
-			err := tn.directClient.Create(ctx, &clusterv1.Cluster{
-				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("sweep-%02d", n), Namespace: "default"},
-				// Every field of ClusterSpec is optional; paused makes the
-				// object valid without asking anything of a provider that is
-				// not wired here.
-				Spec: clusterv1.ClusterSpec{Paused: ptr.To(true)},
-			})
-			if err != nil && !apierrors.IsAlreadyExists(err) {
-				t.Fatalf("creating Cluster %d in workspace %s: %v", n, tn.name, err)
-			}
-		}
-
-		eventually(t, fmt.Sprintf("workspace %s to reconcile its %d Clusters", tn.name, objectCount), func() bool {
-			return reconciled.count(tn.name) == objectCount
+		cfg.activate(t, ctx, tn, objectCount)
+		eventually(t, fmt.Sprintf("workspace %s to reconcile its %d object set(s)", tn.name, objectCount), func() bool {
+			return cfg.active(t, ctx, tn, objectCount)
 		})
 		settle(t, fmt.Sprintf("with %d workspaces active", count))
 		sample(t, report, counter, sweep.PhaseActive, fmt.Sprintf("%d active", count), count)
@@ -445,6 +415,8 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 		sweep.PerWorkspace(active, sweep.Heap)))
 	report.AddFact("discoveryRequestsPerWorkspace", fmt.Sprintf("%.1f",
 		sweep.PerWorkspace(active, func(s sweep.Sample) float64 { return float64(s.Discovery) })))
+	report.AddFact("secondsPerWorkspaceEngagement", fmt.Sprintf("%.1f",
+		sweep.PerWorkspace(active, func(s sweep.Sample) float64 { return s.StepSeconds })))
 
 	// The conversion plan's central claim: watches are O(types), not
 	// O(types × workspaces). A slope of zero is what that means; anything
@@ -468,7 +440,7 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 	for _, tn := range tenants {
 		tenantNames = append(tenantNames, string(tn.name))
 	}
-	if perTenant := peak.Counts.Streams(sweep.And(sweep.IsWatch, sweep.InClusters(tenantNames...))); perTenant > 0 {
+	if perTenant := peak.Counts.DistinctStreams(sweep.And(sweep.IsWatch, sweep.InClusters(tenantNames...))); perTenant > 0 {
 		t.Errorf("%d watch streams are addressed to a tenant's own logical cluster rather than to /clusters/*: "+
 			"every tenant read is meant to come from the one wildcard cache", perTenant)
 	}
@@ -516,16 +488,12 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 		// The assertion is that this does not get worse. The target is zero;
 		// see the workspace resource usage design page for what reaching it
 		// would take.
-		if budget := float64(retainedGoroutinesPerWatchedType * watchedTypes); perDeparture > budget {
+		if budget := float64(retainedGoroutinesPerEventHandler * cfg.eventHandlers); perDeparture > budget {
 			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f already known to be retained "+
-				"(%d watched type(s) × %d): something has started keeping more per workspace than the shared informer's event handler",
-				perDeparture, budget, watchedTypes, retainedGoroutinesPerWatchedType)
+				"(%d event-handler registration(s) × %d): this shape is now keeping more per workspace than its handlers on the shared informers account for",
+				perDeparture, budget, cfg.eventHandlers, retainedGoroutinesPerEventHandler)
 		}
 	}
-
-	// The inventory behind the headline: every stream the process held at its
-	// widest, with tenant names made readable so two runs can be compared.
-	report.Streams = sweep.Inventory(peak.Counts, sweep.IsWatch, tenantRenamer(tenants))
 
 	// Serving no workspaces must not cost more than serving one did. This is
 	// the leak assertion, and it is stated as a comparison rather than as an
@@ -546,6 +514,10 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 	if peak.WatchStreams == 0 || math.IsNaN(watchesPerWorkspace) {
 		t.Fatalf("no watch traffic was observed (%+v): the counter is not on the config the manager uses", peak.Traffic)
 	}
+
+	// The inventory behind the headline: every stream the process held at its
+	// widest, with tenant names made readable so two runs can be compared.
+	report.Streams = sweep.Inventory(peak.Counts, sweep.IsWatch, tenantRenamer(tenants))
 }
 
 // retainedPerDeparture compares the teardown with the way up, at the same
@@ -589,7 +561,7 @@ func tenantRenamer(tenants []*tenant) func(string) string {
 	}
 }
 
-// reportDir is where the sweep writes its report: bin/, alongside the
+// reportDir is where a sweep writes its report: bin/, alongside the
 // verification result, because that is where this repository already puts
 // machine-readable output meant to outlive a run.
 //

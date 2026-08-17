@@ -156,6 +156,30 @@ func TestCountsDistinguishStreamsFromRepeats(t *testing.T) {
 	}
 }
 
+// The artifact this exists to prevent was real: a hundred-workspace sweep ran
+// long enough for kcp to close the informers' watches, each of which re-opened
+// as a plain watch where it had started as a streaming list — and the headline
+// "watch streams" figure rose, describing elapsed time as though it were
+// per-workspace growth.
+func TestDistinctStreamsIgnoresHowAWatchWasOpened(t *testing.T) {
+	clusters := "cluster.x-k8s.io/clusters"
+	counts := Counts{
+		{Verb: VerbWatchList, Cluster: WildcardCluster, Resource: clusters}:                     1,
+		{Verb: VerbWatch, Cluster: WildcardCluster, Resource: clusters}:                         3,
+		{Verb: VerbWatchList, Cluster: "root", Resource: "apis.kcp.io/apiexportendpointslices"}: 1,
+	}
+
+	if got, want := counts.DistinctStreams(IsWatch), 2; got != want {
+		t.Errorf("DistinctStreams(IsWatch) = %d, want %d: one informer per cluster-and-resource, however it opened its stream", got, want)
+	}
+	if got, want := counts.Streams(IsWatch), 3; got != want {
+		t.Errorf("Streams(IsWatch) = %d, want %d: Streams still counts requests, which is what makes it the wrong metric here", got, want)
+	}
+	if got, want := counts.DistinctStreams(And(IsWatch, IsWildcard)), 1; got != want {
+		t.Errorf("DistinctStreams(wildcard watches) = %d, want %d", got, want)
+	}
+}
+
 func TestCountsSub(t *testing.T) {
 	a := Request{Verb: VerbList, Cluster: "a", Resource: "g/rs"}
 	b := Request{Verb: VerbGet, Cluster: "b", Resource: "g/rs"}

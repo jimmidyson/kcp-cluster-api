@@ -70,9 +70,9 @@ type Traffic struct {
 // TrafficOf derives the reported quantities from raw counts.
 func TrafficOf(counts Counts) Traffic {
 	return Traffic{
-		WatchStreams:         counts.Streams(IsWatch),
-		WildcardWatchStreams: counts.Streams(And(IsWatch, IsWildcard)),
-		ScopedWatchStreams:   counts.Streams(And(IsWatch, IsWorkspaceScoped)),
+		WatchStreams:         counts.DistinctStreams(IsWatch),
+		WildcardWatchStreams: counts.DistinctStreams(And(IsWatch, IsWildcard)),
+		ScopedWatchStreams:   counts.DistinctStreams(And(IsWatch, IsWorkspaceScoped)),
 		Lists:                counts.Total(IsList),
 		Discovery:            counts.Total(IsDiscovery),
 		Total:                counts.Total(Any),
@@ -95,6 +95,14 @@ type Sample struct {
 	Goroutines int    `json:"goroutines"`
 	HeapBytes  uint64 `json:"heapBytes"`
 	Traffic    `json:"traffic"`
+
+	// StepSeconds is the wall clock from the previous sample to this one,
+	// filled in by [Report.Add]. It is not a benchmark — it includes the
+	// settling wait, and the work between two samples is whatever the sweep
+	// did — but it answers a question the other figures cannot: whether
+	// engaging the hundredth workspace takes longer than engaging the first.
+	// A cost that is flat in memory and rising in time still fails to scale.
+	StepSeconds float64 `json:"stepSeconds"`
 
 	// Counts is the classification the traffic figures were derived from. It
 	// is kept for assertions that need more detail than the summary, and is
@@ -267,6 +275,11 @@ type Report struct {
 	// evidence behind the headline number, so that "watches did not multiply"
 	// can be checked rather than believed.
 	Streams []Stream `json:"streams,omitempty"`
+
+	// lastAdd is when the previous sample was recorded, so each one can carry
+	// how long the step that produced it took. Unexported: it is bookkeeping,
+	// not a measurement, and has no place in the serialised report.
+	lastAdd time.Time
 }
 
 // AddFact records one condition of the run.
@@ -277,8 +290,16 @@ func (r *Report) AddFact(key, value string) {
 	r.Facts[key] = value
 }
 
-// Add appends a sample.
+// Add appends a sample, timing it against the previous one.
+//
+// The first sample has no step to time and reports zero, rather than the age
+// of the report, which would be the harness's own startup.
 func (r *Report) Add(s Sample) {
+	now := time.Now()
+	if !r.lastAdd.IsZero() {
+		s.StepSeconds = now.Sub(r.lastAdd).Seconds()
+	}
+	r.lastAdd = now
 	r.Samples = append(r.Samples, s)
 }
 
@@ -329,13 +350,13 @@ func (r *Report) Markdown() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("| Step | Workspaces | Goroutines | Heap | Watch streams (wildcard/scoped) | Lists | Discovery | Requests |\n")
-	b.WriteString("|---|--:|--:|--:|--:|--:|--:|--:|\n")
+	b.WriteString("| Step | Workspaces | Goroutines | Heap | Watch streams (wildcard/scoped) | Lists | Discovery | Requests | Step time |\n")
+	b.WriteString("|---|--:|--:|--:|--:|--:|--:|--:|--:|\n")
 	for _, s := range r.Samples {
-		fmt.Fprintf(&b, "| %s | %d | %d | %s | %d (%d/%d) | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %s | %d (%d/%d) | %d | %d | %d | %.1fs |\n",
 			s.Label, s.Workspaces, s.Goroutines, humanBytes(s.HeapBytes),
 			s.WatchStreams, s.WildcardWatchStreams, s.ScopedWatchStreams,
-			s.Lists, s.Discovery, s.Total)
+			s.Lists, s.Discovery, s.Total, s.StepSeconds)
 	}
 
 	if len(r.Streams) > 0 {

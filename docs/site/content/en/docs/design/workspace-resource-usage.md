@@ -5,8 +5,8 @@ weight: 27
 ---
 
 One `core-manager` process serves many workspaces. Whether that scales is a
-question about a curve: what does one more active workspace add, and what
-does a departing one give back?
+question about a curve: what does one more active workspace add, and what does
+a departing one give back?
 
 The [conversion plan][plan]'s "Scalability" section answers it with three
 claims. Two were argued from `multicluster-provider`'s source, which is what
@@ -15,158 +15,193 @@ question. This one it does not settle — a type signature cannot show you a
 slope — and the third claim ("cheap relative to a duplicated cache, but not
 free") had no number in it at all.
 
-This page is the measurement. The instrument is `internal/sweep`; the sweep
-itself is `test/integration/sweep`, which runs against a real kcp server.
+This page is the measurement. The instrument is `internal/sweep`; the sweeps
+are in `test/integration/sweep`, against a real kcp server.
+
+## Two shapes, because one number would answer the wrong question
+
+| Shape | What it wires | What it tells you |
+|---|---|---|
+| **Single type** | one controller watching `Cluster`, reconciler does nothing but record that it ran | what the wiring and the shared cache cost per workspace |
+| **Core reconciler set** | `coremanager.SetupReconcilers` — ClusterCache, `Cluster`, `Machine`, `DevCluster`, `DevMachine` — on the dev provider's in-memory backend | what a deployment actually pays |
+
+Both run through the same harness: same instrument, same settling rules, same
+assertions, different workload. The difference between them is therefore
+attributable. The first isolates a change in this project's own code from a
+change in what upstream's reconcilers watch; only the second sizes a
+deployment.
+
+The core shape uses the dev provider's **in-memory** backend deliberately. The
+docker backend provisions real containers per cluster, which would measure
+image pulls and Docker rather than the manager, put a container runtime on the
+critical path of a measurement that does not need one, and take minutes per
+workspace. The in-memory backend runs the same reconcilers through the same
+code paths against an in-process workload cluster, so what is measured is the
+controller machinery per workspace — the thing that multiplies.
 
 ## What "active" means here
 
-Every workspace in the sweep is bound, engaged, and holds objects that a real
-controller — built with controller-runtime's ordinary builder, against that
-workspace's own manager — has reconciled. A sweep over workspaces that were
-merely bound would measure the cheapest possible case and prove nothing about
-the one that matters.
+Every workspace in a sweep is bound, engaged, and holds objects that its
+controllers have demonstrably acted on. In the single-type shape that is the
+reconciler recording each object; in the core shape it is `Cluster`
+`status.initialization.infrastructureProvisioned` becoming true, which means
+the `Cluster` reconciler resolved a contract-versioned reference, the
+`DevCluster` reconciler acted on it, and the status landed back in that
+workspace.
 
-Each measurement point is taken after the goroutine count has held still for
-two seconds and the garbage collector has run twice. A sweep that cannot
-settle fails rather than reporting a number.
+Each sample is taken after the goroutine count has held still for two seconds
+and the garbage collector has run twice. A sweep that cannot settle fails
+rather than reporting a number.
 
-## What was measured
+## Single type: 100 workspaces
 
-Four active workspaces, five `Cluster` objects each, one watched type,
-`GOMAXPROCS=4`, Go 1.26.3, kcp v0.32.3. Reproduce with `task test:sweep`;
-the report lands in `bin/sweep-report.md` and `bin/sweep-report.json`.
+Five `Cluster` objects each, `GOMAXPROCS=4`, Go 1.26.3, kcp v0.32.3.
 
-| Step | Workspaces | Goroutines | Heap | Watch streams | Lists | Discovery | Requests |
+| Workspaces | 1 | 11 | 21 | 41 | 61 | 81 | 100 |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| baseline (manager not started) | 0 | 8 | 9.1 MiB | 0 | 0 | 3 | 3 |
-| 1 active | 1 | 64 | 9.6 MiB | 3 | 0 | 7 | 10 |
-| 2 active | 2 | 76 | 9.7 MiB | 3 | 0 | 7 | 10 |
-| 3 active | 3 | 88 | 9.8 MiB | 3 | 0 | 7 | 10 |
-| 4 active | 4 | 100 | 9.9 MiB | 3 | 0 | 7 | 10 |
-| 3 left | 3 | 90 | 9.9 MiB | 3 | 0 | 7 | 10 |
-| 2 left | 2 | 80 | 9.9 MiB | 3 | 0 | 7 | 10 |
-| 1 left | 1 | 70 | 9.8 MiB | 3 | 0 | 7 | 10 |
-| 0 left | 0 | 31 | 9.7 MiB | 3 | 0 | 7 | 10 |
-
-Per additional active workspace:
-
-| Quantity | Cost |
-|---|---|
-| Goroutines | **12** |
-| Retained heap | **~106 KiB** |
-| Watch streams | **0** |
-| LIST requests | **0** |
-| Discovery requests | **0** |
-| Requests of any kind | **0** |
-
-Traffic figures are cumulative from the start of the run, so a zero in that
-column means the quantity did not move as workspaces were added — not that it
-never happened.
-
-### The same sweep, three times wider
-
-`SWEEP_WORKSPACES=12` on the same machine, to check that four points were not
-four points on a curve that bends:
-
-| Workspaces | 1 | 2 | 4 | 6 | 8 | 10 | 12 |
-|---|--:|--:|--:|--:|--:|--:|--:|
-| Goroutines | 64 | 76 | 100 | 124 | 148 | 172 | 196 |
-| Heap (MiB) | 15.9 | 16.0 | 16.1 | 16.3 | 16.5 | 16.8 | 17.0 |
+| Goroutines | 64 | 184 | 304 | 544 | 784 | 1024 | 1252 |
 | Watch streams | 3 | 3 | 3 | 3 | 3 | 3 | 3 |
-| Requests, cumulative | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| Requests, cumulative | 10 | 10 | 10 | 10 | 11 | 11 | 13 |
+| Step time | 4.4s | 2.2s | 2.5s | 2.5s | 2.5s | 2.9s | 2.5s |
 
-Twelve goroutines per workspace, to the goroutine, at every point. Serving
-twelve active workspaces cost the shard the same ten requests as serving one:
-after the first workspace engaged, adding eleven more required no further
-traffic at all.
+Twelve goroutines per workspace, to the goroutine, at every one of a hundred
+points — 64 at one workspace, 1,252 at a hundred, no bend anywhere. Three watch
+streams throughout.
 
-## Claim 1: watches are O(types), not O(types × workspaces) — holds
+The request count is the interesting column. It rose by three across the whole
+run, and none of that was a workspace: it is the three informers re-opening
+their streams when kcp closed them, over fifteen minutes of elapsed time. After
+the first workspace engaged, ninety-nine more required **no requests to the
+shard at all**.
 
-Three streams served four active workspaces, and the same three served one:
+Engaging the hundredth workspace took as long as engaging the first. That
+matters independently of memory: a cost that is flat in bytes and rising in
+wall clock has still failed to scale. (The floor of about 2.3s is the
+harness's own settling wait, not work.)
 
-| Verb | Logical cluster | Resource |
-|---|---|---|
-| watch-list | `*` | `apis.kcp.io/apibindings` |
-| watch-list | `root` | `apis.kcp.io/apiexportendpointslices` |
-| watch-list | `*` | `cluster.x-k8s.io/clusters` |
+## Core reconciler set
 
-Two are the provider's own discovery — which workspaces have bound, and where
-the virtual workspace endpoints are. The third is the shared wildcard cache's
-informer for the one type these controllers watch. Not one stream is addressed
-to a tenant's logical cluster, which is the sharper form of the same claim: a
-flat count would also be produced by a process that opened every per-tenant
-watch up front, and that is not what this is.
+One `Cluster`/`DevCluster` pair per workspace, provisioned through the
+in-memory backend.
 
-The sweep asserts both: watch streams per workspace below 0.5, and zero
-watches addressed to any tenant's logical cluster.
+| Workspaces | 1 | 5 | 10 | 15 | 20 |
+|---|--:|--:|--:|--:|--:|
+| Goroutines | 251 | 811 | 1511 | 2211 | 2911 |
+| Watch streams | 8 | 8 | 8 | 8 | 8 |
+| Discovery, cumulative | 13 | 35 | 71 | 118 | 172 |
+| Requests, cumulative | 45 | 159 | 310 | 472 | 641 |
+
+| Per active workspace | Single type | Core reconciler set |
+|---|--:|--:|
+| Goroutines | 12 | **140** |
+| Watch streams | 0 | **0** |
+| Retained after departure | 2 | **30** |
+| Discovery requests | 0 | **5–11, and rising — see below** |
+
+140 goroutines per workspace, exactly linear to twenty: 251 at one workspace,
+2,911 at twenty. That is the figure to size a replica against, and it is a
+little over eleven times the single-type shape, which is what five controllers
+instead of one buys.
+
+The eight streams are the two the provider needs for discovery (`apibindings`
+across all workspaces, `apiexportendpointslices` in the workspace that owns the
+export) plus one per watched type: `clusters`, `machines`, `machinesets`,
+`machinedeployments`, `devclusters`, `devmachines`. Eight at twenty workspaces,
+eight at one.
+
+Two costs appear here that the single-type shape does not have. Both are per
+workspace rather than per shard, and one of them is the only quantity in either
+sweep that is not flat or linear:
+
+- **Reconcile writes**: about 30 requests per workspace, which is the
+  reconcilers doing their job on that workspace's objects. Writes scale with
+  objects, which is the point of having them; the claim under test is about
+  watches and LISTs, and those stayed flat.
+- **Discovery, which grows faster than the workspace count.**
+  `multicluster-provider` builds a `RESTMapper` per engaged workspace, and this
+  reconciler set resolves enough types to make it do work. The per-workspace
+  cost is not constant: it was about 5.5 requests per workspace over the first
+  five, and about 10.8 over the last five of twenty. The likely mechanism is
+  mappers refreshing on a miss as reconcile activity across all workspaces
+  grows, but that has not been confirmed against source and is stated here as
+  an observation rather than an explanation.
+
+  In absolute terms this is still small — 172 requests to serve twenty
+  workspaces, against a shard that saw eight watch streams — so it is not a
+  problem today. It is the one curve here that would matter at a much larger
+  workspace count, it is recorded on every run as
+  `discoveryRequestsPerWorkspace`, and it is worth confirming before anyone
+  plans a replica around hundreds of production-shape workspaces.
+
+## The claims, settled
+
+**Watches are O(types), not O(types × workspaces) — holds, in both shapes.**
+Three streams served a hundred single-type workspaces; eight served the full
+reconciler set. Not one stream in either sweep was addressed to a tenant's own
+logical cluster, which is the sharper form of the claim: a flat count would
+also be produced by a process that opened every per-tenant watch up front, and
+that is not what this is. Both are asserted, so a regression fails the build.
+
+**No cache or transport duplicated per workspace — holds.** No per-workspace
+LISTs in either shape, and no new connections. The per-workspace `RESTMapper`
+is the one duplicated thing, and its cost is discovery traffic rather than a
+cache: nothing in the single-type shape, and the growing figure above in the
+production one.
+
+**Per-workspace controller overhead — quantified.** 12 goroutines for one
+controller on one type, measured to a hundred workspaces; 140 for the five
+controllers `cmd/core-manager` wires, measured to twenty. Both exactly linear,
+with no bend at the top of either range. A process serving a hundred workspaces
+of the production shape would hold on the order of 14,000 goroutines — large,
+not a per-shard cost, and the number that decides how many workspaces one
+replica should serve, which is what nobody could previously state.
 
 **Why LIST is zero.** The initial read is not a separate LIST any more. A
 current client-go informer opens a watch with `sendInitialEvents=true` and
-receives its starting state through the stream, which the instrument
-classifies as `watch-list` for exactly this reason: a report showing no LISTs
-at all should not look like a broken measurement.
-
-## Claim 2: no cache or transport duplicated per workspace — holds
-
-An added workspace costs about 106 KiB of retained heap and no new
-connections, discovery, or LISTs. A duplicated cache would be visible in every
-one of those columns; a duplicated transport would be visible in the request
-counts. Neither is.
-
-The per-workspace `RESTMapper` that `multicluster-provider` builds for each
-engaged workspace (`pkg/cache.NewScopedCluster`) is lazy, and the sweep shows
-it: discovery traffic does not move as workspaces are added.
-
-Heap is reported rather than asserted. The process being measured contains
-the harness measuring it, including one fixture client per workspace, so the
-figure is an upper bound on the manager's own retention rather than a clean
-reading of it.
-
-## Claim 3: per-workspace controller overhead — 12 goroutines, ~106 KiB
-
-The claim was that this exists but is cheap. It exists and it is: 12
-goroutines and about 106 KiB per active workspace, exactly linear across the
-sweep, for one controller watching one type.
-
-Twelve goroutines per workspace against a fixed cost of roughly 50 for the
-manager and provider means a process serving a hundred workspaces of this
-shape holds on the order of 1,250 goroutines — large but unremarkable — and
-the memory cost is dominated by the objects being cached, not by the
-per-workspace machinery.
+receives its starting state through the stream. The instrument classifies that
+as `watch-list` so that a report showing no LISTs does not look like a broken
+measurement — and counts a stream by what is being watched rather than by how
+it was opened, because an informer whose watch the shard closes re-opens it as
+a plain watch. Without that, a sweep long enough to cross a re-establishment
+reports watch growth that is really elapsed time. The hundred-workspace run is
+where that showed up.
 
 ## What a workspace does not give back
 
 The wiring in `internal/providerwiring` reclaims its own per-workspace cost
-completely. The unit-tier sweep measures exactly two goroutines per workspace
-(one watching for disengagement, one running the workspace's runnable) and
-exactly zero left behind after sixteen workspaces have come and gone, with no
-kcp server involved.
+completely: the unit-tier sweep measures exactly two goroutines per workspace
+and exactly zero left behind after sixteen have come and gone, with no kcp
+server involved.
 
-Below that layer, two goroutines per departed workspace per watched type are
-**not** released:
+Below that layer, **two goroutines per event-handler registration** survive the
+workspace that made them:
 
 - controller-runtime's `Kind` source adds an event handler to the informer it
   watches through (`pkg/internal/source/kind.go`) and has no path that ever
   removes it. In an ordinary deployment that is harmless, because the informer
   and the controller are stopped together.
-- Here they are not. The informer belongs to the wildcard cache shared by
-  every workspace, so it outlives any one workspace's controllers — and the
-  handler, with the `processorListener` run/pop pair kcp's informers start for
-  it, outlives them too.
+- Here they are not. The informer belongs to the wildcard cache shared by every
+  workspace, so it outlives any one workspace's controllers — and the handler,
+  with the `processorListener` run/pop pair kcp's informers start for it,
+  outlives them too.
 
-The wider run shows it as arithmetic: each departure gave back 10 of the 12
-goroutines the workspace had cost, all the way down from twelve workspaces to
-one.
+The unit is the registration, not the type: several controllers commonly watch
+the same type and each registers its own handler. That is why the single-type
+shape retains 2 (one registration) and the core reconciler set retains 30
+(fifteen registrations across six types). Both were exact and reproducible
+across runs, and both are asserted, so the number cannot grow unnoticed.
 
-The retained goroutines are released when the wildcard cache itself stops,
-which is what the large drop at the last departure in the table above is: kcp
-empties the `APIExportEndpointSlice` when the last `APIBinding` goes, the
-provider stops watching that endpoint, and the shared cache goes with it.
+Departures otherwise return what they cost — 10 of 12 goroutines in the
+single-type shape, 110 of 140 in the core shape, at every step of every
+teardown. The retained share is released when the wildcard cache itself stops:
+kcp empties the `APIExportEndpointSlice` when the last `APIBinding` goes, the
+provider stops watching that endpoint, and the shared cache goes with it. That
+is the large drop at the last departure in every sweep.
 
-For a process serving workspaces that come and go, this accumulates with
-churn rather than with the number of workspaces currently served. At two
-goroutines per engagement it is slow, and it is not silent any more: the sweep
-reports the figure and fails if it grows beyond what is measured here.
+So this accumulates with workspace **churn**, not with the number of
+workspaces currently served. At 30 goroutines per engagement of a production
+workspace it is not slow, and it is the one part of the specification's "a
+workspace that unbinds stops costing anything" that does not hold.
 
 **What fixing it would take**: the per-workspace manager handed to a
 `SetupFunc` would have to hand out a cache that records the handler
@@ -175,33 +210,46 @@ registrations made through it and removes them (`cache.Cache` already exposes
 `Add` interposition that already binds runnables to a workspace's lifetime.
 That is a change to this project's own seam, not to upstream. It is not built:
 the trigger is a deployment with enough workspace churn for it to matter, or
-the first operator question that this figure cannot answer.
+the first operator question this figure cannot answer.
 
 ## Running it
 
 ```sh
-task test:sweep                          # four workspaces, the gated default
-SWEEP_WORKSPACES=16 task test:sweep      # a quantifying run
-SWEEP_OBJECTS=50 task test:sweep         # more objects per workspace
+task test:sweep                                # both shapes, gated defaults
+SWEEP_WORKSPACES=100 task test:sweep           # the wide single-type run
+SWEEP_CORE_WORKSPACES=20 task test:sweep       # a wider production-shape run
 ```
 
+The two shapes are sized independently on purpose: `SWEEP_WORKSPACES` and
+`SWEEP_OBJECTS` size the single-type sweep, `SWEEP_CORE_WORKSPACES` and
+`SWEEP_CORE_OBJECTS` the core one, so widening the cheap sweep cannot silently
+widen the expensive one. Reports land in `bin/sweep-report.md` and
+`bin/sweep-report-coremanager.md`, with JSON beside each.
+
 The sweep is a step of `task verify` in its own right, so a run that could not
-start a kcp server reports "could not run" rather than passing quietly.
+start a kcp server reports "could not run" rather than passing quietly. Neither
+shape needs a container runtime.
 
 Two more knobs exist for investigating a number that has moved:
 
 - `SWEEP_GOROUTINE_PROFILE=<dir>` writes a goroutine profile beside every
   sample. Two profiles subtracted by hand are how the retention above was
   attributed to a specific event handler rather than guessed at.
-- `SWEEP_REPORT_DIR=<dir>` puts the report somewhere other than `bin/`.
+- `SWEEP_REPORT_DIR=<dir>` puts the reports somewhere other than `bin/`.
 
 ## What these numbers are not
 
 They are the shape of a curve measured on one machine against a single-shard
-kcp server, with one watched type and five objects per workspace. The slopes
-are the point and they are stable across runs; the absolute figures are not a
-capacity model, which is why the report records the conditions of the run
-alongside them.
+kcp server. The slopes are the point, and they are stable across runs and
+across widths; the absolute figures are not a capacity model, which is why
+every report records the conditions of its run alongside them.
+
+Heap is reported rather than asserted, and should be read with care: the
+process being measured contains the harness measuring it, including one fixture
+client per workspace, so the figure is an upper bound on the manager's own
+retention rather than a clean reading of it. Goroutines and traffic do not have
+this problem — client-go shares one transport across configs that differ only
+in path.
 
 [plan]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/conversion-plan.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md

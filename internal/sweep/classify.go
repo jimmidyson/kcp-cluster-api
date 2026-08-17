@@ -292,6 +292,10 @@ func And(predicates ...Predicate) Predicate {
 
 // Streams counts the distinct requests matching p — one per thing asked for,
 // however many times it was asked.
+//
+// Distinct means distinct [Request], verb included. For counting watches, use
+// [Counts.DistinctStreams] instead: a stream and its own re-establishment are
+// two different Requests but one thing being watched.
 func (c Counts) Streams(p Predicate) int {
 	n := 0
 	for req := range c {
@@ -300,6 +304,29 @@ func (c Counts) Streams(p Predicate) int {
 		}
 	}
 	return n
+}
+
+// DistinctStreams counts what is being watched, rather than how it was asked
+// for: distinct cluster-and-resource pairs among the requests matching p.
+//
+// This is the number the O(types) claim is about, and it is not the same as
+// [Counts.Streams]. An informer opens its first watch with sendInitialEvents
+// (classified [VerbWatchList]) and, when the shard closes that stream some
+// minutes later, re-opens it from a resource version as a plain
+// [VerbWatch] — two Requests, one informer, one connection at a time. Counting
+// Requests would make a sweep that ran long enough to cross a re-establishment
+// report watch growth that is really elapsed time, which is exactly the
+// artifact this project's own hundred-workspace run first surfaced.
+func (c Counts) DistinctStreams(p Predicate) int {
+	type stream struct{ cluster, resource string }
+
+	seen := map[stream]struct{}{}
+	for req := range c {
+		if p(req) {
+			seen[stream{cluster: req.Cluster, resource: req.Resource}] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 // Total counts every call matching p, re-establishments and retries included.

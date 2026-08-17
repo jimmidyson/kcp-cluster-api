@@ -87,11 +87,17 @@ tasks:
       # run's numbers as this run's, which for a measurement is not a saving
       # but a wrong answer.
       #
-      # SWEEP_WORKSPACES (default 4) and SWEEP_OBJECTS (default 5) size the
-      # sweep; both are read from the environment, so a quantifying run is
-      # `SWEEP_WORKSPACES=16 task test:sweep`. The report lands in
-      # bin/sweep-report.{md,json}.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=30m -count=1 -v ./test/integration/sweep/...
+      # Two shapes run here, sized independently so widening the cheap one
+      # does not widen the expensive one by accident:
+      #
+      #   SWEEP_WORKSPACES / SWEEP_OBJECTS           (default 4 / 5)
+      #     one controller watching one type — bin/sweep-report.{md,json}
+      #   SWEEP_CORE_WORKSPACES / SWEEP_CORE_OBJECTS (default 3 / 1)
+      #     the core-manager reconciler set on the dev provider's in-memory
+      #     backend — bin/sweep-report-coremanager.{md,json}
+      #
+      # A quantifying run is `SWEEP_WORKSPACES=100 task test:sweep`.
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=90m -count=1 -v ./test/integration/sweep/...
 
   test:integration:docker:
     desc: Integration tests needing a real kcp server and a container runtime
