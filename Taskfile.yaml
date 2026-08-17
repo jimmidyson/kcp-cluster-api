@@ -79,6 +79,26 @@ tasks:
       # fixture resolves the server as a bare "kcp" and relies on lookup.
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/...
 
+  test:sweep:
+    desc: Measure per-workspace resource usage across a sweep of active workspaces
+    deps: [tools]
+    cmds:
+      # -count=1 defeats the test cache. A cached pass would report the last
+      # run's numbers as this run's, which for a measurement is not a saving
+      # but a wrong answer.
+      #
+      # Two shapes run here, sized independently so widening the cheap one
+      # does not widen the expensive one by accident:
+      #
+      #   SWEEP_WORKSPACES / SWEEP_OBJECTS           (default 4 / 5)
+      #     one controller watching one type — bin/sweep-report.{md,json}
+      #   SWEEP_CORE_WORKSPACES / SWEEP_CORE_OBJECTS (default 3 / 1)
+      #     the core-manager reconciler set on the dev provider's in-memory
+      #     backend — bin/sweep-report-coremanager.{md,json}
+      #
+      # A quantifying run is `SWEEP_WORKSPACES=100 task test:sweep`.
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=90m -count=1 -v ./test/integration/sweep/...
+
   test:integration:docker:
     desc: Integration tests needing a real kcp server and a container runtime
     deps: [tools]
