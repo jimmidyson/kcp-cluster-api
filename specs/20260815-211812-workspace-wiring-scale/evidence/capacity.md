@@ -35,6 +35,16 @@ far as anyone has looked.
 > and then brought to parity would be over its budget by a factor of three.
 > This is the single largest caveat on the numbers in this file.
 
+> **Capacity is per deployment role, not one number (R17).** Cluster API's
+> provider model requires core and infrastructure providers to run as separate
+> deployments. Each engages workspaces independently — core engages every
+> workspace, a provider only those that bound its export — so a shard's
+> workspace capacity is **core's** capacity, and each provider is sized against
+> its own adoption. The single-process figures below are the measurement, not
+> the deployment shape. Core alone measures **47 goroutines and 2.38 MiB** per
+> workspace; the dev infrastructure provider **32 and 2.16**. See
+> `split-deployments.md`.
+
 ## The units capacity is actually consumed in (FR-027)
 
 Per workspace, at **14 watches across 5 controllers** — the census of what

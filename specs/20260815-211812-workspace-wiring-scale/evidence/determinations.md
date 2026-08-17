@@ -188,6 +188,14 @@ a custom implementation cannot substitute a shared mapper without reimplementing
 `ScopedCluster`. Principle II requires this be raised upstream rather than
 worked around, and it MUST NOT be delivered by copying upstream code.
 
+**And it is worse than one round trip per workspace (R17).** Cluster API's
+provider model requires core and infrastructure providers to run as separate
+deployments, and each engages workspaces independently. A workspace using core
+plus one provider therefore builds **two** dynamic REST mappers and pays **two**
+discovery round trips, queued behind **two** separate single-goroutine
+engagement loops. The cost is multiplied by an architectural requirement, which
+raises this above the other blocked items.
+
 ---
 
 ## FR-009 — steady-state cost of an engaged workspace with no Cluster API objects MUST be within a stated budget
@@ -211,11 +219,18 @@ idle figure.
 to be".** It is now stated, measured, reproducible from committed runs, and
 fitted with held-out validation at under 0.4% error. That is what closes it.
 
+**The budget is per deployment (R17).** Core and infrastructure providers run as
+separate deployments and engage workspaces independently, so a workspace's total
+idle cost is the sum over the deployments it is engaged by — today ~2.09 MiB in
+core plus a comparable figure in each provider it uses, not 2.09 MiB outright.
+Sizing guidance must state it per role.
+
 **trigger to reopen.** The figure moving by more than 25% at a fixed census —
 which the sweep will catch, since it is the same measurement — or the census
 growing toward parity without the budget being restated. The latter is
-near-certain at Phase 3: the projection is ~236 goroutines per workspace, so
-this budget MUST be re-measured and restated as controllers are added.
+near-certain at Phase 3, and lands almost entirely on **core**: every deferred
+controller is a core one, taking it from 47 to ~206 goroutines per workspace
+while providers stay near 32.
 
 ---
 
@@ -279,3 +294,10 @@ rather than left implicit.
 **None of this is affected by the parity trajectory except FR-009**, whose
 budget must be restated as controllers are added. The build verdicts get more
 urgent at parity, not less: 45 registrations replaying the store instead of 14.
+
+**And more urgent again under the provider split (R17).** Separate deployments
+for core and each infrastructure provider are required for extensibility, not
+optional, and every deployment pays the engagement path in full. That makes
+these four the only work in this feature whose value is multiplied by an
+architectural requirement — and makes **core**, which engages every workspace
+and grows 4.4× toward parity, the place to spend it.

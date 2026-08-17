@@ -1,18 +1,44 @@
 # Splitting controllers into separate deployments
 
-The question: would running the core controllers as separate deployments give
-better horizontal scalability, or does the shared cache make it better to keep
-them together?
+**The split is not optional.** Cluster API's provider model puts infrastructure
+providers in their own deployments, authored and versioned by third parties —
+AWS, Azure, vSphere, Metal3. A design that requires every provider to live in
+one process is not extensible, and no measurement outranks that.
 
-**The shared cache is not the reason to keep them together.** It is per-type and
-lazy, so a split deployment only caches what it watches, and cached objects turn
-out to be cheap. The thing that gets duplicated is **per-workspace engagement**,
-and it is duplicated in full by every deployment regardless of how little that
-deployment watches.
+An earlier version of this file recommended deferring the core/infrastructure
+split on cost grounds. That framed a structural requirement as a trade, and was
+wrong. What follows is the same evidence read against the constraint rather than
+against a choice.
 
-So splitting works, and it improves the constraint that actually binds — but it
-is priced per deployment, not per type, and the price is highest exactly where
-this feature has not yet done its repair work.
+**The question that remains is not whether to split, but what the split costs
+and where the cost lands.** It lands on per-workspace engagement, paid in full
+by every deployment a workspace uses — which makes the engagement repairs the
+highest-value work in this feature rather than one item among several.
+
+## Engagement is sparse per export — verified
+
+The multiplier is smaller than "one per deployed provider", and this is the
+fact that makes the architecture work.
+
+`multicluster-provider@v0.8.0` `pkg/provider/provider.go:259-300`: a provider
+watches the virtual-workspace URLs of **its own** `APIExportEndpointSlice`, and
+`ObjectToWatch` defaults to `APIBinding`. So a deployment engages only the
+workspaces that have bound *its* export.
+
+That gives two distinct deployment roles with different capacity
+characteristics:
+
+| Role | Engages | Capacity binds on |
+|---|---|---|
+| **Core** | every workspace using Cluster API | total workspaces in the shard |
+| **Provider** | only workspaces that bound that provider | that provider's adoption in the shard |
+
+A workspace using one infrastructure provider is engaged **twice** — by core and
+by that provider — not once per deployed provider. Adding a fifth provider to a
+shard costs nothing for workspaces that do not use it.
+
+This is exactly the independent scaling the appliance model wanted: providers
+scale with their own adoption, core scales with the shard.
 
 ## The cache is per-type and lazy — verified
 
@@ -56,45 +82,54 @@ objects in it.
 So duplicating a type's cache across two deployments costs very little in object
 storage. **The wiring costs; the objects do not.**
 
-## What a split actually costs and buys — measured
+## What each role costs — measured
 
-Splitting the wired set into a core deployment (`clustercache`, `cluster`,
-`machine` — 3 controllers, 9 watches) and an infrastructure deployment
-(`devcluster`, `devmachine` — 2 controllers, 6 watches):
+Splitting the wired set along the mandatory boundary — core (`clustercache`,
+`cluster`, `machine`) and infrastructure (`devcluster`, `devmachine`):
 
-| Deployment | Goroutines/ws | Live heap/ws | Footprint/ws |
-|---|---|---|---|
-| Combined (today) | **75.0** | 1,291 KiB | 2.83 MiB |
-| Core only | **47.0** | 1,104 KiB | 2.38 MiB |
-| Infrastructure only | **32.0** | 1,030 KiB | 2.16 MiB |
-| Split total | 79.0 | 2,134 KiB | 4.54 MiB |
+| Deployment | Controllers | Watches | Goroutines/ws | Live heap/ws | Footprint/ws |
+|---|---|---|---|---|---|
+| Core | 3 | 9 | **47.0** | 1,104 KiB | 2.38 MiB |
+| Infrastructure | 2 | 6 | **32.0** | 1,030 KiB | 2.16 MiB |
+| *(combined, for reference only)* | 5 | 14 | 75.0 | 1,291 KiB | 2.83 MiB |
 
 Both split figures were **predicted by the R16 formula before being run** — 47
-and 32 — and both measured exactly. That is the fourth and fifth out-of-sample
-confirmation.
+and 32 — and both measured exactly. Fourth and fifth out-of-sample
+confirmations.
 
-### The trade, stated plainly
+The combined row is a reference point, not a deployment shape. Nothing will run
+that way.
 
-| | Combined | Split (2 deployments) | Change |
-|---|---|---|---|
-| Goroutines in the **binding** process | 75 | 47 | **−37%** |
-| Footprint in the **binding** process | 2.83 MiB/ws | 2.38 MiB/ws | **−16%** |
-| **Total** goroutines across processes | 75 | 79 | +5% |
-| **Total** footprint across processes | 2.83 MiB/ws | 4.54 MiB/ws | **+61%** |
+### A shard's capacity is the minimum over its deployments
 
-At a 4 GiB per-process limit, the binding deployment holds about **1,710
-workspaces against 1,438 combined — 19% more per shard**, for 61% more total
-memory.
+Not a single number. Core engages every workspace, so **core binds first** and a
+shard's workspace capacity is core's. At a 4 GiB per-process limit, core holds
+about **1,710 workspaces** — more than the 1,439 the combined figure suggested,
+because core alone is cheaper per workspace than core plus an infrastructure
+provider.
 
-**Whether that is a good trade depends on which limit is real.** If the
-constraint is how large a single pod can be — and at 60,000 goroutines and
-2.2 GiB for 800 workspaces it plausibly is — splitting relieves it. If the
-constraint is total memory across the shard, splitting makes it worse.
+Each provider deployment is then sized for its own adoption, independently.
 
-## Why the duplication is 61% when the cache is nearly free
+### The asymmetry that matters for Phase 3
 
-Because the duplicated cost is not the cache. It is the two fixed per-workspace
-costs measured in `goroutine-decomposition.md`:
+**Parity growth lands almost entirely on core.** Of the deferred controllers —
+ClusterClass and topology, MachineSet, MachineDeployment, MachinePool,
+MachineHealthCheck, ClusterResourceSet, RuntimeSDK — every one is core. A
+provider deployment stays at roughly 2 controllers and 6 watches.
+
+| | Today | At core parity |
+|---|---|---|
+| Core deployment | 47 goroutines/ws | ~206 goroutines/ws |
+| Provider deployment | 32 goroutines/ws | ~32 goroutines/ws |
+
+Core grows 4.4×; providers stay flat. **Core is the scaling problem, and it is
+the deployment every workspace is engaged by.** Anything that reduces
+per-workspace cost is worth roughly four times as much in core as in a provider.
+
+## What the split actually costs, and it is not the cache
+
+The duplicated cost is not the cache. It is the two fixed per-workspace costs
+measured in `goroutine-decomposition.md`:
 
 - **engagement** — 2 goroutines and ~464 KiB per workspace, for the scoped
   cluster, its REST mapper and its client;
@@ -103,47 +138,67 @@ costs measured in `goroutine-decomposition.md`:
 
 Together about **880 KiB per workspace**, and **every deployment pays it in
 full**. A deployment watching one type pays the same engagement as one watching
-seven. Two deployments, two payments: ~1.76 MiB of the split's 4.54 MiB per
-workspace is duplication of costs that have nothing to do with what is cached.
+seven.
 
-## The sequencing conclusion
+For a workspace using core plus one provider, that is ~1.76 MiB of its ~4.54 MiB
+total — **39% of a workspace's cost is fixed engagement overhead**, and under the
+provider model it is structural rather than avoidable.
 
-**Fix engagement before splitting, not after.**
+The cache duplication that comes with it is real but small: `Cluster` and
+`Machine` are watched on both sides, and cached objects measured at less than
+the noise floor. Splitting duplicates the *wiring*, not the data.
 
-Every one of the four `build` determinations (FR-004, FR-005, FR-006, FR-008) is
-about the engagement path, and the per-workspace engagement cost is precisely
-what a split multiplies. Splitting first locks in N copies of the cost the gate
-just said to repair. Splitting after — or after the fleet-wide registration of
-`fleet-wide-controllers.md` option D, where engagement is 2 goroutines and
-464 KiB and there is no first-watch cost at all — is close to free.
+## What follows: engagement is now the top priority
 
-Concretely: with today's engagement, a third deployment adds ~880 KiB per
-workspace to the shard. Under option D it would add ~464 KiB and no goroutines
-beyond 2. The more deployments the design anticipates, the more the engagement
-repair is worth.
+The four `build` determinations — FR-004, FR-005, FR-006, FR-008 — are all the
+engagement path. Before this constraint they were four of several things worth
+doing. Under a mandatory split they are the only work whose value is
+**multiplied by an architectural requirement**:
 
-## The split axis matters more than the decision to split
+| Repair | Effect per workspace | ×2 deployments |
+|---|---|---|
+| FR-004/FR-005 — interposed cache | removes store replay and the process-wide stall | twice over |
+| FR-008 — shared REST mapper | removes one discovery round trip per workspace | **two round trips per workspace** |
+| Option D — fleet-wide registration | 880 KiB → 464 KiB fixed | **1.76 MiB → 0.93 MiB** |
 
-The core/infrastructure split measured above is the **expensive** kind, because
-`Cluster` and `Machine` are watched on both sides.
+FR-008 in particular gets worse than recorded: each deployment builds its **own**
+dynamic REST mapper per workspace, on its **own** serialized engagement path. A
+workspace using core and one provider pays two discovery round trips, queued
+behind two separate single-goroutine engagement loops.
+
+And the engagement repairs are worth most in **core**, which engages every
+workspace and whose census grows 4.4× on the way to parity.
+
+## The split axis still matters — but as a gradient, not a gate
+
+The core/infrastructure split is the expensive kind: `Cluster` and `Machine` are
+watched on both sides, so their caches are duplicated. That is a cost to be
+aware of, not a reason to avoid the split.
 
 A deployment for a genuinely new service — the VM-as-a-service or
-DB-as-a-service cases ADR-0002 anticipates — watches **disjoint** types. It
-duplicates no cache at all, only engagement. That is the cheap kind, and it is
-the shape the appliance model was already heading toward.
+DB-as-a-service cases ADR-0002 anticipates — watches **disjoint** types and
+duplicates no cache at all, only engagement. Those are cheaper still, and the
+sparse-engagement property means they cost nothing at all for workspaces that do
+not use them.
 
-So the recommendation is not "split" or "don't split". It is:
+## Consequences to carry forward
 
-1. **Split along new-service boundaries freely** — the only duplication is
-   engagement, and FR-037 already requires a resource model per deployment
-   rather than a blended one, which these measurements now make possible.
-2. **Do not split Cluster API core from its infrastructure provider yet.** It
-   duplicates the two hottest types' caches and both fixed engagement costs, to
-   buy 19% more workspaces per shard. Revisit once the engagement repairs land,
-   when the same split gets cheaper.
-3. **Treat per-deployment engagement cost as a first-class capacity input.** It
-   is ~880 KiB per workspace per deployment today, and it is the number that
-   decides whether a split pays.
+1. **FR-037 is unconditional.** It reads "where more than one controller
+   deployment serves a shard, the model MUST be produced per deployment". There
+   will always be more than one. The per-deployment model is required, not
+   contingent, and `capacity.md` must state capacity per deployment role rather
+   than as one number.
+
+2. **A shard's capacity is core's capacity**, since core engages every
+   workspace. Provider deployments are sized separately against their own
+   adoption.
+
+3. **FR-009's stated budget is per deployment.** A workspace's total idle cost
+   is the sum over the deployments it is engaged by — today ~2.09 MiB in core
+   plus ~2.16 MiB in its provider, not 2.09 MiB total.
+
+4. **Engagement cost is the primary scaling term**, not a secondary one, because
+   it is the only term multiplied by deployment count.
 
 ## What this does not establish
 
@@ -152,8 +207,11 @@ So the recommendation is not "split" or "don't split". It is:
   connection — is not isolated here. It is a fixed cost, not per workspace, so
   it should be small at any real fleet size, but it is not measured.
 - **CPU is not measured at all**, so nothing here says whether splitting helps
-  or hurts reconcile throughput — which is a separate reason to split, and
-  arguably the more common one.
-- **The 61% figure is for a 2-way split of this particular set.** It follows
-  from the overlap table, and a different split has a different answer; the
-  arithmetic is reproducible from the R16 formula plus the fixed costs.
+  or hurts reconcile throughput.
+- **Real provider deployments are bigger than the dev provider measured here.**
+  `devcluster`/`devmachine` are 2 controllers and 6 watches; a production AWS or
+  vSphere provider wires more. The provider figures are a floor.
+- **The sparse-engagement property assumes providers publish separate
+  `APIExport`s.** That is how the provider model maps onto kcp, and it is what
+  the source supports, but this repository has not yet wired a second export to
+  demonstrate it.

@@ -845,50 +845,67 @@ figure is built on it.
 
 ---
 
-## R17 — Splitting deployments is priced by engagement, not by the cache — MEASURED
+## R17 — The provider split is mandatory; engagement is what it multiplies — MEASURED
 
-**Question**: would running the core controllers as separate deployments scale
-better horizontally, or does the shared wildcard cache make it better to keep
-them together?
+**Constraint, not a question.** Cluster API's provider model puts infrastructure
+providers in separate deployments, authored and versioned by third parties. The
+split is required for extensibility; a cost analysis does not outrank it. An
+earlier version of this entry treated it as a trade to defer, which was wrong.
 
-**The cache is not the reason to keep them together.** `wildcardCache` embeds
-controller-runtime's cache and resolves `GetSharedInformer` per GVK, creating
-informers lazily — so a split deployment caches only the types it watches, and
-duplication is limited to the overlap. Cached objects are also cheap: tripling
-objects per workspace from 10 to 30 moved live heap per workspace by less than
-the measurement noise.
+**Engagement is sparse per export — VERIFIED.** `multicluster-provider@v0.8.0`
+`pkg/provider/provider.go:259-300`: a provider watches the virtual-workspace
+URLs of *its own* `APIExportEndpointSlice`, with `ObjectToWatch` defaulting to
+`APIBinding`. A deployment therefore engages only workspaces that bound its
+export. Two roles follow:
 
-**What gets duplicated is per-workspace engagement.** Measured, splitting the
-wired set into core (3 controllers, 9 watches) and infrastructure (2
-controllers, 6 watches):
-
-| | Goroutines/ws | Footprint/ws |
+| Role | Engages | Capacity binds on |
 |---|---|---|
-| Combined | 75.0 | 2.83 MiB |
-| Core only | 47.0 | 2.38 MiB |
-| Infrastructure only | 32.0 | 2.16 MiB |
+| Core | every workspace using Cluster API | total workspaces in the shard |
+| Provider | only workspaces that bound it | that provider's adoption |
 
-Both split figures were predicted by the R16 formula before being run and
-measured exactly — the fourth and fifth out-of-sample confirmations.
+A workspace using one provider is engaged twice, not once per deployed provider.
+Adding a provider costs nothing for workspaces that do not use it — which is the
+independent scaling ADR-0002's appliance model wanted.
 
-The binding process drops **37% on goroutines and 16% on memory**, buying about
-19% more workspaces per shard at a fixed per-process limit — for **61% more
-total memory**. The gap is the two fixed per-workspace costs, ~880 KiB
-altogether, which every deployment pays in full however little it watches.
+**Measured, at the mandatory boundary:**
 
-### Two consequences
+| Deployment | Controllers | Watches | Goroutines/ws | Footprint/ws |
+|---|---|---|---|---|
+| Core | 3 | 9 | **47.0** | 2.38 MiB |
+| Infrastructure | 2 | 6 | **32.0** | 2.16 MiB |
 
-**Sequencing.** All four `build` determinations concern the engagement path, and
-engagement is exactly what a split multiplies. Splitting first locks in N copies
-of the cost the gate just said to repair. Under option D's fleet-wide
-registration, a further deployment would cost ~464 KiB and 2 goroutines per
-workspace instead of ~880 KiB.
+Both predicted by the R16 formula before being run and measured exactly — the
+fourth and fifth out-of-sample confirmations.
 
-**Axis.** `Cluster` is watched by all five controllers and `Machine` by three,
-so a core/infrastructure split duplicates the two hottest types. A deployment
-for a genuinely new service watches disjoint types and duplicates no cache at
-all — which is the shape ADR-0002's appliance model was already heading toward,
-and it is the cheap kind. Full analysis in `evidence/split-deployments.md`.
+**The cache is not what gets duplicated.** `wildcardCache` resolves
+`GetSharedInformer` per GVK and creates informers lazily, so a deployment caches
+only the types it watches; and cached objects are cheap — tripling objects per
+workspace from 10 to 30 moved live heap by less than the measurement noise.
+
+What gets duplicated is the fixed per-workspace cost: ~464 KiB of engagement
+plus ~415 KiB on first watch, **paid in full by every deployment a workspace
+uses**. For a workspace using core plus one provider that is ~1.76 MiB of its
+~4.54 MiB — 39% of its cost, and structural.
+
+### Three consequences
+
+**Engagement becomes the primary scaling term.** All four `build` determinations
+are the engagement path, and it is the only term multiplied by an architectural
+requirement. FR-008 is worse than recorded: each deployment builds its own
+dynamic REST mapper per workspace on its own serialized engagement loop, so a
+workspace pays two discovery round trips behind two separate single-goroutine
+queues.
+
+**Core is where it matters.** Every deferred parity controller — topology,
+MachineSet, MachineDeployment, MachinePool, MachineHealthCheck,
+ClusterResourceSet, RuntimeSDK — is core. Core grows 47 → ~206 goroutines per
+workspace at parity while providers stay near 32. Core also engages every
+workspace, so a shard's capacity is core's.
+
+**FR-037 is unconditional.** "Where more than one controller deployment serves a
+shard" is now always. Capacity must be stated per deployment role, and FR-009's
+budget is per deployment rather than per workspace outright. Full analysis in
+`evidence/split-deployments.md`.
 
 ---
 
@@ -912,5 +929,5 @@ and it is the cheap kind. Full analysis in `evidence/split-deployments.md`.
 | Fitted model and held-out accuracy | MEASURED — worst error 0.39% | None; `cmd/scalemodel` re-derives it from committed runs |
 | Goroutine decomposition (R16) | MEASURED — 75/workspace; cache interposition reaches 37% | None; it reframes FR-003's determination |
 | Controller census (R16) | VERIFIED — 5 controllers today, ~16 at parity | None; parity projection is a capacity caveat, not a blocker |
-| Split deployments (R17) | MEASURED — priced by engagement, not by cache | None; sequence after the engagement repairs |
+| Split deployments (R17) | MEASURED — mandatory; multiplies engagement cost | None; it raises the engagement repairs' priority |
 | First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |
