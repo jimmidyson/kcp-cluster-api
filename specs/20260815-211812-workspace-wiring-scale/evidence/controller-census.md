@@ -1,11 +1,17 @@
 # Controller census: what is wired, and what parity would wire
 
 Every per-workspace figure in this feature is `2 + 7×controllers + 1×workers×controllers
-+ 2×watches` (R16). So the census is not bookkeeping — it *is* the cost. This
-file establishes it by reading `SetupWithManager` rather than estimating.
++ 2×watches` (R16). So the census is not bookkeeping — it *is* the cost.
 
-Earlier documents said "roughly 4 controllers, 19 watches". That was an
-estimate, and it was wrong in both terms.
+**Reproduce with `task scale:census`** (`SCOPE=wired`, the default, or
+`SCOPE=parity`). It parses the setup functions' syntax trees rather than
+grepping them, because the builder's chained calls carry no leading dot — a
+regex misses every `Watches()`, and does so *silently*, returning plausible
+small numbers rather than an error.
+
+That is exactly how the earlier estimate of "roughly 4 controllers, 19 watches"
+went wrong. It was wrong in both terms, and it moved a published capacity figure
+by 2.8× before it was caught.
 
 ## Currently wired — `internal/coremanager/setup.go`
 
@@ -20,7 +26,11 @@ estimate, and it was wrong in both terms.
 
 **5 controllers**, not 4. One of `cluster`'s three watches is behind the
 `MachinePool` feature gate, so informer-backed sources are **14 or 15**
-depending on it.
+depending on it; the tool counts the source unconditionally and reports 15.
+
+`task scale:census` reproduces this table, including that `Cluster` is watched
+by all five controllers and `Machine` by three — the overlap that decides what
+splitting deployments duplicates.
 
 Measured at that shape — 5 controllers, 14 watches, 2 workers:
 
@@ -56,7 +66,11 @@ workspace**, against the 75 measured with static informer watches alone.
 ClusterClass/topology, RuntimeSDK, MachineSet/MachineDeployment/MachinePool,
 ClusterResourceSet and MachineHealthCheck explicitly deferred to Phase 3.
 
-Upstream `core/main.go` at the pinned version wires **15** controllers:
+Upstream `core/main.go` at the pinned version wires **15** controllers.
+`task scale:census SCOPE=parity` counts 14 of them — it excludes `crdmigrator`,
+which is permanently out of scope here (below) — and independently reports **39
+informer-backed sources** and **206 goroutines per workspace at 2 workers**,
+confirming this file's hand-computed projection:
 
 | Controller | Informer-backed sources | | Controller | Informer-backed sources |
 |---|---|---|---|---|

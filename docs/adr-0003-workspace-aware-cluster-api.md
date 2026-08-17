@@ -144,9 +144,11 @@ Zero divergence. The deployment model still reaches its target; it just costs
 more to operate.
 
 **B. Change the premise; carry a local fork of the wiring.** Fastest to a
-result. Carries a 2.6% divergence indefinitely, re-based on every Cluster API
-release — and the wiring layer is exactly the part upstream changes when it adds
-controllers.
+result. Under the additive strategy of response 1 the divergence is *new files*
+rather than modified lines, so it never conflicts textually — but it can go
+silently stale, and it is still divergence that `DRIFT.md` must record. The
+bookkeeping counts paths either way; what changes is the cost of living with
+them.
 
 **C. Change the premise; upstream the builder change first.** No permanent
 divergence. Gated on someone else's review and release cycle, which R1 declined
@@ -155,10 +157,15 @@ to gate this feature on and was right to.
 **D. Build against a local fork *shaped as the upstream proposal*, and upstream
 in parallel.** The divergence exists but is deliberately the exact diff being
 proposed, so it converges to zero if accepted and is a known quantity if not.
+Combined with additive files and per-controller conversion (responses 1 and 3),
+it is also incremental: no step is a big-bang rewrite, and each is priced by the
+R16 formula before it is taken.
 
 ## Recommendation
 
-**D**, with one sequencing point that makes the decision safer to defer.
+**D**, with one sequencing point that makes the decision safer to defer — and
+with the additive-file strategy of response 1 below, which makes D's divergence
+cheaper than the 2.6% figure suggests.
 
 The interposed cache — the P2 work already designed and gated as `build` for
 FR-004 and FR-005 — is **valuable under every option**. It removes the O(total
@@ -170,17 +177,114 @@ So: **do the cache work now, and decide this afterwards with more evidence.**
 Nothing about it is wasted by either answer, and it buys time to raise the
 upstream proposal and see how it lands.
 
-## What would change the recommendation
+## The three risks, and the responses to them
 
-- **Upstream declines the builder change**, or wants a materially different
-  shape. Then B and C collapse and the choice is A versus a permanent fork.
-- **Appliance count turns out not to bind.** If a region genuinely tolerates
-  ~145 appliances, the density argument evaporates and A is simply correct.
-- **`clustercache`'s keying proves to be one of many.** It keys accessors by
-  namespace and name only (`cluster_cache.go:362`), which fleet-wide is a
-  cross-tenant correctness bug. If a survey finds several such
-  per-workspace-singleton assumptions, the 2.6% figure understates the work and
-  the balance shifts back toward A.
+The project's response to each, recorded because they change the balance rather
+than restate it.
+
+### 1. Upstream declining — mitigated by additive files, not build tags
+
+**Response**: minimise the change and use build tags for workspace-aware
+controllers, so rebases stay cheap in the fork.
+
+**Accepted, and there is a stronger form of it.** Build tags select between
+implementations of the *same* symbol, which means either editing upstream's file
+or extracting a function out of it — both leave modified hunks for `git rebase`
+to conflict on, and the extracted function is exactly what upstream edits when
+it adds a watch.
+
+The change can instead be **purely additive**, because Go visibility is
+per-package:
+
+```
+core/reconcilers/cluster/cluster_controller.go            # untouched
+core/reconcilers/cluster/cluster_controller_workspace.go  # NEW: SetupWithMulticlusterManager
+```
+
+A new file *in the same package* can set `recorder`, `externalTracker`,
+`controller`, `hookCache` and `predicateLog` — the unexported fields that made
+this impossible from outside. **The visibility problem disappears entirely**,
+and upstream's `SetupWithManager` continues to exist untouched beside it.
+
+Purely additive files have **no conflicting hunks on rebase at all**. They
+conflict only if upstream adds a file of the same name. That is a materially
+better position than 2.6% of modified lines, and it applies to the builder too:
+a new `util/controller/builder_workspace.go` alongside the existing one, rather
+than making the existing type generic.
+
+**The hazard this trades into, and it must not be waved away.** A textual
+conflict is loud; a purely additive parallel implementation goes **silently
+stale**. If upstream adds a `Watches(&clusterv1.Foo{}, …)` to
+`SetupWithManager`, nothing conflicts — our parallel setup simply stops watching
+something it should, and the symptom is a controller that quietly does not
+reconcile on an event.
+
+That needs a guard, and it is buildable: a check that the two setups register
+the **same set of types**, failing when they diverge. The controller census in
+`specs/…/evidence/controller-census.md` was produced by exactly that kind of
+static read, so the mechanism already exists in prototype. **Any additive
+strategy MUST ship that guard**; without it the strategy trades a visible cost
+for an invisible one.
+
+### 2. Appliance count — an open question, and the instinct is recorded as a prior
+
+**Response**: this needs validating later; instinct says it will bind, though
+perhaps not to the degree projected.
+
+**Recorded as the feature's most important open question**, and explicitly *not*
+resolved by anything measured here. The projections come from measured
+coefficients, but whether ~145 appliances against ~17 is a problem is an
+operational judgement about running a region, which no sweep can answer.
+
+What would settle it: a cost model for one appliance — the kcp shard, its
+controller deployments, and the operational overhead of the unit — against a
+target region size. That is a different exercise from this feature's, and it
+should not be folded into it.
+
+Until it is done, the projections stand as projections and this ADR stays
+proposed. **The instinct that it will bind is a stated prior, not evidence**,
+and is recorded as such so that a later reader can tell the two apart.
+
+### 3. More per-workspace singletons than `clustercache` — handled by not converting them
+
+**Response**: `clustercache` will not be the only one, but the same additive
+approach handles them.
+
+**Accepted, and there is a second answer that removes the risk rather than
+managing it: a controller that carries a per-workspace-singleton assumption can
+simply stay per-workspace.**
+
+The conversion is **per controller**, not per project. Each one either:
+
+- converts to fleet-wide, and contributes **nothing** per workspace; or
+- stays per-workspace, and contributes `7 + workers + 2×watches` per workspace,
+  by the R16 formula.
+
+So the migration is incremental and every step is priced in advance. Keeping
+`clustercache` per workspace — one controller, one watch, four workers — costs
+**15 goroutines per workspace** against core's 53 today: still a 3.5×
+improvement, with the cross-tenant accessor bug never arising because the
+accessors never meet.
+
+At core parity the same arithmetic: converting 12 of 16 controllers and leaving
+4 per-workspace gives roughly **70 goroutines per workspace against 236**. A
+3.4× improvement while touching two thirds of the set.
+
+**This is what most reduces the risk of the whole proposal.** It is not
+all-or-nothing, there is no big-bang rewrite, and a survey finding ten
+singletons rather than one changes the *ceiling* of the improvement, not its
+viability.
+
+## What would still change the recommendation
+
+- **Upstream declining *and* the additive strategy proving unworkable** — for
+  instance if the parallel-setup drift guard cannot be made reliable, so
+  staleness would be silent in production.
+- **The appliance-count question resolving against the premise change** — if a
+  region genuinely tolerates the projected appliance count, A is simply correct.
+- **A survey finding that the *cheap* controllers are the ones with singleton
+  assumptions**, so the incremental path converts only the ones that do not
+  matter.
 
 ## What is not established
 

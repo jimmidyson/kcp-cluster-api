@@ -145,6 +145,27 @@ tasks:
         -args -profile={{.PROFILE}} -points={{.POINTS}} -tolerance={{.TOLERANCE}}
         -watches-per-workspace={{.WATCHES}} -evidence-dir="{{.ROOT_DIR}}/{{.EVIDENCE_DIR}}" {{.SCALE_FLAGS}}
 
+  scale:census:
+    desc: Count the controllers and watches a deployment registers, by parsing its setup functions
+    # The two counts the whole per-workspace cost model turns on. Derived by an
+    # AST parse rather than by hand or by grep: the builder's chained calls have
+    # no leading dot, so a regex silently misses every Watches() — which is how
+    # the first census was wrong in both terms, quietly.
+    #
+    # Roots are resolved with `go list` because the wired set spans two modules.
+    vars:
+      SCOPE: '{{.SCOPE | default "wired"}}'
+    cmds:
+      - |
+        CORE=$(go list -m -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api)
+        DOCKER=$(go list -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers)
+        case "{{.SCOPE}}" in
+          wired)  ROOTS="$CORE/core/reconcilers/cluster,$CORE/core/reconcilers/machine,$CORE/controllers/clustercache,$DOCKER" ;;
+          parity) ROOTS="$CORE/core/reconcilers,$CORE/controllers/clustercache" ;;
+          *)      ROOTS="{{.SCOPE}}" ;;
+        esac
+        go run ./cmd/controllercensus -roots "$ROOTS"
+
   scale:model:
     desc: Fit resource models to the committed sweep runs and report held-out accuracy
     # Arithmetic over committed evidence, not a measurement: it needs no kcp and
