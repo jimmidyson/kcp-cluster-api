@@ -1,19 +1,20 @@
 # The fleet-wide conversion, measured
 
-Two measurements, taken the same way: a real kcp server, the real
+Three measurements, taken the same way: a real kcp server, the real
 `coremanager.SetupFleetControllers` (dev provider excluded — it needs a container
 runtime), workspaces accumulated 1 → 2 → 4 → 8, sampled after every workspace has
 engaged.
 
-The first falsified the claim the conversion was written on. The second is what
-fixing the cause it exposed is worth.
+The first falsified the claim the conversion was written on. The other two are
+what fixing the two causes it exposed is worth.
 
 | | per-workspace goroutines | per-workspace heap |
 |---|---|---|
 | fleet-wide controllers, per-cluster watch registration | **51.7** | 345 KiB |
-| fleet-wide controllers, one watch registration per type | **8.1** | 126 KiB |
+| one watch registration per type | **8.1** | 126 KiB |
+| …and no per-cluster engagement | **5.1** | 123 KiB |
 
-**6.4× fewer goroutines per workspace, and 2.7× less heap.**
+**10× fewer goroutines per workspace, and 2.8× less heap.**
 
 ## The claim, and why it was wrong
 
@@ -83,7 +84,7 @@ against the APIExport's virtual workspace at `/clusters/*` for unrelated reasons
 — and the resolver is `logicalcluster.From`, which reads the `kcp.io/cluster`
 annotation. Neither fact enters Cluster API.
 
-## After
+## After the watches were fixed
 
 | workspaces | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|
@@ -105,31 +106,67 @@ each — where it was 73 and climbing. That is the change.
 The base cost rose, 111 → 146, because the local manager now runs the informers
 that the per-cluster caches used to. That is the same work moved, paid once.
 
+## And after dropping engagement
+
+The largest remaining term was `mcController.Engage.func1`: one goroutine per
+controller per engaged cluster, spawned on engagement whether or not that
+controller has per-cluster sources. With wildcard registration it has none, so
+all that goroutine does is wait for the engagement to end and delete a map entry.
+
+It did not need an upstream change. A controller only pays it because the
+multicluster builder produces one the manager engages; in wildcard mode the
+builder now produces a plain controller on the local manager, and nothing is
+lost — the per-cluster sources do not exist, and cluster resolution happens
+through the manager on the reconcile path, which never consulted that map.
+
+One thing had to be replicated: the reconciler wrapper that drops a request
+naming a cluster the provider does not have. It matters *more* here, because a
+wildcard source sees every cluster the endpoint serves including unengaged ones.
+`mcreconcile.NewClusterNotFoundWrapper` is public, so it is the same wrapper.
+
+| workspaces | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| goroutines | 141 | 165 | 169 | 177 |
+
+**Marginal cost of a workspace: 5.1 goroutines, 123 KiB.**
+
+| count | stack | per workspace |
+|---|---|---|
+| 10 | `processorListener.run` | **0 — one per type, constant** |
+| 10 | `processorListener.pop` | **0 — one per type, constant** |
+| 8 | `cache.(*ScopedCluster).Start` | 1 |
+| 8 | `providerwiring.(*Wiring).Engage.func1` | 1 — ours |
+
+`mcController.Engage.func1` is gone from the profile.
+
 ## What remains per workspace
 
-About 5 of the 8.1 is attributable and none of it is registration:
+Two of the 5.1 are attributable, and neither is watch registration:
 
-- **3 — `mcController.Engage.func1`**, one goroutine per controller per engaged
-  cluster. multicluster-runtime spawns it on engagement whether or not the
-  controller has any per-cluster sources, which with wildcard registration it no
-  longer does. This looks removable upstream and is the largest remaining term.
 - **1 — the provider's `ScopedCluster`**, which a fleet-wide controller no longer
   watches through but still reads through.
-- **1 — this project's own engagement telemetry runnable.** It exists to count
-  engaged workspaces, and could be a counter rather than a goroutine.
+- **1 — this project's own engagement seam.** With no per-workspace setup left it
+  exists only to count engaged workspaces, and a counter would not need a
+  goroutine.
+
+The rest is provider engagement bookkeeping — context propagation and select
+loops — which the profile does not separate cleanly and which is small enough
+that separating it has not been worth a measurement.
 
 ## What this does not show
 
 - **Idle workspaces only** (`idle-heavy`). Active workspaces were not swept.
-- **Eight workspaces.** Anything quoted above eight is extrapolation. At 8.1 per
+- **Eight workspaces.** Anything quoted above eight is extrapolation. At 5.1 per
   workspace the extrapolation is far less load-bearing than it was at 51.7, but
   it is still an extrapolation.
 - **Correctness under wildcard registration is not measured here.** The source
   sees every workspace bound to the APIExport, including any the provider has not
   engaged; requests for those resolve to no cluster and are absorbed by
-  multicluster-runtime's `ClusterNotFoundWrapper`, which mcbuilder enables by
-  default. The fork's envtest covers the demultiplexing itself, but a test for
-  the unengaged-workspace path would be worth having.
+  multicluster-runtime's `ClusterNotFoundWrapper`, which the fork now applies
+  itself. The fork's envtest covers the demultiplexing itself, but a test for the
+  unengaged-workspace path would be worth having — and it matters more now that
+  the controllers are not engaged at all, because engagement is no longer what
+  gates a source from firing.
 
 ## What follows
 

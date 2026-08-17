@@ -9,19 +9,19 @@
   "points": [
     {
       "workspaces": 1,
-      "value": 12450448
+      "value": 12457080
     },
     {
       "workspaces": 2,
-      "value": 12918744
+      "value": 12898552
     },
     {
       "workspaces": 4,
-      "value": 13052344
+      "value": 13048288
     },
     {
       "workspaces": 8,
-      "value": 13356392
+      "value": 13336168
     }
   ],
   "departure": {
@@ -33,39 +33,39 @@
   "measurements": [
     {
       "workspaces": 1,
-      "heapBytes": 12450448,
-      "goroutines": 146,
-      "loadDuration": 634,
+      "heapBytes": 12457080,
+      "goroutines": 141,
+      "loadDuration": 374,
       "events": 0,
-      "processBytes": 44685576,
-      "stackBytes": 1179648
+      "processBytes": 40560920,
+      "stackBytes": 1146880
     },
     {
       "workspaces": 2,
-      "heapBytes": 12918744,
-      "goroutines": 175,
-      "loadDuration": 158,
+      "heapBytes": 12898552,
+      "goroutines": 165,
+      "loadDuration": 252,
       "events": 0,
-      "processBytes": 44685576,
-      "stackBytes": 1277952
+      "processBytes": 40560920,
+      "stackBytes": 1245184
     },
     {
       "workspaces": 4,
-      "heapBytes": 13052344,
-      "goroutines": 183,
-      "loadDuration": 158,
+      "heapBytes": 13048288,
+      "goroutines": 169,
+      "loadDuration": 242,
       "events": 0,
-      "processBytes": 44685576,
-      "stackBytes": 1343488
+      "processBytes": 40560920,
+      "stackBytes": 1277952
     },
     {
       "workspaces": 8,
-      "heapBytes": 13356392,
-      "goroutines": 203,
-      "loadDuration": 161,
+      "heapBytes": 13336168,
+      "goroutines": 177,
+      "loadDuration": 399,
       "events": 0,
-      "processBytes": 44685576,
-      "stackBytes": 1310720
+      "processBytes": 40560920,
+      "stackBytes": 1245184
     }
   ],
   "listenersPerWorkspace": 1

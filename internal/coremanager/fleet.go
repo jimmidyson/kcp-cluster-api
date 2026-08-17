@@ -98,7 +98,7 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 //
 // # What that is worth, measured
 //
-// A workspace costs **8.1 goroutines** and 126 KiB at the margin
+// A workspace costs **5.1 goroutines** and 123 KiB at the margin
 // (evidence/fleet-wide-measured.md).
 //
 // It was 51.7 when the controllers were fleet-wide but their watches were still
@@ -112,10 +112,13 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // per engaged cluster, is what removed it: ten informer listeners for the whole
 // shard, against 73 and climbing.
 //
-// What is left per workspace is not registration. Three of the 8.1 are
-// multicluster-runtime spawning a goroutine per controller per engaged cluster
-// whether or not that controller has per-cluster sources; one is the provider's
-// scoped cluster; one is this project's own engagement telemetry.
+// Not engaging those controllers with clusters at all removed the rest of what
+// the conversion had left: a controller with no per-cluster sources was still
+// paying a bookkeeping goroutine per engaged cluster. 8.1 became 5.1.
+//
+// What is left per workspace is not registration and not engagement: one
+// goroutine for the provider's scoped cluster, one for this project's own
+// engagement seam, and a little provider bookkeeping.
 
 func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {
