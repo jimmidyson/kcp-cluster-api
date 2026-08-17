@@ -21,9 +21,13 @@ import (
 	"errors"
 	"fmt"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
+	"github.com/kcp-dev/logicalcluster/v3"
+
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
@@ -31,6 +35,7 @@ import (
 	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 	capimulticluster "sigs.k8s.io/cluster-api/util/multicluster"
 )
 
@@ -93,36 +98,25 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 //
 // # What that is worth, measured
 //
-// Less than it looks, and the measurement is in evidence/fleet-wide-measured.md.
-// A workspace still costs **51.7 goroutines** at the margin.
+// A workspace costs **8.1 goroutines** and 126 KiB at the margin
+// (evidence/fleet-wide-measured.md).
 //
-// The controller-level terms did collapse and are visible as constants in the
-// profile: thirty worker goroutines for the process rather than thirty per
-// workspace, and one priority queue per controller rather than one per
-// controller per workspace.
+// It was 51.7 when the controllers were fleet-wide but their watches were still
+// registered per cluster. Making the controllers fleet-wide collapsed the
+// controller-level terms — thirty worker goroutines for the process rather than
+// per workspace, one priority queue per controller rather than per controller
+// per workspace — and left the per-watch term untouched, which turned out to be
+// about 45 of the 51.7.
 //
-// The per-*watch* term did not, and it is the larger one. Every engaged
-// workspace still gets an event-handler registration per watched type, and
-// multicluster-runtime charges four to five goroutines for one where
-// controller-runtime charges two. At the nine watches this set registers, that
-// is about 45 of the 51.7.
+// Registering each watch once against the fleet-spanning cache, rather than once
+// per engaged cluster, is what removed it: ten informer listeners for the whole
+// shard, against 73 and climbing.
 //
-// So this conversion is necessary and not sufficient. Everything that still
-// scales with workspace count is a registration on a shared informer, which is
-// exactly and only what an interposed cache can remove.
-//
-// # The dev infrastructure provider is optional
-//
-// A nil dev wires the core reconcilers and nothing else. That is not a test
-// affordance: the docker/dev provider is upstream's *test* infrastructure, and a
-// real deployment runs its own infrastructure provider instead of it. It also
-// needs a container runtime, so requiring it would make the core wiring
-// unmeasurable anywhere without one.
-//
-// When it is wired, it is the one thing here that is still process-wide: its
-// in-memory backend binds a fixed port and keys its listeners by Cluster name,
-// so two workspaces each holding a Cluster with the same namespace and name
-// collide inside it. See DevInfrastructure.
+// What is left per workspace is not registration. Three of the 8.1 are
+// multicluster-runtime spawning a goroutine per controller per engaged cluster
+// whether or not that controller has per-cluster sources; one is the provider's
+// scoped cluster; one is this project's own engagement telemetry.
+
 func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {
 		return errors.New("a multi-cluster manager is required")
@@ -131,6 +125,27 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 	options := controller.TypedOptions[mcreconcile.Request]{
 		MaxConcurrentReconciles: opts.fleetMaxConcurrentReconciles(),
 	}
+
+	// Every watch is one registration for the shard rather than one per
+	// workspace.
+	//
+	// The cache is the local manager's, and that is not a convenience: the
+	// manager is built against the APIExport's virtual workspace at /clusters/*,
+	// so its cache already holds every workspace's objects behind one informer
+	// per type. Registering there is what makes the per-workspace watch cost
+	// zero; registering per workspace against the same informer is what made it
+	// 45 goroutines each.
+	//
+	// The resolver is logicalcluster.From, which reads kcp's own annotation. It
+	// is supplied here because it is the one piece of this that is kcp-specific,
+	// and Cluster API should not know it.
+	wildcard := capicontrollerutil.WithWildcard(
+		mgr.GetLocalManager().GetCache(),
+		func(o client.Object) (multicluster.ClusterName, bool) {
+			name := logicalcluster.From(o)
+			return multicluster.ClusterName(name), name != ""
+		},
+	)
 
 	// Note the absence of SkipNameValidation, which every per-workspace
 	// controller needed. controller-runtime rejects a duplicate controller name
@@ -158,7 +173,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		Client: clustercache.ClientOptions{
 			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
 		},
-	}, options)
+	}, options, wildcard)
 	if err != nil {
 		return fmt.Errorf("creating fleet-wide ClusterCache: %w", err)
 	}
@@ -168,7 +183,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
 		return fmt.Errorf("creating fleet-wide Cluster controller: %w", err)
 	}
 
@@ -177,7 +192,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
 		return fmt.Errorf("creating fleet-wide Machine controller: %w", err)
 	}
 
@@ -190,7 +205,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		ContainerRuntime: dev.containerRuntime,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, wildcard); err != nil {
 		return fmt.Errorf("creating fleet-wide DevCluster controller: %w", err)
 	}
 
@@ -200,7 +215,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		ClusterCache:     clusterCache,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
 		return fmt.Errorf("creating fleet-wide DevMachine controller: %w", err)
 	}
 

@@ -1,40 +1,40 @@
 # The fleet-wide conversion, measured
 
-The wiring is now fleet-wide: one ClusterCache, one Cluster controller, one
-Machine controller, serving every workspace. The claim written into
-`SetupFleetControllers` when that landed was:
+Two measurements, taken the same way: a real kcp server, the real
+`coremanager.SetupFleetControllers` (dev provider excluded — it needs a container
+runtime), workspaces accumulated 1 → 2 → 4 → 8, sampled after every workspace has
+engaged.
+
+The first falsified the claim the conversion was written on. The second is what
+fixing the cause it exposed is worth.
+
+| | per-workspace goroutines | per-workspace heap |
+|---|---|---|
+| fleet-wide controllers, per-cluster watch registration | **51.7** | 345 KiB |
+| fleet-wide controllers, one watch registration per type | **8.1** | 126 KiB |
+
+**6.4× fewer goroutines per workspace, and 2.7× less heap.**
+
+## The claim, and why it was wrong
+
+`SetupFleetControllers` originally said:
 
 > Cluster and Machine were two of the five wired controllers and the larger
 > share of the watches, and they leave this sum entirely: they are paid once for
 > the process instead.
 
-**That claim is false, and this is the measurement that falsifies it.**
+They do not, and did not. Making the controllers fleet-wide removed the
+controller-level costs and left the watch-level ones exactly where they were.
 
-## What was measured
-
-`task test:scale` with `-wiring=fleet`: a real kcp server, the real
-`coremanager.SetupFleetControllers` (dev provider excluded — it needs a container
-runtime), workspaces accumulated 1 → 2 → 4 → 8, sampled at each point after
-every workspace has engaged.
-
-Run: `specs/.../evidence/baseline-idle-heavy-fleet-1watch.json`.
-
-| workspaces | heap | goroutines |
-|---|---|---|
-| 1 | 11.8 MiB | 111 |
-| 2 | 12.5 MiB | 227 |
-| 4 | 13.1 MiB | 309 |
-| 8 | 14.2 MiB | 473 |
-
-**Marginal cost of a workspace: 51.7 goroutines, 345 KiB heap.**
+| workspaces | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| goroutines | 111 | 227 | 309 | 473 |
 
 Nine watches are registered per workspace by this set: `clustercache` (Cluster),
 `cluster` (Cluster, Machine, MachineDeployment, MachinePool) and `machine`
 (Machine, Cluster, MachineSet, MachineDeployment).
 
-## Where they go
-
-From `-goroutine-breakdown`, at 8 workspaces:
+The breakdown at 8 workspaces said where they went:
 
 | count | stack | per workspace |
 |---|---|---|
@@ -44,66 +44,96 @@ From `-goroutine-breakdown`, at 8 workspaces:
 | 30 | `controller.processNextWorkItem` | **0 — 3 controllers × 10 workers, constant** |
 | 24 | `mcController.Engage.func1` | 3 — one per controller |
 | 8 | `cache.(*ScopedCluster).Start` | 1 |
-| 8 | `providerwiring.(*Wiring).Engage.func1` | 1 |
-| 3 each | priorityqueue's five loops | **0 — 3 controllers, constant** |
+| 3 each | priorityqueue's five loops | **0 — constant** |
 
-## What this shows
+Two terms had genuinely collapsed, and show as constants. What had not was
+per-watch, and it was ~45 of the 51.7.
 
-**The conversion did what it was designed to do, and that turns out not to be
-the expensive half.**
+## The cause
 
-Two terms genuinely collapsed. Workers are 30 for the process — three
-controllers of ten — where per-workspace wiring pays that per workspace. The
-priority queue's five goroutines per controller are 15 for the process rather
-than 15 per workspace. Those are constants now, and they show up as constants in
-the profile.
+multicluster-runtime registers a watch **per engaged cluster**: as each cluster
+joins, it adds an event handler to that cluster's cache. Under kcp's virtual
+workspace the clusters are views over one shared informer — the profile shows it
+directly, with a constant handful of reflector goroutines against 72 listeners —
+so the informer is shared and the *registrations* are not.
 
-What did not collapse is the per-*watch* cost, and it is the larger term at
-realistic watch counts. Every engaged workspace still gets its own event-handler
-registration per watched type, and multicluster-runtime charges more for one
-than controller-runtime does: an informer listener (`pop`, and its `run`
-partner), plus `clusterKind.Start.func1`, plus `mcController.func2.1` — against
-controller-runtime's listener alone. Roughly four to five goroutines per
-workspace-watch where there were two.
+A registration is not free. It is a client-go `processorListener`: two goroutines
+and a 1024-slot ring buffer, per cluster per type, plus two more goroutines
+multicluster-runtime adds around it.
 
-At nine watches that is about 45 of the 51.7, and it is why the total barely
-moved.
+That scales as watches × workspaces against an informer that is a single object.
+It is the wrong shape for a shard at any size, which is what makes it worth
+fixing rather than accepting.
 
-## What it does not show
+## The fix
 
-**No like-for-like per-workspace figure.** A synthetic run configured to imitate
-the old shape — three controllers, nine watches, ten workers, all per workspace
-— reported 73.0 goroutines per workspace, but its probe controllers never
-started their workers: the profile has zero `processNextWorkItem` goroutines
-where it should have 240. That figure is therefore an undercount of unknown
-size, and it is not quoted here as the comparison. Establishing the comparison
-needs a harness whose controllers demonstrably reach steady state, which this
-one did not.
+`util/multicluster.WildcardSource` registers **once per type** against a
+fleet-spanning cache and demultiplexes per event, asking each object which
+cluster it came from.
 
-The direct measurement above does not depend on it. What was being checked is
-whether the fleet-wide wiring removes the per-workspace goroutine cost, and it
-answers that on its own: it does not.
+The handler still receives what a per-cluster registration would have given it: a
+context naming the cluster and a queue that stamps requests with it. So
+`EnqueueRequestForObject`, `EnqueueRequestForOwner` and Cluster API's map
+functions — which list through a context-scoped client — all work unchanged.
 
-**Idle workspaces only.** The `idle-heavy` profile. Active workspaces were not
-swept.
+Two things Cluster API cannot work out for itself are supplied rather than
+assumed: the fleet-spanning cache, and a resolver saying which cluster an object
+belongs to. Under kcp the cache is the local manager's — it is already built
+against the APIExport's virtual workspace at `/clusters/*` for unrelated reasons
+— and the resolver is `logicalcluster.From`, which reads the `kcp.io/cluster`
+annotation. Neither fact enters Cluster API.
 
-**Eight workspaces.** Any figure quoted above eight is extrapolation.
+## After
+
+| workspaces | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| goroutines | 146 | 175 | 183 | 203 |
+
+**Marginal cost of a workspace: 8.1 goroutines, 126 KiB.**
+
+| count | stack | per workspace |
+|---|---|---|
+| 24 | `mcController.Engage.func1` | 3 — one per controller per cluster |
+| 10 | `processorListener.run` | **0 — one per type, constant** |
+| 10 | `processorListener.pop` | **0 — one per type, constant** |
+| 8 | `cache.(*ScopedCluster).Start` | 1 |
+| 8 | `providerwiring.(*Wiring).Engage.func1` | 1 — ours, engagement telemetry |
+
+The listener count is now ten for the whole shard — five types, two goroutines
+each — where it was 73 and climbing. That is the change.
+
+The base cost rose, 111 → 146, because the local manager now runs the informers
+that the per-cluster caches used to. That is the same work moved, paid once.
+
+## What remains per workspace
+
+About 5 of the 8.1 is attributable and none of it is registration:
+
+- **3 — `mcController.Engage.func1`**, one goroutine per controller per engaged
+  cluster. multicluster-runtime spawns it on engagement whether or not the
+  controller has any per-cluster sources, which with wildcard registration it no
+  longer does. This looks removable upstream and is the largest remaining term.
+- **1 — the provider's `ScopedCluster`**, which a fleet-wide controller no longer
+  watches through but still reads through.
+- **1 — this project's own engagement telemetry runnable.** It exists to count
+  engaged workspaces, and could be a counter rather than a goroutine.
+
+## What this does not show
+
+- **Idle workspaces only** (`idle-heavy`). Active workspaces were not swept.
+- **Eight workspaces.** Anything quoted above eight is extrapolation. At 8.1 per
+  workspace the extrapolation is far less load-bearing than it was at 51.7, but
+  it is still an extrapolation.
+- **Correctness under wildcard registration is not measured here.** The source
+  sees every workspace bound to the APIExport, including any the provider has not
+  engaged; requests for those resolve to no cluster and are absorbed by
+  multicluster-runtime's `ClusterNotFoundWrapper`, which mcbuilder enables by
+  default. The fork's envtest covers the demultiplexing itself, but a test for
+  the unengaged-workspace path would be worth having.
 
 ## What follows
 
-The **interposed cache is now the load-bearing item, not a follow-up.** Every
-goroutine that still scales with workspace count is a registration on a shared
-informer, which is precisely and only what interposing a cache can remove. The
-controller conversion was necessary — the worker and queue terms are real, and
-they are gone — but on its own it buys less than the sum it left behind.
-
-Two things worth checking before designing that work:
-
-1. **multicluster-runtime's per-cluster source is two goroutines per
-   workspace-watch on top of the informer listener.** Whether both are
-   necessary, or whether one source could serve many engaged clusters, is a
-   question for that project rather than this one — and it moves half the
-   remaining cost.
-2. **Nine watches is the wired set, not the parity set.** The census puts parity
-   at 14–15 watches across five controllers. The per-watch term scales with that
-   and the constant terms do not, so parity makes this ratio worse, not better.
+The interposed cache (P2), as previously scoped, was aimed at exactly this cost —
+and this removes it without an interposed cache, by not registering per cluster
+in the first place. What P2 was for should be re-derived from these numbers
+rather than carried forward on the old ones.
