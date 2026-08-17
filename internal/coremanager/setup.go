@@ -109,6 +109,15 @@ type SetupOptions struct {
 	// MaxConcurrentReconciles is the per-controller worker count for each
 	// workspace. Zero means DefaultMaxConcurrentReconciles.
 	MaxConcurrentReconciles int
+
+	// FleetMaxConcurrentReconciles is the worker count for each controller that
+	// serves every workspace. Zero means DefaultFleetMaxConcurrentReconciles.
+	//
+	// Separate from MaxConcurrentReconciles because the two size different
+	// things: one is multiplied by the number of workspaces and the other is
+	// not. One knob meaning both would make raising the shared pool — which is
+	// cheap — also raise every workspace's private pool, which is not.
+	FleetMaxConcurrentReconciles int
 }
 
 func (o SetupOptions) maxConcurrentReconciles() int {
