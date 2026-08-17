@@ -63,6 +63,23 @@ Traffic figures are cumulative from the start of the run, so a zero in that
 column means the quantity did not move as workspaces were added — not that it
 never happened.
 
+### The same sweep, three times wider
+
+`SWEEP_WORKSPACES=12` on the same machine, to check that four points were not
+four points on a curve that bends:
+
+| Workspaces | 1 | 2 | 4 | 6 | 8 | 10 | 12 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| Goroutines | 64 | 76 | 100 | 124 | 148 | 172 | 196 |
+| Heap (MiB) | 15.9 | 16.0 | 16.1 | 16.3 | 16.5 | 16.8 | 17.0 |
+| Watch streams | 3 | 3 | 3 | 3 | 3 | 3 | 3 |
+| Requests, cumulative | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+
+Twelve goroutines per workspace, to the goroutine, at every point. Serving
+twelve active workspaces cost the shard the same ten requests as serving one:
+after the first workspace engaged, adding eleven more required no further
+traffic at all.
+
 ## Claim 1: watches are O(types), not O(types × workspaces) — holds
 
 Three streams served four active workspaces, and the same three served one:
@@ -136,6 +153,10 @@ Below that layer, two goroutines per departed workspace per watched type are
   every workspace, so it outlives any one workspace's controllers — and the
   handler, with the `processorListener` run/pop pair kcp's informers start for
   it, outlives them too.
+
+The wider run shows it as arithmetic: each departure gave back 10 of the 12
+goroutines the workspace had cost, all the way down from twelve workspaces to
+one.
 
 The retained goroutines are released when the wildcard cache itself stops,
 which is what the large drop at the last departure in the table above is: kcp
