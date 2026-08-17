@@ -971,6 +971,70 @@ Both would have answered the question confidently and wrongly.
 
 ---
 
+## R19 — Per-workspace structure has one cause, and it is one function — VERIFIED
+
+**Question**: why is anything per workspace? Why not one controller set across
+the shard using `mcreconcile.Request` semantics?
+
+**Nothing about event delivery requires it.** Read in
+`cluster-api@v1.15.0-kcp.1`:
+
+1. **`Reconcile` depends on unexported state.** `cluster.Reconciler` has
+   `recorder` and `externalTracker` unexported; `machine.Reconciler` has six
+   such fields. They are used far outside setup —
+   `cluster_controller_phases.go:60` calls `r.externalTracker.Watch(...)`,
+   `:243`/`:345` and `cluster_controller_status.go:48` call `r.recorder.Eventf`.
+   So an external package **cannot** construct a working reconciler; it must
+   call `SetupWithManager`.
+2. **`SetupWithManager` hardcodes a single-cluster controller.** All 15 core
+   reconcilers build through `capicontrollerutil.NewControllerManagedBy`
+   (`util/controller/builder.go:65`), which wraps
+   `builder.ControllerManagedBy(m)` — one controller, one manager, plain
+   `reconcile.Request`.
+3. **`reconcile.Request` is a `NamespacedName`.** A fleet-wide controller keyed
+   on it could not tell workspace A's `default/my-cluster` from workspace B's;
+   they would collide in the workqueue. A correctness failure, not a cost one.
+
+Per-workspace managers are the adapter that satisfies (1) and (2) while keeping
+tenants apart. **The 75 goroutines per workspace are the arithmetic of that
+adapter, not a chosen design.**
+
+### Almost everything else already exists
+
+| Need | Status |
+|---|---|
+| Request carrying the cluster | **exists** — `mcreconcile.Request` |
+| Adapting an unmodified reconciler | **exists** — `mccontext.ReconcilerWithClusterInContext` |
+| Reusing existing map functions | **exists** — `TypedEnqueueRequestsFromMapFuncWithClusterPreservation` |
+| One fleet-wide registration | **exists** — `WildcardCache.GetSharedInformer` + `kcp.io/cluster` (R12) |
+| Context-scoped client | **missing** — ~100 lines |
+
+`Reconcile` itself needs **no changes**, and neither do the map functions.
+
+### The blocker is one function signature
+
+`capicontrollerutil.Builder` is a thin wrapper over controller-runtime's,
+written throughout against the **Typed** APIs —
+`controller.TypedOptions[reconcile.Request]`,
+`handler.TypedEventHandler[client.Object, reconcile.Request]`,
+`source.TypedSource[reconcile.Request]`,
+`reconcile.TypedReconciler[reconcile.Request]`. Every one is `reconcile.Request`
+where it could be a type parameter, and `mcbuilder.TypedBuilder[request]`
+already exposes the same surface generically.
+
+**The upstream ask is therefore "make CAPI's builder wrapper generic over the
+request type", not "make Cluster API multi-tenant"** — and because all 15
+reconcilers build through it, one change reaches all of them unedited. That is
+the Principle II proposal to raise, alongside R5's REST mapper and R17's
+engagement serialization.
+
+Beyond it, two things remain: `external.ObjectTracker`'s dynamic watches enqueue
+plain requests, and `clustercache` keys accessors by namespace/name only
+(`cluster_cache.go:362`) — the latter a cross-tenant correctness bug fleet-wide,
+not an adaptation. Full analysis in `evidence/why-per-workspace.md`.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -993,4 +1057,5 @@ Both would have answered the question confidently and wrongly.
 | Controller census (R16) | VERIFIED — 5 controllers today, ~16 at parity | None; parity projection is a capacity caveat, not a blocker |
 | Split deployments (R17) | MEASURED — mandatory; multiplies engagement cost | None; it raises the engagement repairs' priority |
 | Reconcile throughput (R18) | MEASURED — linear in workers; default raised 2→4 | None; pooling is the structural fix |
+| Per-workspace cause (R19) | VERIFIED — one builder function, plus tracker and clustercache | Principle II proposal, as with R5 |
 | First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |
