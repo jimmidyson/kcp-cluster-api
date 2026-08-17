@@ -204,26 +204,46 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Registered before Start, and that ordering is load-bearing:
+	// Wired before Start, and that ordering is load-bearing: the controllers
+	// register their watches with the multi-cluster manager, and
 	// multicluster-runtime hands each engagement to the components registered
-	// at that moment and never replays earlier ones, so wiring registered
-	// after the manager is running misses every workspace that engaged in the
-	// meantime - without an error, and without a log line.
-	// One recorder for the process, shared by every workspace. It attributes
-	// load without letting exported series grow with workspace count; see
-	// internal/workspacetelemetry for why that asymmetry is deliberate.
+	// at that moment and never replays earlier ones. Wiring after the manager
+	// is running misses every workspace that engaged in the meantime - without
+	// an error, and without a log line.
+	//
+	// One set of controllers for the process. Each resolves the workspace from
+	// the context of the reconcile it is running, so there is no per-workspace
+	// setup left to run and nothing to re-run as workspaces come and go.
+	setupLog.Info("Wiring fleet-wide reconcilers")
+	if err := coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{
+		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
+	}); err != nil {
+		setupLog.Error(err, "Unable to wire fleet-wide reconcilers")
+		os.Exit(1)
+	}
+
+	// Per-workspace wiring with nothing to wire.
+	//
+	// There is no longer any per-workspace setup: the controllers above serve
+	// every workspace. What remains worth having is the lifecycle itself -
+	// which workspaces engaged, which failed, how many are live - because an
+	// operator sizing a shard needs the count and a workspace that never
+	// engages is otherwise invisible. So the seam stays, with an empty
+	// SetupFunc, purely to drive the recorder.
+	//
+	// One recorder for the process. It attributes load without letting exported
+	// series grow with workspace count; see internal/workspacetelemetry for why
+	// that asymmetry is deliberate.
 	telemetry := workspacetelemetry.New(workspacetelemetry.Options{})
 
-	if _, err := providerwiring.AddToManager(mgr, func(ctx context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
-		setupLog.Info("Wiring reconcilers onto a workspace", "clusterName", workspace)
-		return coremanager.SetupReconcilers(ctx, wsMgr, dev, coremanager.SetupOptions{
-			MaxConcurrentReconciles: maxConcurrentReconciles,
-		})
+	if _, err := providerwiring.AddToManager(mgr, func(_ context.Context, workspace multicluster.ClusterName, _ manager.Manager) error {
+		setupLog.V(4).Info("Workspace engaged", "clusterName", workspace)
+		return nil
 	}, providerwiring.Options{
 		Log:       ctrl.Log.WithName("providerwiring"),
 		Telemetry: telemetry,
 	}); err != nil {
-		setupLog.Error(err, "Unable to register per-workspace wiring")
+		setupLog.Error(err, "Unable to register workspace engagement telemetry")
 		os.Exit(1)
 	}
 

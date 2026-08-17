@@ -22,19 +22,20 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	"github.com/jimmidyson/kcp-cluster-api/internal/fleet"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
 )
 
-// The contract between this repository and the fork, checked by the compiler.
+// The contract inside the fork, checked from here because here is where both
+// halves meet.
 //
-// The fork's fleet-wide setup functions take a
-// clustercache.MulticlusterClusterSourceFunc and cannot construct one; this is
-// the only implementation, and its signature has to keep matching across two
-// repositories that are versioned separately. A mismatch here is the failure
-// that would otherwise appear as an unrelated-looking build error the next time
-// the pin moves.
-var _ clustercache.MulticlusterClusterSourceFunc = fleet.NewClusterCaches().Source
+// The fleet-wide setup functions take a MulticlusterClusterSourceFunc, and the
+// fleet-wide ClusterCache's method is the only thing that supplies one. They are
+// declared in the same package but are wired together only by this binary, so a
+// signature drift between them would otherwise surface the next time the pin
+// moves, as a build error a long way from its cause.
+var _ func(clustercache.MulticlusterClusterCache) clustercache.MulticlusterClusterSourceFunc = func(cc clustercache.MulticlusterClusterCache) clustercache.MulticlusterClusterSourceFunc {
+	return cc.GetMulticlusterClusterSource
+}
 
 func TestFleetMaxConcurrentReconcilesDefaults(t *testing.T) {
 	g := NewWithT(t)
@@ -64,25 +65,7 @@ func TestFleetMaxConcurrentReconcilesDefaults(t *testing.T) {
 func TestSetupFleetControllersRequiresItsCollaborators(t *testing.T) {
 	g := NewWithT(t)
 
-	err := SetupFleetControllers(context.Background(), nil, fleet.NewClusterCaches(), SetupOptions{})
+	err := SetupFleetControllers(context.Background(), nil, &DevInfrastructure{}, SetupOptions{})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("multi-cluster manager"))
-}
-
-// TestSetupWorkspaceComponentsRequiresItsCollaborators is the same for the
-// per-workspace half. The returned SetupFunc is what providerwiring calls, so
-// its failures are per-workspace rather than fatal — which is why they have to
-// be errors rather than panics.
-func TestSetupWorkspaceComponentsRequiresItsCollaborators(t *testing.T) {
-	g := NewWithT(t)
-
-	setup := SetupWorkspaceComponents(nil, nil, SetupOptions{})
-	err := setup(context.Background(), "ws", nil)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("fleet.ClusterCaches"))
-
-	setup = SetupWorkspaceComponents(fleet.NewClusterCaches(), nil, SetupOptions{})
-	err = setup(context.Background(), "ws", nil)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("DevInfrastructure"))
 }

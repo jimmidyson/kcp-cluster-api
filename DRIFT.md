@@ -25,8 +25,8 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-sixteen deliberate entries below, seven are new files and nine modify
-existing ones — and the nine are the number that matters.
+twenty-nine deliberate entries below, nine are new files and twenty modify
+existing ones — and the twenty are the number that matters.
 
 ## Where the check runs, and why not on every pull request
 
@@ -80,7 +80,20 @@ cannot build without them. See the feature's research notes (R2).
 | `util/controller/controller_test.go` | **Modified.** The wrappers are built as struct literals here, so the new fields have to be supplied. | None — carried deliberately, ADR-0003 |
 | `util/controller/builder_test.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 | `controllers/external/tracker.go` | **Modified.** `ObjectTracker` gains an optional `MultiClusterController`, registering runtime watches fleet-wide. A separate type was tried and does not work: the reconcilers hold the tracker as a concrete field and read `PredicateLogger` off it from the reconcile path. | None — carried deliberately, ADR-0003 |
-| `controllers/clustercache/cluster_cache_workspace.go` | New file. `MulticlusterClusterSourceFunc`: the shape a caller must supply in place of `GetClusterSource`, which a fleet-wide controller cannot call because `ClusterCache` stays per-cluster. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache_workspace.go` | New file. `SetupWithMulticlusterManager`, `GetMulticlusterClusterSource` and the accessor key that carries the logical cluster. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache.go` | **Modified.** Accessors and last-event times key on the logical cluster as well as the ObjectKey, resolved from the context. `clusterSource.ch` becomes a send function so one cache can feed both shapes of consumer. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_accessor.go` | **Modified.** Carries the logical cluster, for metric labels. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/metrics.go` | **Modified.** Adds a `logical_cluster` label; without it two workspaces' identically named Clusters share a time series. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache_fake.go` | **Modified.** Keys the fake's accessor map the same way. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache_test.go` | **Modified.** Same keying; the event-fan-out test substitutes the send rather than reading a channel. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_accessor_test.go` | **Modified.** Same keying. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/devcluster_reconciler_workspace.go` | New file. `SetupWithMulticlusterManager` for DevCluster. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/devmachine_reconciler_workspace.go` | New file. `SetupWithMulticlusterManager` for DevMachine. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/devmachine_reconciler.go` | **Modified.** The `controller` field narrows to the one method the reconcile path calls. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/backends/docker/taskmanager.go` | **Modified.** Tasks key on the logical cluster; progress events carry it; `GetSource` gains a fleet-wide counterpart. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/backends/docker/dockermachine_backend.go` | **Modified.** Passes the context to the task manager calls that now need it. | None — carried deliberately, ADR-0003 |
+| `test/go.mod` | **Modified.** go directive raised to match the root. | None — carried deliberately, ADR-0003 |
+| `test/go.sum` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/cluster/cluster_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Cluster reconciler. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machine/machine_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Machine reconciler. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machine/machine_controller.go` | **Modified.** `watchClusterNodes` builds its watch through a `nodeWatcherFunc` each setup installs, because `clustercache.NewWatcher` is keyed on the controller's request type and the fleet-wide watch additionally needs the management cluster from the context. The `controller` field narrows to the one method the reconcile path calls. | None — carried deliberately, ADR-0003 |
@@ -100,11 +113,15 @@ open, and it flips to silence when the branch lands.
 
 ### What to watch on the deliberate entries
 
-Seven are new files and rebase for free. Nine modify upstream files, and
+Nine are new files and rebase for free. Twenty modify upstream files, and
 those are the real recurring cost:
 
 - `util/controller/controller.go` and `builder.go` — the largest, and the
   one that would conflict with any upstream change to the builder.
+- `controllers/clustercache/*` — the second largest, and the one this
+  project would most like upstream to take, because a cluster-blind accessor
+  map is a latent fault for anyone running Cluster API over more than one
+  logical cluster.
 - `controllers/external/tracker.go` — one field and one branch.
 - `core/reconcilers/machine/machine_controller.go` — one seam, one field
   type. This is the only reconciler touched, and its *reconcile logic* is

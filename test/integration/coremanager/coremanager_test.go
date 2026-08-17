@@ -280,6 +280,22 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 
 	mgrCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
+
+	// The dev infrastructure provider's backend binds a fixed port, so it is
+	// created once per process and shared - see coremanager.DevInfrastructure.
+	dev, err := coremanager.NewDevInfrastructure(mgrCtx)
+	if err != nil {
+		t.Fatalf("failed to set up the dev infrastructure provider backend: %v", err)
+	}
+
+	// Wired once, before Start, for every workspace this provider will ever
+	// engage - including ones created later in this test. That ordering is not
+	// stylistic: multicluster-runtime hands each engagement to the components
+	// registered at that moment and never replays earlier ones.
+	if err := coremanager.SetupFleetControllers(mgrCtx, mgr, dev, coremanager.SetupOptions{}); err != nil {
+		t.Fatalf("failed to set up fleet-wide reconcilers: %v", err)
+	}
+
 	go func() {
 		if err := mgr.Start(mgrCtx); err != nil {
 			t.Logf("manager exited: %v", err)
@@ -291,32 +307,22 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 		t.Fatalf("workspace was never engaged by the provider: %v", err)
 	}
 
-	// The dev infrastructure provider's backend binds a fixed port, so it is
-	// created once per process and shared - see coremanager.DevInfrastructure.
-	dev, err := coremanager.NewDevInfrastructure(mgrCtx)
-	if err != nil {
-		t.Fatalf("failed to set up the dev infrastructure provider backend: %v", err)
-	}
-
-	if err := coremanager.SetupReconcilers(mgrCtx, wsMgr, dev, coremanager.SetupOptions{}); err != nil {
-		t.Fatalf("failed to set up reconcilers: %v", err)
-	}
 	coremanager.ResetWebhookWorkspaceForTest()
 	t.Cleanup(coremanager.ResetWebhookWorkspaceForTest)
 	if err := coremanager.SetupWebhooks(clusterName, wsMgr); err != nil {
 		t.Fatalf("failed to set up webhooks: %v", err)
 	}
 
-	// --- A second workspace, wired with the same real reconciler set.
+	// --- A second workspace, served by the same controllers.
 	//
-	// This is the regression test for what per-workspace wiring costs at the
-	// second workspace, and it needs the real reconcilers rather than a stand-in
-	// (which test/integration/providerwiring covers): the failure it guards
-	// against comes from controller-runtime's process-global registry of
-	// controller names, so it only appears once two workspaces each wire a
-	// controller called "cluster". Nothing is reconciled here - the Cluster to
-	// Machine loop is exercised in the first workspace above - because what is
-	// being asserted is that the wiring itself survives a second tenant.
+	// It is wired by nobody: the controllers above already serve it, and that is
+	// the thing this asserts. Under per-workspace wiring this was a regression
+	// test for controller-runtime's process-global registry of controller names,
+	// which rejected the second workspace's controller called "cluster" and had
+	// to be disabled with SkipNameValidation. A fleet-wide controller registers
+	// each name once, so the collision is gone rather than suppressed - and the
+	// check is back on, which is what would fail here if a controller were
+	// somehow wired twice.
 	secondWsPath, secondWs := kcptesting.NewWorkspaceFixture(t, server, logicalcluster.NewPath("root"))
 	secondClusterName := multicluster.ClusterName(secondWs.Spec.Cluster)
 
@@ -336,9 +342,6 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	secondWsMgr, err := coremanager.WaitForManager(mgrCtx, mgr, secondClusterName, 250*time.Millisecond, 60*time.Second)
 	if err != nil {
 		t.Fatalf("second workspace was never engaged by the provider: %v", err)
-	}
-	if err := coremanager.SetupReconcilers(mgrCtx, secondWsMgr, dev, coremanager.SetupOptions{}); err != nil {
-		t.Fatalf("failed to set up reconcilers for a second workspace: %v", err)
 	}
 
 	// Webhooks, by contrast, are deliberately not multi-workspace: there is one

@@ -21,7 +21,6 @@ package coremanager
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -36,19 +35,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
-	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/remote"
-	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
-	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
 	coreadmission "sigs.k8s.io/cluster-api/core/webhooks/admission"
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
-	"sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers"
 	infrawebhooks "sigs.k8s.io/cluster-api/test/infrastructure/docker/webhooks/admission"
 	cloudv1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/cloud/api/v1alpha1"
 	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
@@ -185,96 +178,6 @@ func NewDevInfrastructure(ctx context.Context) (*DevInfrastructure, error) {
 		inMemoryManager:  inMemoryManager,
 		apiServerMux:     apiServerMux,
 	}, nil
-}
-
-// SetupReconcilers wires the walking skeleton's reconciler set onto one
-// workspace's manager: the core Cluster/Machine reconcilers and the docker/dev
-// infrastructure provider's DevCluster/DevMachine reconcilers, all unmodified
-// upstream exported types, per ADR-0001's D3 scope. Everything else
-// core/main.go and test/infrastructure/docker/main.go wire up
-// (ClusterClass/topology, RuntimeSDK, MachineSet/MachineDeployment/MachinePool,
-// ClusterResourceSet, MachineHealthCheck, CRD migration) is intentionally out
-// of scope: proving the KCP-workspace-aware mechanism holds for a real
-// Cluster->Machine loop is a different job from reaching feature parity with
-// core/main.go (that's Phase 3).
-//
-// It is a providerwiring.SetupFunc in all but signature, and is called once per
-// engaged workspace. Everything it creates is derived from mgr and so is scoped
-// to that workspace; the only shared argument is dev, whose sharing is
-// explained on DevInfrastructure.
-//
-// CRDMigrator is skipped entirely and deliberately, not just deferred: it
-// operates on CustomResourceDefinition objects directly, but a workspace
-// consuming a bound API via APIBinding has no such object to migrate - the
-// CRD-shaped source of truth (the APIResourceSchema) lives in the exporting
-// workspace instead. Running it here would be reconciling a concept that
-// doesn't apply under kcp's APIBinding model.
-func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastructure, opts SetupOptions) error {
-	if dev == nil {
-		return errors.New("DevInfrastructure must not be nil: create it once per process with NewDevInfrastructure")
-	}
-
-	// Read once so every controller in this workspace shares one budget, and
-	// so the figure appears at a single place when it is revisited against the
-	// sweep.
-	concurrency := opts.maxConcurrentReconciles()
-
-	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
-		HTTPClient: mgr.GetHTTPClient(),
-		Cache:      &client.CacheOptions{Reader: mgr.GetCache()},
-	})
-	if err != nil {
-		return fmt.Errorf("creating secret caching client: %w", err)
-	}
-
-	clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
-		SecretClient: secretCachingClient,
-		Client: clustercache.ClientOptions{
-			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
-		},
-	}, controllerOptions(concurrency))
-	if err != nil {
-		return fmt.Errorf("creating ClusterCache: %w", err)
-	}
-
-	if err := (&cluster.Reconciler{
-		Client:                      mgr.GetClient(),
-		APIReader:                   mgr.GetAPIReader(),
-		ClusterCache:                clusterCache,
-		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
-		return fmt.Errorf("creating Cluster controller: %w", err)
-	}
-
-	if err := (&machine.Reconciler{
-		Client:                      mgr.GetClient(),
-		APIReader:                   mgr.GetAPIReader(),
-		ClusterCache:                clusterCache,
-		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
-		return fmt.Errorf("creating Machine controller: %w", err)
-	}
-
-	if err := (&reconcilers.DevCluster{
-		Client:           mgr.GetClient(),
-		ContainerRuntime: dev.containerRuntime,
-		InMemoryManager:  dev.inMemoryManager,
-		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
-		return fmt.Errorf("creating DevCluster controller: %w", err)
-	}
-
-	if err := (&reconcilers.DevMachine{
-		Client:           mgr.GetClient(),
-		ContainerRuntime: dev.containerRuntime,
-		ClusterCache:     clusterCache,
-		InMemoryManager:  dev.inMemoryManager,
-		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(concurrency)); err != nil {
-		return fmt.Errorf("creating DevMachine controller: %w", err)
-	}
-
-	return nil
 }
 
 // webhookWorkspace records the workspace whose webhooks are being served, so a
