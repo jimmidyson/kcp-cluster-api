@@ -1,8 +1,14 @@
 # ADR-0003: Should Cluster API become workspace-aware?
 
-Status: **proposed** — this records a question and the evidence for answering
-it. No decision has been made, and the decision is the project's rather than
-this document's.
+Status: **accepted — option B**, decided 2026-08-17. The premise is narrowed to
+"unmodified upstream *reconcile logic*", and the workspace-aware wiring is
+carried in the fork. **Upstream proposals are explicitly not being made**, which
+is a departure from this document's own recommendation of D and from
+Constitution Principle II — recorded as a decision rather than an oversight
+(see "The decision" below).
+
+The evidence and options below are kept as they were written, so the reasoning
+the decision was taken against remains legible.
 
 It reopens the alternative
 [research R1](../specs/20260815-211812-workspace-wiring-scale/research.md)
@@ -101,7 +107,21 @@ APIs — `TypedOptions[reconcile.Request]`,
 one is `reconcile.Request` where it could be a type parameter, and
 `mcbuilder.TypedBuilder[request]` already exposes the same surface generically.
 
-The change to that file is close to mechanical.
+~~The change to that file is close to mechanical.~~
+
+**Corrected 2026-08-17, after the survey in
+[`singleton-survey.md`](../specs/20260815-211812-workspace-wiring-scale/evidence/singleton-survey.md).**
+It is not. `builder.go` is not a thin pass-through: it carries a reconciler
+wrapper, an exponential rate limiter, metrics registration, log-constructor
+defaulting and a consistency store, all typed on `reconcile.Request`.
+Genericising it is real work, and one collaborator — `consistencyStore`, whose
+`writes` map is keyed by `types.NamespacedName` and which is constructed once per
+controller — needs an **interface change**, because neither of its two possible
+fixes can be made additively.
+
+The 2.6% figure is unaffected: it counted `SetupWithManager` bodies, and remains
+the right measure of how much *reconciler* code changes, which is none. What was
+understated is how much *builder* code changes.
 
 ## What the premise buys, and what a narrower one keeps
 
@@ -161,7 +181,11 @@ Combined with additive files and per-controller conversion (responses 1 and 3),
 it is also incremental: no step is a big-bang rewrite, and each is priced by the
 R16 formula before it is taken.
 
-## Recommendation
+## Recommendation as written before the decision
+
+Retained for the record; the project chose **B**. The sequencing point below
+still applies, and is the reason the cache work proceeds in parallel rather than
+after.
 
 **D**, with one sequencing point that makes the decision safer to defer — and
 with the additive-file strategy of response 1 below, which makes D's divergence
@@ -176,6 +200,32 @@ design it is where the per-cluster demultiplexing has to live anyway.
 So: **do the cache work now, and decide this afterwards with more evidence.**
 Nothing about it is wasted by either answer, and it buys time to raise the
 upstream proposal and see how it lands.
+
+## The decision
+
+**Option B**, not the recommended D: the changes are made in the fork, in
+parallel with the interposed-cache work in this repository, and **no upstream
+proposal is raised**.
+
+Two consequences follow, and both are accepted deliberately.
+
+**Principle II is set aside for this concern.** The constitution says to raise a
+missing extension point rather than work around it. That is not being done here.
+The reasoning above for why the change is upstreamable still holds — it would
+benefit any multi-tenant Cluster API deployment — but pursuing it is a cost the
+project is choosing not to pay now, and the option remains open later.
+
+**`DRIFT.md`'s premise no longer holds for these entries.** Its preamble says
+each entry "is expected to be deleted once its upstream proposal is accepted",
+and its table carries an *Upstream proposal* column with due dates. Divergence
+that is deliberately permanent has no slot in that shape. New entries are
+recorded as **"None — carried deliberately, ADR-0003"** rather than with a
+pending date, so the record stays honest about which patches are temporary and
+which are not.
+
+That distinction is worth keeping visible: the two existing entries *are*
+expected to go away, and mixing them with entries that are not would make the
+record less useful over time, not more.
 
 ## The three risks, and the responses to them
 
@@ -299,6 +349,13 @@ viability.
 - **A survey finding that the *cheap* controllers are the ones with singleton
   assumptions**, so the incremental path converts only the ones that do not
   matter.
+
+**The survey has since been run** —
+[`singleton-survey.md`](../specs/20260815-211812-workspace-wiring-scale/evidence/singleton-survey.md).
+It found three cluster-blind stores rather than one. Two are `clustercache`'s and
+are containable by leaving that component per-workspace, exactly as response 3
+anticipated. The third is inside the builder and must be converted. The decision
+stands; the scope estimate for the builder does not.
 
 ## What is not established
 
