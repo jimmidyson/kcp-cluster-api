@@ -845,6 +845,53 @@ figure is built on it.
 
 ---
 
+## R17 — Splitting deployments is priced by engagement, not by the cache — MEASURED
+
+**Question**: would running the core controllers as separate deployments scale
+better horizontally, or does the shared wildcard cache make it better to keep
+them together?
+
+**The cache is not the reason to keep them together.** `wildcardCache` embeds
+controller-runtime's cache and resolves `GetSharedInformer` per GVK, creating
+informers lazily — so a split deployment caches only the types it watches, and
+duplication is limited to the overlap. Cached objects are also cheap: tripling
+objects per workspace from 10 to 30 moved live heap per workspace by less than
+the measurement noise.
+
+**What gets duplicated is per-workspace engagement.** Measured, splitting the
+wired set into core (3 controllers, 9 watches) and infrastructure (2
+controllers, 6 watches):
+
+| | Goroutines/ws | Footprint/ws |
+|---|---|---|
+| Combined | 75.0 | 2.83 MiB |
+| Core only | 47.0 | 2.38 MiB |
+| Infrastructure only | 32.0 | 2.16 MiB |
+
+Both split figures were predicted by the R16 formula before being run and
+measured exactly — the fourth and fifth out-of-sample confirmations.
+
+The binding process drops **37% on goroutines and 16% on memory**, buying about
+19% more workspaces per shard at a fixed per-process limit — for **61% more
+total memory**. The gap is the two fixed per-workspace costs, ~880 KiB
+altogether, which every deployment pays in full however little it watches.
+
+### Two consequences
+
+**Sequencing.** All four `build` determinations concern the engagement path, and
+engagement is exactly what a split multiplies. Splitting first locks in N copies
+of the cost the gate just said to repair. Under option D's fleet-wide
+registration, a further deployment would cost ~464 KiB and 2 goroutines per
+workspace instead of ~880 KiB.
+
+**Axis.** `Cluster` is watched by all five controllers and `Machine` by three,
+so a core/infrastructure split duplicates the two hottest types. A deployment
+for a genuinely new service watches disjoint types and duplicates no cache at
+all — which is the shape ADR-0002's appliance model was already heading toward,
+and it is the cheap kind. Full analysis in `evidence/split-deployments.md`.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -865,4 +912,5 @@ figure is built on it.
 | Fitted model and held-out accuracy | MEASURED — worst error 0.39% | None; `cmd/scalemodel` re-derives it from committed runs |
 | Goroutine decomposition (R16) | MEASURED — 75/workspace; cache interposition reaches 37% | None; it reframes FR-003's determination |
 | Controller census (R16) | VERIFIED — 5 controllers today, ~16 at parity | None; parity projection is a capacity caveat, not a blocker |
+| Split deployments (R17) | MEASURED — priced by engagement, not by cache | None; sequence after the engagement repairs |
 | First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |

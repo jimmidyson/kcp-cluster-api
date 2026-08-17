@@ -84,6 +84,10 @@ var (
 			"directly into the per-workspace goroutine count.")
 	engageTimeout = flag.Duration("engage-timeout", 5*time.Minute,
 		"How long to wait for every provisioned workspace to be engaged before a point is abandoned.")
+	objectsPerWorkspace = flag.Int("objects-per-workspace", -1,
+		"Override the profile's object count. Negative keeps the profile's own. Varying this at a "+
+			"fixed watch count isolates the cost of a cached object from the cost of watching it, "+
+			"which is what prices duplicating a cache across deployments.")
 	evidenceDir = flag.String("evidence-dir", "",
 		"Where to write the run as JSON. Empty writes nothing. A capacity figure has to be "+
 			"re-derivable from the points that produced it, and a test log is not a record.")
@@ -117,6 +121,13 @@ func TestSweep(t *testing.T) {
 	points, err := parsePoints(*sweepPoints)
 	if err != nil {
 		t.Fatalf("%v", err)
+	}
+	if *objectsPerWorkspace >= 0 {
+		profile.ObjectsPerWorkspace = *objectsPerWorkspace
+		// Renamed so the run cannot be mistaken for the stock profile it came
+		// from: a figure filed under "active-heavy" that used a different
+		// object count would silently contradict the published one.
+		profile.Name = fmt.Sprintf("%s-%dobj", profile.Name, *objectsPerWorkspace)
 	}
 
 	crdPaths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreCRDs...)
