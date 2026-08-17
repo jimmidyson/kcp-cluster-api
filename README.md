@@ -48,7 +48,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 
 | Target | What it does |
 |---|---|
-| `verify` | The done-condition: build, lint, unit tests, integration tests |
+| `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |
 | `build` | Compile all binaries |
 | `lint` | Static analysis (`go vet`) |
@@ -56,6 +56,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:integration` | Integration tests against a real kcp server |
 | `test:integration:kcp` | The subset needing only a kcp server, no container runtime |
 | `test:integration:docker` | The subset also needing a container runtime |
+| `test:sweep` | Measure per-workspace resource usage against a real kcp server |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
 | `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
 | `docs:build` | Build the documentation site |

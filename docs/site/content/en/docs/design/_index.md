@@ -15,6 +15,11 @@ If you're looking for how to run the project rather than build it, see
   pinned dependency rather than a tree here, what the patched fork is for,
   and how divergence is counted.
 - **[Repository layout](repository-layout.md)** — what lives where.
+- **[Per-workspace wiring](per-workspace-wiring.md)** — the seam between
+  workspace discovery and unmodified upstream reconcilers.
+- **[Workspace resource usage](workspace-resource-usage.md)** — what one
+  manager process costs per active workspace, measured against a real kcp
+  server.
 - **[Adopting upstream releases](rebasing.md)** — why an upgrade is a
   dependency bump rather than a merge.
 - **[Documentation policy](documentation-policy.md)** — what documentation is

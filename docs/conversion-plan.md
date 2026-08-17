@@ -98,8 +98,20 @@ workspaces).
 Adopting `kcp-dev/multicluster-provider`'s `WildcardCache` (see above)
 solves the biggest parts of this for free: watches and startup LISTs are
 O(types), not O(types × workspaces), and there's no duplicated
-cache/transport per workspace. What it does *not* obviously solve, and
-needs verifying in the Phase 1 spike rather than assumed:
+cache/transport per workspace.
+
+> **Measured, and it holds.** Both halves of that paragraph are now
+> demonstrated rather than argued, against a real kcp server, by
+> `task test:sweep` (`test/integration/sweep`). Four active workspaces were
+> served by the same three watch streams as one, none of them addressed to a
+> tenant's logical cluster, with no per-workspace LISTs, discovery or extra
+> requests of any kind. See
+> [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
+> for the numbers, the method, and the one thing that does *not* come back
+> when a workspace leaves.
+
+What it does *not* obviously solve, and needs verifying in the Phase 1 spike
+rather than assumed:
 
 - **Leader election.** The library wraps a controller-runtime manager
   internally; the expectation is one election for the whole process
@@ -129,6 +141,12 @@ needs verifying in the Phase 1 spike rather than assumed:
   (workqueue, goroutines, rate limiter) once `SetupWithManager` runs
   against its `GetManager()` result — cheap relative to a duplicated
   cache, but not free; matters mainly at very high workspace counts.
+  **Now quantified**: 12 goroutines and ~106 KiB of retained heap per active
+  workspace, for one controller watching one type, exactly linear in W. The
+  same sweep found the one cost that is not reclaimed on disengagement —
+  two goroutines per departed workspace per watched type, retained by an
+  event handler controller-runtime's `Kind` source never removes — which
+  accumulates with workspace *churn* rather than with W.
 - **Library maturity.** `kcp-dev/multicluster-provider` is explicitly
   documented as experimental and pre-1.0 (currently v0.8.x). Pinning
   production multi-tenancy on it is an adoption risk to weigh

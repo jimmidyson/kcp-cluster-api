@@ -35,6 +35,34 @@ changes is *where* those objects live and how the controllers reach them:
   via `APIBinding` has no `CustomResourceDefinition` object to read contract
   labels from.
 
+## What a workspace costs
+
+One process serves many workspaces, so the practical question when sizing a
+deployment is what each one adds. Measured against a real kcp server, with one
+controller watching one type per workspace:
+
+| Per active workspace | Cost |
+|---|---|
+| Goroutines | 12 |
+| Retained heap | ~106 KiB |
+| Watch connections to the shard | 0 |
+| API requests of any kind | 0 |
+
+Zero is not a rounding error: reads for every workspace come from one shared
+wildcard cache, so the shard sees the same three streams whether the process
+is serving one workspace or forty. Adding a workspace costs memory and
+goroutines in the manager, not connections or request rate on kcp.
+
+One thing to know when workspaces come and go frequently: two goroutines per
+departed workspace are retained until the process stops serving workspaces
+entirely. That accumulates with churn rather than with the number of
+workspaces currently bound.
+
+These figures come from `task test:sweep`, which measures them on your own
+machine. See
+[Workspace resource usage](../design/workspace-resource-usage.md) for the
+method, the full results, and the conditions they hold under.
+
 ## Not supported yet
 
 - Engaging every workspace bound to the export, instead of one named

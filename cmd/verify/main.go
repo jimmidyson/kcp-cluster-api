@@ -57,6 +57,15 @@ func main() {
 				Name: "test:integration:kcp",
 				Run:  taskTarget("test:integration:kcp"),
 			},
+			// A step of its own rather than part of the integration suite: it
+			// asserts what the design claims about resource usage, and reports
+			// what it measured either way, so a reviewer looking at
+			// verify-result.json can see that the measurement ran rather than
+			// inferring it from a suite that passed.
+			verify.Step{
+				Name: "test:sweep",
+				Run:  taskTarget("test:sweep"),
+			},
 			verify.Step{
 				Name:  "test:integration:docker",
 				Needs: []verify.Capability{verify.ContainerRuntime()},
