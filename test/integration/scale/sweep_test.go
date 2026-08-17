@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -92,6 +93,10 @@ var (
 		"Override the profile's object count. Negative keeps the profile's own. Varying this at a "+
 			"fixed watch count isolates the cost of a cached object from the cost of watching it, "+
 			"which is what prices duplicating a cache across deployments.")
+	heapProfile = flag.String("heap-profile", "",
+		"Write a heap profile after the last point, for `go tool pprof`. A per-workspace heap figure "+
+			"says how much, and a profile is the only thing that says what — which is what a fix has to "+
+			"start from.")
 	goroutineBreakdown = flag.Bool("goroutine-breakdown", false,
 		"Print where the goroutines are, grouped by stack, after the last point. A per-workspace "+
 			"figure that does not behave as the design predicts needs explaining, and a count cannot "+
@@ -162,7 +167,15 @@ func TestSweep(t *testing.T) {
 		t.Fatalf("resolving CRD manifests: %v", err)
 	}
 
-	_, server := kcpenvtest.EnvironmentAndServer(t, "")
+	// --v=0 is not tidiness. The kcp test fixture accumulates the server's
+	// entire stdout in an in-process bytes.Buffer for the lifetime of the test,
+	// so it can print it on failure, and the fixture's own default is --v=4. At
+	// a hundred workspaces that buffer was 48 MB of a 62 MB live heap — it *is*
+	// the per-workspace heap this sweep was reporting.
+	//
+	// BuildArgs appends custom arguments after its own, and klog takes the last
+	// occurrence of a flag, so this overrides rather than conflicts.
+	_, server := kcpenvtest.EnvironmentAndServer(t, "", kcptestingserver.WithCustomArguments("--v=0"))
 	baseCfg := server.BaseConfig(t)
 
 	scheme := runtime.NewScheme()
@@ -281,6 +294,9 @@ func TestSweep(t *testing.T) {
 	perWorkspace(t, run)
 	if *goroutineBreakdown {
 		reportGoroutines(t, 25)
+	}
+	if *heapProfile != "" {
+		writeHeapProfile(t, *heapProfile)
 	}
 
 	snap := telemetry.Snapshot()
@@ -423,6 +439,36 @@ var fleetCRDs = []string{
 	// type. That is worth knowing about: the failure names the type, but does
 	// so in the provider's log rather than in the setup error.
 	"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
+}
+
+// writeHeapProfile writes a heap profile of the process holding every workspace
+// the sweep provisioned.
+//
+// Taken here rather than at each point, and after the run rather than during it,
+// because what it is for is attribution: the sweep already says how much a
+// workspace costs, and only a profile says what that cost is made of.
+//
+// The two collections match what the harness does before sampling. One is not
+// enough: it counts objects that are only reachable from a finalizer as live,
+// which showed up once already as a 54% error in a fitted heap model.
+func writeHeapProfile(t *testing.T, path string) {
+	t.Helper()
+
+	goruntime.GC()
+	goruntime.GC()
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Logf("  heap profile: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		t.Logf("  heap profile: %v", err)
+		return
+	}
+	t.Logf("  heap profile: %s (go tool pprof -top -inuse_space <binary> %s)", path, path)
 }
 
 // reportGoroutines prints where the goroutines are, grouped by stack.

@@ -121,13 +121,16 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // this project's own engagement seam — which, with no per-workspace setup left
 // to run, exists only to count engaged workspaces and could be a counter.
 //
-// # Heap is the binding term now, and is not yet solved
+// # Heap
 //
-// Between 8 and 64 workspaces the same sweep measures about **840 KiB per
-// workspace**, and flags a departure point at 32. A thousand workspaces is
-// therefore roughly 840 MB, which is a capacity limit rather than a rounding
-// error. Where it goes has not been measured; the per-workspace dynamic REST
-// mapper is the obvious candidate and is a hypothesis, not a finding.
+// Of order **100 KiB per workspace**, linear to a hundred workspaces with no
+// departure point. Read that as an upper bound: the sweep measures the test
+// process, and part of the residue is still the kcp fixture buffering the
+// server's log rather than anything this wires.
+//
+// An earlier figure of ~840 KiB with a departure at 32 was that buffer and
+// nothing else — 48 MB of a 62 MB live heap, scaling with workspace creation
+// and so indistinguishable from a per-workspace cost until it was profiled.
 
 func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {

@@ -201,35 +201,62 @@ The second goroutine per workspace is the provider's `ScopedCluster`, which the
 grouping does not separate cleanly at this size — it appears as its own group of
 8 at eight workspaces, and the arithmetic requires it at a hundred.
 
-## Heap, not goroutines, is now the constraint
+## Heap: the first answer was the test harness
 
-The same sweep, per added workspace:
+The same sweep reported ~840 KiB per workspace between 8 and 64, and a departure
+point at 32 workspaces. **Both were artefacts of the measurement.**
 
-| step | 1→2 | 2→4 | 4→8 | 8→16 | 16→32 | 32→64 | 64→100 |
-|---|---|---|---|---|---|---|---|
-| heap per workspace | 410 KiB | 102 KiB | 51 KiB | **845 KiB** | **838 KiB** | **838 KiB** | 68 KiB |
+A heap profile at 100 workspaces put **48 MB of a 62 MB live heap** in one
+`bytes.Buffer`, reached through:
 
-From 8 to 64 it is a steady ~840 KiB per workspace — **seven times** the 123 KiB
-the eight-point run suggested, and the sweep flags a **departure point at 32
-workspaces**, where heap first exceeds its linear projection by more than the 25%
-tolerance.
+```
+bytes.growSlice ← bytes.(*Buffer).Write ← io.copyBuffer
+                ← os/exec.(*Cmd).writerDescriptor ← os/exec.(*Cmd).Start
+```
 
-At ~840 KiB each, a thousand workspaces is roughly 840 MB. That is a capacity
-limit rather than a rounding error, and it is now the binding term.
+That is the kcp test fixture (`kcp-dev/sdk/testing/server/fixture.go:345`)
+accumulating the server's entire stdout in an in-process buffer for the lifetime
+of the test, so it can print it if the test fails. The fixture's default
+verbosity is `--v=4`, and log volume rises with workspace creation — so it
+scaled with the independent variable and looked exactly like a per-workspace
+cost. `bytes.Buffer` grows geometrically, which is where the "departure" came
+from.
 
-**The 64→100 step does not fit and is not yet explained.** 68 KiB per workspace
-against 838 for the three steps before it. Either the heap sample caught a
-different collection state or something amortises above 64; until that is
-resolved, no single heap-per-workspace figure is quoted here. The ~840 KiB
-between 8 and 64 is what three consecutive steps agree on, and it is stated as
-that rather than as the answer.
+**The sweep now starts kcp with `--v=0`.** `BuildArgs` appends custom arguments
+after its own and klog takes the last occurrence, so this overrides rather than
+conflicts.
+
+| workspaces | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 100 |
+|---|---|---|---|---|---|---|---|---|
+| goroutines | 141 | 165 | 169 | 177 | 193 | 225 | 289 | 361 |
+| heap (MiB) | 6.1 | 6.8 | 6.9 | 7.2 | 8.3 | 9.4 | 12.6 | 17.0 |
+
+**~113 KiB per workspace, and no departure point within 100 workspaces.**
+
+The goroutine column is identical to the noisy run, digit for digit, at every
+point. Goroutines were never contaminated; heap was, entirely.
+
+### What is left in it
+
+A profile of the quiet run puts total live heap at 14.2 MB, of which
+`bytes.growSlice` is still 4.1 MB — the same buffer, twelve times smaller.
+Some part of the 113 KiB is therefore still the fixture rather than the wiring,
+bounded above by about 40 KiB per workspace if every byte of that buffer were
+workspace-driven, which it is not.
+
+So **113 KiB per workspace is an upper bound**, and the honest reading is
+"of order 100 KiB, no departure to 100 workspaces". The next largest identified
+term is `rest.NewRESTClient` at 1.5 MB, about 15 KiB per workspace — the
+per-workspace REST clients each scoped cluster carries. That is the earlier REST
+mapper hypothesis, partially confirmed and much smaller than guessed.
 
 ## What this does not show
 
 - **Idle workspaces only** (`idle-heavy`). Active workspaces were not swept.
 - **A hundred workspaces.** Anything quoted above a hundred is extrapolation.
-  The goroutine slope is flat across six consecutive doublings, so extrapolating
-  it is defensible; the heap slope is not, and must not be.
+  Both slopes are flat across six consecutive doublings with no departure point,
+  so extrapolating either is defensible — with the heap figure read as an upper
+  bound, per the note above.
 - **Correctness under wildcard registration is not measured here.** The source
   sees every workspace bound to the APIExport, including any the provider has not
   engaged; requests for those resolve to no cluster and are absorbed by
@@ -241,15 +268,25 @@ that rather than as the answer.
 
 ## What follows
 
-**Heap is the next thing to attack, and per-workspace goroutines are close to
-done.** Of the two remaining goroutines, one is this project's own engagement
-seam — which, with no per-workspace setup left to run, exists only to count
-engaged workspaces and could be a counter — and one is the provider's scoped
-cluster. Neither is watch registration or controller machinery.
+**Neither term is now the obvious next thing to attack.** Two goroutines and of
+order 100 KiB per workspace, both linear to 100 with no departure, is not where
+the next bottleneck is likely to be. Of the two goroutines, one is this
+project's own engagement seam — which, with no per-workspace setup left to run,
+exists only to count engaged workspaces and could be a counter — and one is the
+provider's scoped cluster.
 
-Where the ~840 KiB goes has not been measured. The obvious candidate is the
-per-workspace dynamic REST mapper each scoped cluster carries, which caches
-discovery, but that is a hypothesis and is labelled one.
+**What is worth doing instead is finding the next constraint rather than
+polishing this one.** Candidates the sweep has not touched: active rather than
+idle workspaces, the parity controller set (14–15 watches against this set's
+nine, though the wildcard change makes watch count a constant cost rather than a
+per-workspace one), and whether kcp itself — not this process — is what binds
+first at a thousand workspaces.
+
+**And the harness needs the same scrutiny the system gets.** This measurement
+was wrong for two rounds: once because eight points could not separate slope
+from intercept, once because a test fixture's log buffer scaled with the
+independent variable. Both were found by profiling rather than by reasoning, and
+neither would have been found by re-reading the code.
 
 
 The interposed cache (P2), as previously scoped, was aimed at exactly this cost —
