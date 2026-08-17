@@ -25,12 +25,15 @@ point.
 | E | 0 | 0 | — | **2.0** | 464 KiB |
 | F | 19 | 4 | 2 | **76.0** | 1,324 KiB |
 
-**F is the wired shape** — the Cluster API set spreads roughly 19 watches across
-about 4 controllers, not 19. A was the first probe and overstates by 2.8×;
-`fleet-wide-controllers.md` carries the correction and what follows from it.
+| G | 14 | 5 | 2 | **75.0** | 1,291 KiB |
 
-F is also the formula's out-of-sample check: it was **predicted at 76.0 before
-being run**, from coefficients derived entirely from A–E.
+**G is the wired shape**, established by reading every `SetupWithManager` —
+5 controllers, 14–15 informer-backed watches (`controller-census.md`). A was
+the first probe and overstates by 2.8×.
+
+F and G are also the formula's out-of-sample checks: both were **predicted
+before being run** — 76.0 and 75.0 — from coefficients derived entirely from
+A–E, and both measured exactly.
 
 ## The decomposition
 
@@ -64,12 +67,12 @@ measured coefficient, not a reading of controller-runtime's source.
 
 ## What this means for the wildcard cache
 
-> **Read this section with `fleet-wide-controllers.md`.** The shares below are
-> computed at **19 controllers**, which is the probe's shape, not the wired
-> one. The wired set spreads 19 watches across roughly **4** controllers, where
-> the total is **76** goroutines and registrations are **half** of it rather
-> than 18%. The formula is unchanged and predicted 76 exactly; only the mix
-> differs. Config A is retained here because it is what was measured.
+> **The shares below are computed at 19 controllers** — config A, the probe's
+> shape, not the wired one. At the wired census (G: 5 controllers, 14 watches)
+> the total is **75** and registrations are **37%**, not 18%. The formula is
+> unchanged and predicted both exactly; only the mix differs. A is retained
+> because it is what was measured, and because it bounds a wiring that spreads
+> its watches more thinly. `controller-census.md` has the wired breakdown.
 
 At 19 controllers, of 211 goroutines per workspace:
 
@@ -85,16 +88,17 @@ workspace, and that is the whole per-workspace cache cost: one reflector, one
 indexer, one watch connection to kcp, shared across the fleet. There is no
 duplicated informer to remove.
 
-**Cache interposition removes 18% of the goroutines at this shape** — but 50% at
-the wired shape, where there are fewer controllers to dilute it. FR-003's
+**Cache interposition removes 18% of the goroutines at this shape, and 37% at
+the wired census** — fewer controllers dilute it less. FR-003's
 planned mechanism — replacing per-workspace event-handler registrations with map
 entries in an interposed cache (R1, R2) — targets the 38. It leaves the 171 that
 are controller-runtime instantiating a full controller per workspace, because a
 cache cannot reach them.
 
 This is a correction to an assumption running through the plan: that the
-listener fan-out is the dominant per-workspace cost. Measured, it is the
-*smallest* of the three controller-side terms.
+listener fan-out is the dominant per-workspace cost. It is not, at either
+shape — at 19 controllers it is the smallest of the three controller-side
+terms, and at the wired census it is the second of two large ones.
 
 ## The levers, and what each is worth
 
@@ -102,7 +106,7 @@ listener fan-out is the dominant per-workspace cost. Measured, it is the
    costs 49 goroutines instead of 211, with the listener count unchanged. But
    controller topology is upstream Cluster API's, and changing it is exactly the
    divergence Principle I counts. Not ours to choose — and the wired set already
-   spends only 4, which is why F is 76 rather than 211.
+   spends only 5, which is why G is 75 rather than 211.
 
 2. **Fewer workers.** Already configurable (`-max-concurrent-reconciles`, added
    earlier in this feature). Going from 2 to 1 saves 19 goroutines per
@@ -116,9 +120,10 @@ listener fan-out is the dominant per-workspace cost. Measured, it is the
    rejected, because it means not running upstream reconcilers unmodified —
    which is the premise of the repository.
 
-The three are ordered by how much they save and by how much they cost in
-divergence, and those orders are the same. That is the real tension in this
-feature, and it is now quantified rather than argued.
+`fleet-wide-controllers.md` scores these against each other at the wired census
+and at feature parity. The short version: registrations and controller
+machinery are the two large terms, one option removes each, and only doing both
+reaches O(1).
 
 ## Memory follows the same shape, with one surprise
 
@@ -139,6 +144,6 @@ this measurement does not test. It is worth a source read before any figure is
 built on it.
 
 Together the two fixed costs — 464 KiB engaged, ~415 KiB on first watch — are
-about 66% of a workspace's 1.32 MiB at the wired shape (F). The per-watch and
+about 68% of a workspace's 1.29 MiB at the wired census (G). The per-watch and
 per-controller terms are the small part, which is why memory does not fall
 nearly as fast as goroutines do when controllers are collapsed.

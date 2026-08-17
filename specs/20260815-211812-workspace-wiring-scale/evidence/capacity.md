@@ -53,9 +53,9 @@ The left column is the shape to size from **today**. The right is what Phase 3
 would cost per workspace on goroutines; its memory has not been measured and is
 not projected here, because the R16 formula covers goroutines only.
 
-For `idle-heavy` the equivalent re-measurement at the wired census has not been
-run; its 19-controller figures (2.72 MiB, 211 goroutines) stand as an **upper
-bound**, since fewer controllers is strictly cheaper.
+Measured at the wired census, `idle-heavy` costs **2.09 MiB and 75 goroutines**
+per workspace — the same goroutine count as active, and 1.35× less memory. That
+figure is FR-009's stated budget (`determinations.md`).
 
 ### The two profiles are much closer than the spec assumed
 

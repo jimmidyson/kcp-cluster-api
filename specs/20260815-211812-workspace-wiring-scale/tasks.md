@@ -130,12 +130,12 @@ if every gated requirement closes.
 
 ### 🚦 THE GATE
 
-- [ ] T029 [US1] Record the determination for **FR-001** (per-event delivery cost independent of workspace count) in `evidence/determinations.md`: `build` or `close`, with the figures from T023/T024 either way, and for `close` the trigger that would reopen it
-- [ ] T030 [P] [US1] Record the determination for **FR-003** (per-workspace fixed watch cost) in `evidence/determinations.md`
-- [ ] T031 [P] [US1] Record the determinations for **FR-004** and **FR-005** (engagement cost independent of fleet contents; engagement does not suspend delivery) in `evidence/determinations.md`
-- [ ] T032 [P] [US1] Record the determination for **FR-006** (concurrent engagement) in `evidence/determinations.md`
-- [ ] T033 [P] [US1] Record the determination for **FR-008** (no repeated process-wide discovery) in `evidence/determinations.md`, noting it is **gated twice** — also blocked on R5's Principle II finding, and MUST NOT be delivered by copying upstream code
-- [ ] T034 [US1] Record the determinations for **FR-009** and **FR-011** (idle workspace cost; idle release) in `evidence/determinations.md`, and confirm all eight determinations are present and evidenced — satisfying **FR-031**, which requires every gated requirement carry a recorded determination *before* implementation begins, and a `close` verdict record the figures that closed it
+- [x] T029 [US1] Record the determination for **FR-001** (per-event delivery cost independent of workspace count) in `evidence/determinations.md`: `build` or `close`, with the figures from T023/T024 either way, and for `close` the trigger that would reopen it
+- [x] T030 [P] [US1] Record the determination for **FR-003** (per-workspace fixed watch cost) in `evidence/determinations.md`
+- [x] T031 [P] [US1] Record the determinations for **FR-004** and **FR-005** (engagement cost independent of fleet contents; engagement does not suspend delivery) in `evidence/determinations.md`
+- [x] T032 [P] [US1] Record the determination for **FR-006** (concurrent engagement) in `evidence/determinations.md`
+- [x] T033 [P] [US1] Record the determination for **FR-008** (no repeated process-wide discovery) in `evidence/determinations.md`, noting it is **gated twice** — also blocked on R5's Principle II finding, and MUST NOT be delivered by copying upstream code
+- [x] T034 [US1] Record the determinations for **FR-009** and **FR-011** (idle workspace cost; idle release) in `evidence/determinations.md`, and confirm all eight determinations are present and evidenced — satisfying **FR-031**, which requires every gated requirement carry a recorded determination *before* implementation begins, and a `close` verdict record the figures that closed it
 
 **Checkpoint (SC-001, SC-013)**: capacity is measured and published, and the
 scope of Phases 4–6 is now decided by evidence. **No `GATED` task may start
