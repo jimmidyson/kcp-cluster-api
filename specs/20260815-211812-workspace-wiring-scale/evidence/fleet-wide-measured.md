@@ -1,6 +1,6 @@
 # The fleet-wide conversion, measured
 
-Three measurements, taken the same way: a real kcp server, the real
+Four measurements, taken the same way: a real kcp server, the real
 `coremanager.SetupFleetControllers` (dev provider excluded — it needs a container
 runtime), workspaces accumulated 1 → 2 → 4 → 8, sampled after every workspace has
 engaged.
@@ -8,13 +8,18 @@ engaged.
 The first falsified the claim the conversion was written on. The other two are
 what fixing the two causes it exposed is worth.
 
-| | per-workspace goroutines | per-workspace heap |
+| | per-workspace goroutines | swept to |
 |---|---|---|
-| fleet-wide controllers, per-cluster watch registration | **51.7** | 345 KiB |
-| one watch registration per type | **8.1** | 126 KiB |
-| …and no per-cluster engagement | **5.1** | 123 KiB |
+| fleet-wide controllers, per-cluster watch registration | **51.7** | 8 |
+| one watch registration per type | **8.1** | 8 |
+| …and no per-cluster engagement | **5.1** | 8 |
+| the same wiring, swept to 100 | **2.0** | 100 |
 
-**10× fewer goroutines per workspace, and 2.8× less heap.**
+**26× fewer goroutines per workspace.**
+
+The last row is not a further change to the code. It is the same wiring as the
+row above it, measured over a range long enough to separate the slope from the
+intercept — and it corrects the row above it. See "Eight points were too few".
 
 ## The claim, and why it was wrong
 
@@ -153,12 +158,78 @@ The rest is provider engagement bookkeeping — context propagation and select
 loops — which the profile does not separate cleanly and which is small enough
 that separating it has not been worth a measurement.
 
+## Eight points were too few
+
+Sweeping 1 → 100 (points 1, 2, 4, 8, 16, 32, 64, 100) on the wiring the 5.1 was
+measured on:
+
+| workspaces | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 100 |
+|---|---|---|---|---|---|---|---|---|
+| goroutines | 141 | 165 | 169 | 177 | 193 | 225 | 289 | 361 |
+| heap (MiB) | 11.9 | 12.3 | 12.5 | 12.7 | 19.3 | 32.4 | 58.6 | 61.0 |
+
+Goroutines per added workspace, step by step:
+
+| step | 1→2 | 2→4 | 4→8 | 8→16 | 16→32 | 32→64 | 64→100 |
+|---|---|---|---|---|---|---|---|
+| per workspace | 24.00 | **2.00** | **2.00** | **2.00** | **2.00** | **2.00** | **2.00** |
+
+**Two goroutines per workspace, exactly, from two workspaces to a hundred.**
+
+The 1→2 step is +24, and it is one-time startup rather than a workspace's cost:
+informers starting, the first engagement's machinery. Over a sweep that ends at
+8 it is amortised across seven workspaces and inflates the slope by 2.5×
+(24 + 7×2 = 38, and 38/7 = 5.4). That is the whole of the difference between 5.1
+and 2.0. **The 5.1 figure is withdrawn**; it measured a range too short to
+separate the intercept from the slope.
+
+The breakdown at 100 accounts for both goroutines directly:
+
+| count | stack | per workspace |
+|---|---|---|
+| 100 | `providerwiring.(*Wiring).Engage.func1` | 1 — ours |
+| 30 | `controller.processNextWorkItem` | **0 — constant** |
+| 10 | `processorListener.run` | **0 — constant** |
+| 10 | `processorListener.pop` | **0 — constant** |
+| 3 each | priorityqueue's five loops | **0 — constant** |
+
+**Ten informer listeners at a hundred workspaces.** Per-cluster registration
+would have been about nine hundred. That is the wildcard claim validated at a
+scale where it matters rather than inferred from eight points.
+
+The second goroutine per workspace is the provider's `ScopedCluster`, which the
+grouping does not separate cleanly at this size — it appears as its own group of
+8 at eight workspaces, and the arithmetic requires it at a hundred.
+
+## Heap, not goroutines, is now the constraint
+
+The same sweep, per added workspace:
+
+| step | 1→2 | 2→4 | 4→8 | 8→16 | 16→32 | 32→64 | 64→100 |
+|---|---|---|---|---|---|---|---|
+| heap per workspace | 410 KiB | 102 KiB | 51 KiB | **845 KiB** | **838 KiB** | **838 KiB** | 68 KiB |
+
+From 8 to 64 it is a steady ~840 KiB per workspace — **seven times** the 123 KiB
+the eight-point run suggested, and the sweep flags a **departure point at 32
+workspaces**, where heap first exceeds its linear projection by more than the 25%
+tolerance.
+
+At ~840 KiB each, a thousand workspaces is roughly 840 MB. That is a capacity
+limit rather than a rounding error, and it is now the binding term.
+
+**The 64→100 step does not fit and is not yet explained.** 68 KiB per workspace
+against 838 for the three steps before it. Either the heap sample caught a
+different collection state or something amortises above 64; until that is
+resolved, no single heap-per-workspace figure is quoted here. The ~840 KiB
+between 8 and 64 is what three consecutive steps agree on, and it is stated as
+that rather than as the answer.
+
 ## What this does not show
 
 - **Idle workspaces only** (`idle-heavy`). Active workspaces were not swept.
-- **Eight workspaces.** Anything quoted above eight is extrapolation. At 5.1 per
-  workspace the extrapolation is far less load-bearing than it was at 51.7, but
-  it is still an extrapolation.
+- **A hundred workspaces.** Anything quoted above a hundred is extrapolation.
+  The goroutine slope is flat across six consecutive doublings, so extrapolating
+  it is defensible; the heap slope is not, and must not be.
 - **Correctness under wildcard registration is not measured here.** The source
   sees every workspace bound to the APIExport, including any the provider has not
   engaged; requests for those resolve to no cluster and are absorbed by
@@ -169,6 +240,17 @@ that separating it has not been worth a measurement.
   gates a source from firing.
 
 ## What follows
+
+**Heap is the next thing to attack, and per-workspace goroutines are close to
+done.** Of the two remaining goroutines, one is this project's own engagement
+seam — which, with no per-workspace setup left to run, exists only to count
+engaged workspaces and could be a counter — and one is the provider's scoped
+cluster. Neither is watch registration or controller machinery.
+
+Where the ~840 KiB goes has not been measured. The obvious candidate is the
+per-workspace dynamic REST mapper each scoped cluster carries, which caches
+discovery, but that is a hypothesis and is labelled one.
+
 
 The interposed cache (P2), as previously scoped, was aimed at exactly this cost —
 and this removes it without an interposed cache, by not registering per cluster

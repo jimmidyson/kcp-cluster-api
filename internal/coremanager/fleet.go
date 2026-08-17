@@ -98,8 +98,8 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 //
 // # What that is worth, measured
 //
-// A workspace costs **5.1 goroutines** and 123 KiB at the margin
-// (evidence/fleet-wide-measured.md).
+// A workspace costs **2.0 goroutines** at the margin, exactly, from two
+// workspaces to a hundred (evidence/fleet-wide-measured.md).
 //
 // It was 51.7 when the controllers were fleet-wide but their watches were still
 // registered per cluster. Making the controllers fleet-wide collapsed the
@@ -114,11 +114,20 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 //
 // Not engaging those controllers with clusters at all removed the rest of what
 // the conversion had left: a controller with no per-cluster sources was still
-// paying a bookkeeping goroutine per engaged cluster. 8.1 became 5.1.
+// paying a bookkeeping goroutine per engaged cluster.
 //
-// What is left per workspace is not registration and not engagement: one
-// goroutine for the provider's scoped cluster, one for this project's own
-// engagement seam, and a little provider bookkeeping.
+// What is left per workspace is not registration and not engagement. It is
+// exactly two goroutines: one for the provider's scoped cluster, and one for
+// this project's own engagement seam — which, with no per-workspace setup left
+// to run, exists only to count engaged workspaces and could be a counter.
+//
+// # Heap is the binding term now, and is not yet solved
+//
+// Between 8 and 64 workspaces the same sweep measures about **840 KiB per
+// workspace**, and flags a departure point at 32. A thousand workspaces is
+// therefore roughly 840 MB, which is a capacity limit rather than a rounding
+// error. Where it goes has not been measured; the per-workspace dynamic REST
+// mapper is the obvious candidate and is a hypothesis, not a finding.
 
 func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {

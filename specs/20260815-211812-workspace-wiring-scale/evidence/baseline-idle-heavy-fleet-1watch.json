@@ -9,63 +9,115 @@
   "points": [
     {
       "workspaces": 1,
-      "value": 12457080
+      "value": 12458528
     },
     {
       "workspaces": 2,
-      "value": 12898552
+      "value": 12904736
     },
     {
       "workspaces": 4,
-      "value": 13048288
+      "value": 13057072
     },
     {
       "workspaces": 8,
-      "value": 13336168
+      "value": 13341912
+    },
+    {
+      "workspaces": 16,
+      "value": 20218432
+    },
+    {
+      "workspaces": 32,
+      "value": 33953320
+    },
+    {
+      "workspaces": 64,
+      "value": 61428200
+    },
+    {
+      "workspaces": 100,
+      "value": 64001536
     }
   ],
   "departure": {
-    "found": false,
-    "reason": "no point exceeded the linear projection by more than 25% within the swept range (up to 8 workspaces)",
+    "found": true,
+    "workspaces": 32,
     "tolerance": 0.25,
-    "points": 4
+    "points": 8
   },
   "measurements": [
     {
       "workspaces": 1,
-      "heapBytes": 12457080,
+      "heapBytes": 12458528,
       "goroutines": 141,
-      "loadDuration": 374,
+      "loadDuration": 393,
       "events": 0,
-      "processBytes": 40560920,
-      "stackBytes": 1146880
+      "processBytes": 44755224,
+      "stackBytes": 1179648
     },
     {
       "workspaces": 2,
-      "heapBytes": 12898552,
+      "heapBytes": 12904736,
       "goroutines": 165,
-      "loadDuration": 252,
+      "loadDuration": 190,
       "events": 0,
-      "processBytes": 40560920,
-      "stackBytes": 1245184
-    },
-    {
-      "workspaces": 4,
-      "heapBytes": 13048288,
-      "goroutines": 169,
-      "loadDuration": 242,
-      "events": 0,
-      "processBytes": 40560920,
+      "processBytes": 44755224,
       "stackBytes": 1277952
     },
     {
-      "workspaces": 8,
-      "heapBytes": 13336168,
-      "goroutines": 177,
-      "loadDuration": 399,
+      "workspaces": 4,
+      "heapBytes": 13057072,
+      "goroutines": 169,
+      "loadDuration": 191,
       "events": 0,
-      "processBytes": 40560920,
+      "processBytes": 44755224,
       "stackBytes": 1245184
+    },
+    {
+      "workspaces": 8,
+      "heapBytes": 13341912,
+      "goroutines": 177,
+      "loadDuration": 180,
+      "events": 0,
+      "processBytes": 44755224,
+      "stackBytes": 1245184
+    },
+    {
+      "workspaces": 16,
+      "heapBytes": 20218432,
+      "goroutines": 193,
+      "loadDuration": 198,
+      "events": 0,
+      "processBytes": 57338136,
+      "stackBytes": 1277952
+    },
+    {
+      "workspaces": 32,
+      "heapBytes": 33953320,
+      "goroutines": 225,
+      "loadDuration": 356,
+      "events": 0,
+      "processBytes": 82503960,
+      "stackBytes": 1310720
+    },
+    {
+      "workspaces": 64,
+      "heapBytes": 61428200,
+      "goroutines": 289,
+      "loadDuration": 191,
+      "events": 0,
+      "processBytes": 133560616,
+      "stackBytes": 1474560
+    },
+    {
+      "workspaces": 100,
+      "heapBytes": 64001536,
+      "goroutines": 361,
+      "loadDuration": 706,
+      "events": 0,
+      "processBytes": 138410280,
+      "stackBytes": 1605632
     }
   ],
   "listenersPerWorkspace": 1
