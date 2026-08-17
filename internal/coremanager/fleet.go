@@ -91,18 +91,41 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // the ClusterCache alike. No reconcile code knows there is more than one
 // workspace.
 //
-// # The one thing that is still process-wide
+// # What that is worth, measured
 //
-// The docker/dev infrastructure provider's in-memory backend. It binds a fixed
-// port and keys its listeners by Cluster name, so two workspaces each holding a
-// Cluster with the same namespace and name collide inside it. That is upstream's
-// test infrastructure provider; see DevInfrastructure.
+// Less than it looks, and the measurement is in evidence/fleet-wide-measured.md.
+// A workspace still costs **51.7 goroutines** at the margin.
+//
+// The controller-level terms did collapse and are visible as constants in the
+// profile: thirty worker goroutines for the process rather than thirty per
+// workspace, and one priority queue per controller rather than one per
+// controller per workspace.
+//
+// The per-*watch* term did not, and it is the larger one. Every engaged
+// workspace still gets an event-handler registration per watched type, and
+// multicluster-runtime charges four to five goroutines for one where
+// controller-runtime charges two. At the nine watches this set registers, that
+// is about 45 of the 51.7.
+//
+// So this conversion is necessary and not sufficient. Everything that still
+// scales with workspace count is a registration on a shared informer, which is
+// exactly and only what an interposed cache can remove.
+//
+// # The dev infrastructure provider is optional
+//
+// A nil dev wires the core reconcilers and nothing else. That is not a test
+// affordance: the docker/dev provider is upstream's *test* infrastructure, and a
+// real deployment runs its own infrastructure provider instead of it. It also
+// needs a container runtime, so requiring it would make the core wiring
+// unmeasurable anywhere without one.
+//
+// When it is wired, it is the one thing here that is still process-wide: its
+// in-memory backend binds a fixed port and keys its listeners by Cluster name,
+// so two workspaces each holding a Cluster with the same namespace and name
+// collide inside it. See DevInfrastructure.
 func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {
 		return errors.New("a multi-cluster manager is required")
-	}
-	if dev == nil {
-		return errors.New("DevInfrastructure must not be nil: create it once per process with NewDevInfrastructure")
 	}
 
 	options := controller.TypedOptions[mcreconcile.Request]{
@@ -156,6 +179,10 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
 	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource); err != nil {
 		return fmt.Errorf("creating fleet-wide Machine controller: %w", err)
+	}
+
+	if dev == nil {
+		return nil
 	}
 
 	if err := (&reconcilers.DevCluster{

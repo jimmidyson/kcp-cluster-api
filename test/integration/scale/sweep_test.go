@@ -19,12 +19,15 @@ limitations under the License.
 package scale_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,6 +58,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/scaleharness"
@@ -88,6 +92,14 @@ var (
 		"Override the profile's object count. Negative keeps the profile's own. Varying this at a "+
 			"fixed watch count isolates the cost of a cached object from the cost of watching it, "+
 			"which is what prices duplicating a cache across deployments.")
+	goroutineBreakdown = flag.Bool("goroutine-breakdown", false,
+		"Print where the goroutines are, grouped by stack, after the last point. A per-workspace "+
+			"figure that does not behave as the design predicts needs explaining, and a count cannot "+
+			"explain itself.")
+	wiringMode = flag.String("wiring", "synthetic",
+		"Which wiring to measure: synthetic (probe controllers registered per workspace, the shape the "+
+			"per-workspace design had) or fleet (the real core Cluster API reconcilers, wired once for "+
+			"every workspace). The two answer different questions and are not comparable point for point.")
 	evidenceDir = flag.String("evidence-dir", "",
 		"Where to write the run as JSON. Empty writes nothing. A capacity figure has to be "+
 			"re-derivable from the points that produced it, and a test log is not a record.")
@@ -122,6 +134,13 @@ func TestSweep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
+	if *wiringMode == wiringFleet {
+		// Renamed for the same reason the object-count override renames: a run
+		// filed under "idle-heavy" that measured a different deployment would
+		// silently contradict the published one — and, filed under the same
+		// name, would overwrite it.
+		profile.Name += "-fleet"
+	}
 	if *objectsPerWorkspace >= 0 {
 		profile.ObjectsPerWorkspace = *objectsPerWorkspace
 		// Renamed so the run cannot be mistaken for the stock profile it came
@@ -130,7 +149,15 @@ func TestSweep(t *testing.T) {
 		profile.Name = fmt.Sprintf("%s-%dobj", profile.Name, *objectsPerWorkspace)
 	}
 
-	crdPaths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreCRDs...)
+	// The fleet-wide set watches more than Clusters, and a watch on a type the
+	// workspace has not bound never syncs — so the schemas follow the wiring
+	// rather than being published unconditionally. The synthetic mode keeps the
+	// single type its published figures were measured with.
+	crds := coreCRDs
+	if *wiringMode == wiringFleet {
+		crds = fleetCRDs
+	}
+	crdPaths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, crds...)
 	if err != nil {
 		t.Fatalf("resolving CRD manifests: %v", err)
 	}
@@ -182,9 +209,28 @@ func TestSweep(t *testing.T) {
 		t.Fatalf("waiting for endpoint slice: %v", err)
 	}
 
+	// In fleet mode the manager's local cluster is the APIExport's virtual
+	// workspace rather than the workspace that holds the export. See
+	// providerwiring.VirtualWorkspaceConfig for why: the exporting workspace does
+	// not bind what it exports, so its RESTMapper cannot answer for the types the
+	// controllers watch.
+	localCfg := rootCfg
+	if *wiringMode == wiringFleet {
+		localCfg, err = providerwiring.VirtualWorkspaceConfig(ctx, rootClient, exportName, baseCfg, 60*time.Second)
+		if err != nil {
+			t.Fatalf("resolving the virtual workspace: %v", err)
+		}
+	}
+
 	telemetry := workspacetelemetry.New(workspacetelemetry.Options{})
 	probe := scaleharness.NewDeliveryProbe()
-	wiring := startManager(t, ctx, rootCfg, scheme, telemetry, probe)
+	if *wiringMode == wiringFleet {
+		// The fleet-wide set has no probe controller to stop the clock, so
+		// delivery latency is not measured here. Reporting a probe that nothing
+		// answers would fill the run with missed deliveries that mean nothing.
+		probe = nil
+	}
+	wiring := startManager(t, ctx, rootCfg, localCfg, scheme, telemetry, probe)
 
 	// Engagement is asynchronous, so a point must not be measured until every
 	// workspace it provisioned is actually wired. Measuring early would report
@@ -221,16 +267,21 @@ func TestSweep(t *testing.T) {
 	writeEvidence(t, run)
 
 	t.Logf("%s", run.Summary())
-	t.Logf("  watches per workspace: %d (listeners at the largest point: %d)",
-		*watchesPerWorkspace, *watchesPerWorkspace*points[len(points)-1])
+	if *wiringMode == wiringSynthetic {
+		t.Logf("  watches per workspace: %d (listeners at the largest point: %d)",
+			*watchesPerWorkspace, *watchesPerWorkspace*points[len(points)-1])
+	}
 	t.Logf("  %-12s %-12s %-12s %-12s %-12s %s", "workspaces", "heap", "goroutines", "deliver p50", "deliver p99", "missed")
-	for _, m := range run.Measurements {
+	for _, m := range run.Measurements { //nolint:wsl
 		t.Logf("  %-12d %-12s %-12d %-12s %-12s %d",
 			m.Workspaces, humanBytes(m.HeapBytes), m.Goroutines,
 			m.DeliveryP50.Round(time.Microsecond), m.DeliveryP99.Round(time.Microsecond), m.DeliveriesMissed)
 	}
 
 	perWorkspace(t, run)
+	if *goroutineBreakdown {
+		reportGoroutines(t, 25)
+	}
 
 	snap := telemetry.Snapshot()
 	t.Logf("  telemetry: engaged=%d failures=%d labelled-series=%d",
@@ -358,14 +409,85 @@ func (f *kcpFleet) Provision(ctx context.Context, workspaces int) ([]scaleharnes
 
 // startManager runs a real multicluster manager with per-workspace wiring, so
 // the heap the sweep samples contains the machinery under measurement.
-func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, scheme *runtime.Scheme, telemetry *workspacetelemetry.Recorder, probe *scaleharness.DeliveryProbe) *providerwiring.Wiring {
+// fleetCRDs are the types the real core reconcilers watch: what Cluster and
+// Machine reconcile, plus what they map from.
+var fleetCRDs = []string{
+	"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
+	"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
+	"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
+	"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
+	// The Cluster reconciler watches MachinePools when the MachinePool gate is
+	// on, and it is on by default. A watch on an unbound type does not fail the
+	// setup — it fails the *engagement*, so every workspace disengages moments
+	// after joining and the sweep reports zero engaged rather than a missing
+	// type. That is worth knowing about: the failure names the type, but does
+	// so in the provider's log rather than in the setup error.
+	"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
+}
+
+// reportGoroutines prints where the goroutines are, grouped by stack.
+//
+// A per-workspace figure that does not fall when the controllers stop being
+// per-workspace is a result that needs explaining rather than reporting, and a
+// count cannot explain itself. This is run while the manager still holds every
+// workspace the sweep provisioned, so what it shows is the steady state that was
+// measured.
+func reportGoroutines(t *testing.T, top int) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
+		t.Logf("  goroutine profile unavailable: %v", err)
+		return
+	}
+
+	type group struct {
+		count int
+		where string
+	}
+	var groups []group
+	for _, block := range strings.Split(buf.String(), "\n\n") {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+		if len(lines) < 2 || !strings.Contains(lines[0], " @ ") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.Fields(lines[0])[0])
+		if err != nil {
+			continue
+		}
+		// The frame below the runtime entry point is the one that names the
+		// component; the top frame is almost always a park or a select.
+		where := strings.TrimSpace(lines[1])
+		if len(lines) > 3 {
+			where = strings.TrimSpace(lines[len(lines)-2])
+		}
+		groups = append(groups, group{count: n, where: where})
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].count > groups[j].count })
+
+	t.Logf("  goroutines by stack (top %d groups):", top)
+	for i, g := range groups {
+		if i >= top {
+			break
+		}
+		t.Logf("    %-6d %s", g.count, g.where)
+	}
+}
+
+// Wiring modes. See the -flag.
+const (
+	wiringSynthetic = "synthetic"
+	wiringFleet     = "fleet"
+)
+
+func startManager(t *testing.T, ctx context.Context, rootCfg, localCfg *rest.Config, scheme *runtime.Scheme, telemetry *workspacetelemetry.Recorder, probe *scaleharness.DeliveryProbe) *providerwiring.Wiring {
 	t.Helper()
 
 	provider, err := apiexport.New(rootCfg, exportName, apiexport.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}
-	mgr, err := mcmanager.New(rootCfg, provider, ctrl.Options{
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: "0",
 		Metrics:                metricsserver.Options{BindAddress: "0"},
@@ -374,12 +496,29 @@ func startManager(t *testing.T, ctx context.Context, rootCfg *rest.Config, schem
 		t.Fatalf("manager: %v", err)
 	}
 
-	wiring, err := providerwiring.AddToManager(mgr, setupWatches(probe), providerwiring.Options{
+	// The setup func differs by mode, and in fleet mode it does nothing: the
+	// controllers are wired once, below, for every workspace. The seam stays so
+	// that engagement is still observable, which is what the sweep waits on
+	// before measuring a point.
+	setup := setupWatches(probe)
+	if *wiringMode == wiringFleet {
+		setup = func(context.Context, multicluster.ClusterName, manager.Manager) error { return nil }
+	}
+
+	wiring, err := providerwiring.AddToManager(mgr, setup, providerwiring.Options{
 		Log:       ctrl.Log.WithName("providerwiring"),
 		Telemetry: telemetry,
 	})
 	if err != nil {
 		t.Fatalf("wiring: %v", err)
+	}
+
+	if *wiringMode == wiringFleet {
+		// Wired before Start, and nil dev: the docker/dev provider needs a
+		// container runtime, and what is being measured is the core set.
+		if err := coremanager.SetupFleetControllers(ctx, mgr, nil, coremanager.SetupOptions{}); err != nil {
+			t.Fatalf("fleet wiring: %v", err)
+		}
 	}
 
 	mgrCtx, stop := context.WithCancel(ctx)

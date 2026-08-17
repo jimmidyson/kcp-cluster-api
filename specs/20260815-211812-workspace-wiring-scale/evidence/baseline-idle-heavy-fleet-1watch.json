@@ -1,0 +1,72 @@
+{
+  "service": "cluster-api-core",
+  "profile": {
+    "name": "idle-heavy-fleet",
+    "objectsPerWorkspace": 0,
+    "eventsPerWorkspacePerSecond": 0
+  },
+  "mode": "synthetic",
+  "points": [
+    {
+      "workspaces": 1,
+      "value": 12390520
+    },
+    {
+      "workspaces": 2,
+      "value": 13158424
+    },
+    {
+      "workspaces": 4,
+      "value": 13731880
+    },
+    {
+      "workspaces": 8,
+      "value": 14867048
+    }
+  ],
+  "departure": {
+    "found": false,
+    "reason": "no point exceeded the linear projection by more than 25% within the swept range (up to 8 workspaces)",
+    "tolerance": 0.25,
+    "points": 4
+  },
+  "measurements": [
+    {
+      "workspaces": 1,
+      "heapBytes": 12390520,
+      "goroutines": 111,
+      "loadDuration": 1082,
+      "events": 0,
+      "processBytes": 44685576,
+      "stackBytes": 1048576
+    },
+    {
+      "workspaces": 2,
+      "heapBytes": 13158424,
+      "goroutines": 227,
+      "loadDuration": 564,
+      "events": 0,
+      "processBytes": 44685576,
+      "stackBytes": 1343488
+    },
+    {
+      "workspaces": 4,
+      "heapBytes": 13731880,
+      "goroutines": 309,
+      "loadDuration": 360,
+      "events": 0,
+      "processBytes": 44685576,
+      "stackBytes": 1540096
+    },
+    {
+      "workspaces": 8,
+      "heapBytes": 14867048,
+      "goroutines": 473,
+      "loadDuration": 157,
+      "events": 0,
+      "processBytes": 44685576,
+      "stackBytes": 1867776
+    }
+  ],
+  "listenersPerWorkspace": 1
+}
