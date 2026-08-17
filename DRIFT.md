@@ -2,11 +2,31 @@
 
 The complete set of changes this project carries against upstream Cluster
 API. Everything here is a liability: each entry makes the next upstream
-adoption more expensive, and each is expected to be deleted once its
-upstream proposal is accepted.
+adoption more expensive.
 
 `task drift` checks this file against reality and fails on any path that
 diverges without an entry here.
+
+## Two kinds of entry
+
+Most entries are **temporary**: they exist to be deleted once an upstream
+proposal is accepted, and Constitution Principle I gives them a filing
+deadline. The contract-metadata patch is one of these.
+
+Some are **carried deliberately**, with no proposal intended.
+[ADR-0003](docs/adr-0003-workspace-aware-cluster-api.md) took that decision
+for the workspace-aware wiring: the changes are made in the fork and not
+proposed upstream, so their "Upstream proposal" cell reads *None — carried
+deliberately* rather than a date.
+
+The distinction is worth drawing in this file rather than leaving it to the
+reader, because the two carry opposite obligations. A temporary entry is
+overdue if nothing has been filed by its date. A deliberate one is never
+overdue, and the corresponding cost is that it must be rebased forever — so
+the thing to watch is not a deadline but how much upstream code each entry
+touches. A new file rebases cleanly; a modified one does not. Of the
+sixteen deliberate entries below, seven are new files and nine modify
+existing ones — and the nine are the number that matters.
 
 ## Where the check runs, and why not on every pull request
 
@@ -51,10 +71,52 @@ cannot build without them. See the feature's research notes (R2).
 |---|---|---|
 | `internal/contract/version.go` | Factors the contract-metadata resolver into an overridable package variable. Every contract-version lookup funnels through it, so one seam covers `GetObjectFromContractVersionedRef`, `GetContractVersion` and `GetAPIVersion` uniformly. Default behaviour is unchanged. | **Pending**, due **2026-11-13** |
 | `controllers/external/metadata.go` | Exposes `SetGKMetadataGetter` and `GetAPIVersion` publicly, so a module outside `sigs.k8s.io/cluster-api/` can supply its own resolver. Mirrors the existing `conversion.SetAPIVersionGetter` escape hatch. | **Pending**, due **2026-11-13** |
+| `util/multicluster/lift.go` | New file. Adapts a single-cluster event handler for a fleet-wide controller, putting the cluster in both the requests it enqueues and the context it runs in. multicluster-runtime does only the former. | None — carried deliberately, ADR-0003 |
+| `util/multicluster/client.go` | New file. A `client.Client` that resolves per call to the cluster named in the call's context. What lets one controller serve many clusters with no reconciler changing. | None — carried deliberately, ADR-0003 |
+| `util/multicluster/fleet_test.go` | New file. Envtest for the two above, over multicluster-runtime's namespace provider. | None — carried deliberately, ADR-0003 |
+| `util/controller/builder_workspace.go` | New file. `MulticlusterBuilder`: the same controller wiring as `Builder`, keyed on a request that carries the cluster. | None — carried deliberately, ADR-0003 |
+| `util/controller/controller.go` | **Modified.** The reconciler and controller wrappers take the request type as a parameter, so both builders share one implementation of rate limiting, deferral and the reconcile cache rather than two that can drift. | None — carried deliberately, ADR-0003 |
+| `util/controller/builder.go` | **Modified.** `Controller` becomes a generic alias `ControllerFor[reconcile.Request]`, so every existing declaration keeps compiling. | None — carried deliberately, ADR-0003 |
+| `util/controller/controller_test.go` | **Modified.** The wrappers are built as struct literals here, so the new fields have to be supplied. | None — carried deliberately, ADR-0003 |
+| `util/controller/builder_test.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
+| `controllers/external/tracker.go` | **Modified.** `ObjectTracker` gains an optional `MultiClusterController`, registering runtime watches fleet-wide. A separate type was tried and does not work: the reconcilers hold the tracker as a concrete field and read `PredicateLogger` off it from the reconcile path. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache_workspace.go` | New file. `MulticlusterClusterSourceFunc`: the shape a caller must supply in place of `GetClusterSource`, which a fleet-wide controller cannot call because `ClusterCache` stays per-cluster. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/cluster/cluster_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Cluster reconciler. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machine/machine_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Machine reconciler. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machine/machine_controller.go` | **Modified.** `watchClusterNodes` builds its watch through a `nodeWatcherFunc` each setup installs, because `clustercache.NewWatcher` is keyed on the controller's request type and the fleet-wide watch additionally needs the management cluster from the context. The `controller` field narrows to the one method the reconcile path calls. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machine/machine_controller_test.go` | **Modified.** One test reaches `watchClusterNodes` through a struct literal and has to install the watcher the seam expects. | None — carried deliberately, ADR-0003 |
+| `go.mod` | **Modified.** Adds `sigs.k8s.io/multicluster-runtime`. | None — carried deliberately, ADR-0003 |
+| `go.sum` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 
-Both paths belong to a single patch, carried as one commit in the fork.
+The first two paths belong to a single patch, carried as one commit in the
+fork. The rest are the workspace-aware wiring, and they are listed
+per-path rather than as one entry because the check is per-path.
 
-### Why this patch exists
+**Not yet on `kcp/v1.15`.** The wiring lives on the fork's
+`claude/workspace-aware-wiring` branch. Until it merges, `task drift` will
+report these as *missing* — recorded but not diverging — which is reported
+and does not fail. That is the correct state to be in while the branch is
+open, and it flips to silence when the branch lands.
+
+### What to watch on the deliberate entries
+
+Seven are new files and rebase for free. Nine modify upstream files, and
+those are the real recurring cost:
+
+- `util/controller/controller.go` and `builder.go` — the largest, and the
+  one that would conflict with any upstream change to the builder.
+- `controllers/external/tracker.go` — one field and one branch.
+- `core/reconcilers/machine/machine_controller.go` — one seam, one field
+  type. This is the only reconciler touched, and its *reconcile logic* is
+  unchanged: `watchClusterNodes` names the same watch with the same
+  arguments and no longer decides how it is built.
+- the three test files and `go.mod`/`go.sum` — mechanical.
+
+ADR-0003's premise is "unmodified upstream reconcile logic", not
+"unmodified upstream files", and this table is what that distinction costs
+in practice.
+
+### Why the contract-metadata patch exists
 
 Resolving a contract-versioned reference — `spec.infrastructureRef`,
 `spec.bootstrap.configRef`, `spec.controlPlaneRef` — reads contract-version
