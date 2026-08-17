@@ -814,6 +814,26 @@ the three controller-side terms.
 Ordered by saving and by cost in divergence, and those orders are the same. The
 feature's central tension is now quantified rather than argued.
 
+### The census, read rather than estimated
+
+R16's early write-ups estimated "roughly 4–5 controllers, 19 watches". Reading
+every `SetupWithManager` gives **5 controllers and 14–15 informer-backed
+watches**, plus 4 channel-backed raw sources and dynamic watches that
+`external.ObjectTracker` adds at runtime. Measured there: **75.0 goroutines per
+workspace**, which the formula again predicted exactly before the run.
+
+Two consequences, both recorded in `evidence/controller-census.md`:
+
+- **The B-vs-C ordering in the options analysis flipped.** At the estimated
+  shape, cache interposition beat fleet-wide controllers; at the real census it
+  is the other way round, narrowly. The ordering is genuinely sensitive to the
+  census, which is why estimating it was not good enough.
+- **These are walking-skeleton figures.** `setup.go` defers most of the core
+  set to Phase 3. Upstream `core/main.go` wires 15 controllers against our 5;
+  at parity the projection is **~16 controllers, 45 watches, 236 goroutines per
+  workspace — 3.1× today**. Every capacity figure in this feature carries that
+  caveat.
+
 ### An unexplained fixed cost, flagged not resolved
 
 The first controller-and-watch in a workspace costs about **415 KiB more** than
@@ -843,5 +863,6 @@ figure is built on it.
 | Per-workspace footprint (R15) | MEASURED — 2.72–3.54 MiB, 211 goroutines, linear | None; this is the binding constraint the gate now weighs |
 | Idle vs active cost (R15) | MEASURED — 1.3× apart, identical goroutines | None; it reframes FR-026's premise rather than contradicting it |
 | Fitted model and held-out accuracy | MEASURED — worst error 0.39% | None; `cmd/scalemodel` re-derives it from committed runs |
-| Goroutine decomposition (R16) | MEASURED — cache interposition reaches 18% of it | None; it reframes FR-003's determination |
+| Goroutine decomposition (R16) | MEASURED — 75/workspace; cache interposition reaches 37% | None; it reframes FR-003's determination |
+| Controller census (R16) | VERIFIED — 5 controllers today, ~16 at parity | None; parity projection is a capacity caveat, not a blocker |
 | First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |
