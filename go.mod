@@ -10,6 +10,7 @@ require (
 	github.com/kcp-dev/multicluster-provider v0.8.0
 	github.com/kcp-dev/sdk v0.32.3
 	github.com/moby/moby/client v0.5.1
+	github.com/onsi/gomega v1.42.1
 	github.com/spf13/pflag v1.0.10
 	k8s.io/api v0.36.3
 	k8s.io/apiextensions-apiserver v0.36.3
@@ -18,9 +19,9 @@ require (
 	k8s.io/component-base v0.36.3
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
-	sigs.k8s.io/cluster-api v1.15.0-kcp.1
-	sigs.k8s.io/cluster-api/api v1.15.0-kcp.1
-	sigs.k8s.io/cluster-api/test v1.15.0-kcp.1
+	sigs.k8s.io/cluster-api v1.15.0-kcp.2
+	sigs.k8s.io/cluster-api/api v1.15.0-kcp.2
+	sigs.k8s.io/cluster-api/test v1.15.0-kcp.2
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/multicluster-runtime v0.24.1
 )
@@ -32,11 +33,11 @@ require (
 // All three modules must be pinned together: api/ and test/ are separate Go
 // modules inside the Cluster API repository, resolved by tag prefix, and a
 // partial pin fails at dependency resolution rather than at compile time.
-replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.1
+replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.2
 
-replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.1
+replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.2
 
-replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.1
+replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.2
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -105,7 +106,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/gomega v1.42.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
