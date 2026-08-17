@@ -126,6 +126,22 @@ than an adaptation:
   tenant's controller talking to another tenant's workload cluster. This is a
   correctness bug and no measurement ranks against it.
 
+## How much code the change touches
+
+| | Lines |
+|---|---|
+| Core reconciler packages, non-test | 23,683 |
+| Inside `SetupWithManager` | **617** |
+| | **2.6%** |
+
+`Reconcile` — where all the behaviour lives, and where the value of running
+upstream unmodified actually sits — does not change at all.
+
+That reframes the premise question, and
+[ADR-0003](../../../docs/adr-0003-workspace-aware-cluster-api.md) takes it up:
+the choice is not between "unmodified Cluster API" and "a fork", but between
+"unmodified controllers" and "unmodified **reconcile logic**".
+
 ## What it would be worth
 
 | | Per workspace, wired census | At core parity |

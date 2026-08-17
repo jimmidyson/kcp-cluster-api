@@ -1033,6 +1033,14 @@ plain requests, and `clustercache` keys accessors by namespace/name only
 (`cluster_cache.go:362`) — the latter a cross-tenant correctness bug fleet-wide,
 not an adaptation. Full analysis in `evidence/why-per-workspace.md`.
 
+**Counted**: `SetupWithManager` is **617 lines of the 23,683** non-test lines in
+the core reconciler packages — **2.6%**, and it is wiring. `Reconcile` does not
+change at all. That number is what makes the premise question answerable rather
+than rhetorical, and
+[ADR-0003](../../docs/adr-0003-workspace-aware-cluster-api.md) takes it up: the
+choice is between "unmodified controllers" and "unmodified *reconcile logic*",
+not between Cluster API and a reimplementation.
+
 ---
 
 ## Summary: what is safe to build on
