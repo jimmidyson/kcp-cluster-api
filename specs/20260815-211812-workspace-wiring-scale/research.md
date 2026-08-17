@@ -909,6 +909,68 @@ budget is per deployment rather than per workspace outright. Full analysis in
 
 ---
 
+## R18 — Throughput is linear in the worker count; the partition is the problem — MEASURED
+
+**Concern**: does `MaxConcurrentReconciles = 2` throttle throughput too much for
+this to be scalable?
+
+**Measured** by `test/integration/scale/throughput_test.go`: 8 workspaces, 40
+objects each mutated at once to build a backlog, a probe reconciler taking a
+stated 250 ms, one controller per workspace.
+
+| Workers | Elapsed | Per workspace | Fraction of linear |
+|---|---|---|---|
+| 1 | 10.03 s | 4.0/s | — |
+| 2 | 5.01 s | 8.0/s | **100%** |
+| 4 | 2.64 s | 15.2/s | 95% |
+| 8 | 1.38 s | 28.9/s | 91% |
+| 16 | 1.02 s | 39.2/s | 61% — load generator bound, not a ceiling |
+
+The 1-worker point matches theory exactly (40 × 250 ms = 10.0 s, measured
+10.03). So `per-workspace throughput = workers / reconcile duration`, and at a
+realistic 1–5 s Cluster API reconcile, two workers give **0.4–2 reconciles per
+second per workspace**.
+
+**The concern is correct, and the number is the wrong knob.** A shard at 800
+workspaces already has 8,000 worker goroutines across five controllers — the
+aggregate is enormous. They are **statically partitioned 2 per workspace per
+controller**, so a tenant with a 100-Machine burst gets 2 while thousands sit
+idle elsewhere. Tenant load is bursty and uncorrelated, which is precisely when
+a shared pool beats a static partition.
+
+| | Static partition (today) | Shared pool (fleet-wide) |
+|---|---|---|
+| Goroutines at 800 workspaces | 8,000 | ~50 |
+| Available to one bursting workspace | 2 | ~50 |
+
+**Action taken.** `DefaultMaxConcurrentReconciles` raised 2 → 4: a 2× gain in
+the worst case one tenant can hit, for 13% more goroutines (75 → 85 per
+workspace at the wired census), with the return measured rather than assumed.
+Not upstream's 10, which costs 53% more and still cannot lend idle capacity
+across workspaces.
+
+**This is the third independent argument for fleet-wide controllers**, after
+goroutine footprint (R16) and the engagement multiplier under mandatory
+deployment splitting (R17) — and the first that is about performance rather than
+footprint. Full analysis in `evidence/reconcile-throughput.md`.
+
+### Two instrument defects worth recording
+
+The first run had the **load generator as the constraint**: 320 sequential
+get-then-update round trips put a ~3.8 s floor under every worker count, making
+16 workers look like 1.7× over one. Fixed with concurrent merge patches, and the
+test now *reports* issue time so a generator-bound point announces itself.
+
+The second had **managers and workspaces accumulating across points** —
+`t.Cleanup` deferred each manager's stop to the end of the test, so point three
+ran three managers over twenty-four workspaces, all counting into one
+measurement. It produced rates above linear and completion counts above the
+run's own target, which is what exposed it.
+
+Both would have answered the question confidently and wrongly.
+
+---
+
 ## Summary: what is safe to build on
 
 | Area | Status | Gate before building |
@@ -930,4 +992,5 @@ budget is per deployment rather than per workspace outright. Full analysis in
 | Goroutine decomposition (R16) | MEASURED — 75/workspace; cache interposition reaches 37% | None; it reframes FR-003's determination |
 | Controller census (R16) | VERIFIED — 5 controllers today, ~16 at parity | None; parity projection is a capacity caveat, not a blocker |
 | Split deployments (R17) | MEASURED — mandatory; multiplies engagement cost | None; it raises the engagement repairs' priority |
+| Reconcile throughput (R18) | MEASURED — linear in workers; default raised 2→4 | None; pooling is the structural fix |
 | First-watch fixed cost (R16) | ASSUMED — ~415 KiB, mechanism unverified | Source read of the scoped informer path before building on it |

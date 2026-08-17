@@ -78,14 +78,30 @@ const (
 	// goroutines per workspace before a single object exists — a cost paid by
 	// every idle tenant.
 	//
-	// Two is chosen so a workspace can still make progress on independent
-	// objects without one slow reconcile stalling it, at a twenty-fifth of the
-	// inherited footprint.
+	// # Chosen against measurement, not intuition
 	//
-	// This value is provisional and deliberately so: it is reasoned, not
-	// measured. The sweep is what should set it, and revisiting it against
-	// that evidence is part of this feature rather than a follow-up.
-	DefaultMaxConcurrentReconciles = 2
+	// This was 2, with a comment saying so was reasoned rather than measured
+	// and that the sweep should set it. The sweep now has
+	// (evidence/reconcile-throughput.md), and it says two things.
+	//
+	// Throughput is **linear** in this number: one worker retires 4 reconciles
+	// per second per workspace at a 250 ms reconcile, two retire 8.0 — 100% of
+	// linear — and the relationship holds within 9% to eight workers. So the
+	// return on raising it is exact rather than hoped for.
+	//
+	// And the cost is exactly 1 goroutine and under 1 KiB per worker per
+	// controller per workspace. At the wired census of five controllers, 4
+	// costs 85 goroutines per workspace against 2's 75 — 13% more — and halves
+	// the worst case a single tenant can hit.
+	//
+	// Four rather than upstream's 10 because the remaining gap is bought at 53%
+	// more goroutines, and because raising this partition is the *expensive*
+	// way to buy burst capacity: these workers are statically partitioned per
+	// workspace, so a bursting tenant cannot use the thousands sitting idle in
+	// other workspaces. Pooling them behind fleet-wide controllers raises burst
+	// capacity and lowers total goroutines at once, and that is the fix this
+	// number is standing in for.
+	DefaultMaxConcurrentReconciles = 4
 )
 
 // SetupOptions configures what SetupReconcilers wires.

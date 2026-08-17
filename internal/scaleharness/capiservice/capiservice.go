@@ -87,7 +87,7 @@ func (s Service) Populate(ctx context.Context, c client.Client, objects int) err
 	for i := range objects {
 		cluster := &clusterv1.Cluster{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      s.objectName(i),
+				Name:      s.ObjectName(i),
 				Namespace: Namespace,
 				Labels:    map[string]string{"scaleharness": s.Prefix},
 			},
@@ -118,7 +118,7 @@ func (s Service) Populate(ctx context.Context, c client.Client, objects int) err
 // rather than an input to it.
 func (s Service) Touch(ctx context.Context, c client.Client) error {
 	cluster := &clusterv1.Cluster{}
-	key := client.ObjectKey{Namespace: Namespace, Name: s.objectName(0)}
+	key := client.ObjectKey{Namespace: Namespace, Name: s.ObjectName(0)}
 	if err := c.Get(ctx, key, cluster); err != nil {
 		return fmt.Errorf("getting Cluster %s: %w", key.Name, err)
 	}
@@ -144,4 +144,10 @@ func (s Service) Touch(ctx context.Context, c client.Client) error {
 	return nil
 }
 
-func (s Service) objectName(i int) string { return fmt.Sprintf("%s-%d", s.Prefix, i) }
+// ObjectName is the name of the i-th object this service creates.
+//
+// Exported because a measurement that builds a backlog has to address every
+// object individually, and reconstructing the naming scheme at the call site
+// would let the two drift apart silently — the harness would mutate objects
+// that do not exist and report a backlog that never formed.
+func (s Service) ObjectName(i int) string { return fmt.Sprintf("%s-%d", s.Prefix, i) }

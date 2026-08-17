@@ -147,7 +147,13 @@ larger one; `fleet-wide-controllers.md` scores both.
 
 1. **CPU is not modelled at all.** The harness records no CPU time, so a CPU
    request or limit cannot be derived from any of this. Sizing guidance must say
-   so rather than fill the column.
+   so rather than fill the column. Reconcile *throughput* is now measured
+   (`reconcile-throughput.md`) but that is a queueing figure, not a CPU one.
+
+1a. **The figures here were taken at 2 workers per controller.** The default is
+   now 4 (R18), which adds ~10 goroutines and a small amount of memory per
+   workspace at the wired census. The sweeps have not been re-run at the new
+   default, so the tables below understate goroutines by about 13%.
 
 2. **A stub reconciler.** The measured cost is registering watches and starting
    workers. A production reconciler adds its own footprint per workspace, and

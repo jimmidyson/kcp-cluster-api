@@ -84,6 +84,14 @@ func TestDefaultMaxConcurrentReconcilesIsChosenForManyTenants(t *testing.T) {
 		t.Errorf("DefaultMaxConcurrentReconciles = %d: a workspace must be able to make progress",
 			DefaultMaxConcurrentReconciles)
 	}
+	// Throughput is linear in this number (evidence/reconcile-throughput.md),
+	// so one worker means a workspace's backlog drains strictly serially — one
+	// slow reconcile stalls every other object it owns. That is a per-tenant
+	// failure mode rather than a footprint saving worth having.
+	if DefaultMaxConcurrentReconciles < 2 {
+		t.Errorf("DefaultMaxConcurrentReconciles = %d: a single worker drains a tenant's backlog serially",
+			DefaultMaxConcurrentReconciles)
+	}
 }
 
 // TestSetupOptionsDefaultsConcurrency covers the "configurable" half of FR-010:
