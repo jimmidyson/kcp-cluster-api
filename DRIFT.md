@@ -25,8 +25,8 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-thirty deliberate entries below, ten are new files and twenty modify existing
-ones — and the twenty are the number that matters.
+thirty-one deliberate entries below, eleven are new files and twenty modify
+existing ones — and the twenty are the number that matters.
 
 ## Where the check runs, and why not on every pull request
 
@@ -85,6 +85,7 @@ cannot build without them. See the feature's research notes (R2).
 | `controllers/clustercache/cluster_cache.go` | **Modified.** Accessors and last-event times key on the logical cluster as well as the ObjectKey, resolved from the context. `clusterSource.ch` becomes a send function so one cache can feed both shapes of consumer. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_accessor.go` | **Modified.** Carries the logical cluster, for metric labels. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/metrics.go` | **Modified.** Adds a `logical_cluster` label; without it two workspaces' identically named Clusters share a time series. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache_workspace_test.go` | New file. Covers the one behaviour a fleet-wide ClusterCache has that a per-workspace one cannot: a Cluster whose logical cluster has stopped being served is disconnected rather than polled forever. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_cache_fake.go` | **Modified.** Keys the fake's accessor map the same way. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_cache_test.go` | **Modified.** Same keying; the event-fan-out test substitutes the send rather than reading a channel. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_accessor_test.go` | **Modified.** Same keying. | None — carried deliberately, ADR-0003 |
@@ -114,8 +115,8 @@ open, and it flips to silence when the branch lands.
 
 ### What to watch on the deliberate entries
 
-Ten are new files and rebase for free. Twenty modify upstream files, and those
-are the real recurring cost:
+Eleven are new files and rebase for free. Twenty modify upstream files, and
+those are the real recurring cost:
 
 - `util/controller/controller.go` and `builder.go` — the largest, and the
   one that would conflict with any upstream change to the builder.

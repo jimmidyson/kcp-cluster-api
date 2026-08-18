@@ -99,7 +99,10 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // # What that is worth, measured
 //
 // A workspace costs **2.0 goroutines** at the margin, exactly, from two
-// workspaces to a hundred (evidence/fleet-wide-measured.md).
+// workspaces to a hundred while idle (evidence/fleet-wide-measured.md), and
+// the same 2.0 with each workspace holding a Cluster and a DevCluster
+// reconciled to provisioned (evidence/fleet-active-measured.md). Work does not
+// leave a per-workspace residue.
 //
 // It was 51.7 when the controllers were fleet-wide but their watches were still
 // registered per cluster. Making the controllers fleet-wide collapsed the
@@ -127,6 +130,10 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // departure point. Read that as an upper bound: the sweep measures the test
 // process, and part of the residue is still the kcp fixture buffering the
 // server's log rather than anything this wires.
+//
+// The active run does not improve on that figure and is not quoted for it: its
+// heap is flat, steps once, and is flat again, and a line fitted through a
+// single step is arithmetic rather than a measurement.
 //
 // An earlier figure of ~840 KiB with a departure at 32 was that buffer and
 // nothing else — 48 MB of a 62 MB live heap, scaling with workspace creation
