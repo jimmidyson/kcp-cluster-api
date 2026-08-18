@@ -29,8 +29,16 @@ limitations under the License.
 // This package provides the instruments for measuring that curve: a
 // classifier that says what a request to a kcp shard costs it, a
 // [Counter] that installs on a rest.Config and tallies requests by that
-// classification, [Sample] for process state, and a [Report] that renders the
-// sweep as a table and as JSON.
+// classification, [Sample] for process state, [FindDeparture] for the point at
+// which a cost stops being linear, and a [Report] that renders the sweep as a
+// table and as JSON.
+//
+// It is the only live instrument. There was briefly a second one, with its own
+// provisioning seam, load profiles and delivery probe; the two measured the
+// same process and could disagree about it, which is worse than either being
+// wrong on its own. What that one had and this did not — departure detection —
+// moved here, and internal/scaleharness kept only what fits models to runs it
+// already recorded.
 //
 // It measures; it asserts nothing. What the numbers have to satisfy belongs
 // in the tests that take them — internal/providerwiring for the wiring's own
