@@ -565,7 +565,7 @@ func TestSustainedChurnLeavesNoResidue(t *testing.T) {
 		return mgr.Add(r)
 	})
 
-	settle(t)
+	settle(t, "the baseline")
 	baseline := runtime.NumGoroutine()
 
 	for i := range cycles {
@@ -595,22 +595,12 @@ func TestSustainedChurnLeavesNoResidue(t *testing.T) {
 		}
 	}
 
-	settle(t)
+	settle(t, "the end of the engage/disengage cycles")
 	// A small allowance absorbs runtime bookkeeping; the failure this guards
 	// against is growth proportional to cycles, not a handful of stragglers.
 	if grew := runtime.NumGoroutine() - baseline; grew > cycles/10 {
 		t.Errorf("goroutines grew by %d over %d engage/disengage cycles (baseline %d): per-workspace state is surviving disengagement",
 			grew, cycles, baseline)
-	}
-}
-
-// settle gives stopping goroutines a chance to finish before they are counted.
-// Without it the check races teardown and reports leaks that are not leaks.
-func settle(t *testing.T) {
-	t.Helper()
-	for range 20 {
-		runtime.GC()
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 

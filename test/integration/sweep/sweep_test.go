@@ -158,6 +158,16 @@ type sweepConfig struct {
 	// installed exactly once.
 	newSetup func(t *testing.T, ctx context.Context) providerwiring.SetupFunc
 
+	// newFleetSetup builds wiring that is installed once for every workspace
+	// rather than once per workspace. Optional; nil means the sweep measures
+	// per-workspace wiring alone.
+	//
+	// When it is set the manager's local cluster is the APIExport's virtual
+	// workspace rather than the workspace holding the export, because a
+	// fleet-wide controller resolves types through the local RESTMapper at
+	// setup time and the exporting workspace does not bind what it exports.
+	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager)
+
 	// activate writes the objects that make one workspace active, and active
 	// reports whether that workspace's controllers have finished acting on
 	// them. Both use the workspace's own client rather than the manager's, so
@@ -345,7 +355,24 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	provider, err := apiexport.New(countedCfg, cfg.exportName, apiexport.Options{Scheme: cfg.scheme})
 	must(t, err)
 
-	mgr, err := mcmanager.New(countedCfg, provider, ctrl.Options{
+	// The manager's local cluster. Per-workspace wiring wants the workspace
+	// holding the export; fleet-wide wiring wants the virtual workspace, whose
+	// discovery describes the API surface every engaged workspace shares.
+	//
+	// The URL is derived rather than read from the APIExportEndpointSlice,
+	// which is what production does (providerwiring.VirtualWorkspaceConfig).
+	// The slice is empty until a workspace has bound, and this sweep binds them
+	// one at a time *after* the manager is built, deliberately — reading the
+	// slice here would force a workspace to be bound before the baseline, and
+	// the baseline is the one sample taken with none.
+	localCfg := countedCfg
+	if cfg.newFleetSetup != nil {
+		vw := rest.CopyConfig(baseCfg)
+		vw.Host = strings.TrimSuffix(baseCfg.Host, "/") + "/services/apiexport/root/" + cfg.exportName + "/clusters/*"
+		localCfg = counter.WrapConfig(vw)
+	}
+
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 cfg.scheme,
 		HealthProbeBindAddress: "0",
 		Metrics:                metricsserver.Options{BindAddress: "0"},
@@ -356,6 +383,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		Log: ctrl.Log.WithName("providerwiring"),
 	})
 	must(t, err)
+
+	if cfg.newFleetSetup != nil {
+		cfg.newFleetSetup(t, ctx, mgr)
+	}
 
 	// The baseline is taken before the manager starts: the first workspace has
 	// to be bound before kcp populates the APIExportEndpointSlice the provider

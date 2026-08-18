@@ -33,6 +33,7 @@ import (
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
@@ -84,13 +85,22 @@ const (
 // TestCoreReconcilerWorkspaceSweep measures what a deployment actually pays:
 // the whole reconciler set cmd/core-manager wires — ClusterCache, the core
 // Cluster and Machine reconcilers, and the dev infrastructure provider's
-// DevCluster and DevMachine reconcilers — running per workspace.
+// DevCluster and DevMachine reconcilers.
 //
 // It differs from TestActiveWorkspaceSweep in the workload and nothing else:
 // same instrument, same settling, same assertions. The point of running both
 // is that the difference between them is attributable. One controller on one
 // type is what the wiring costs; this is what the wiring plus a real provider
 // costs, and only the second number sizes a deployment.
+//
+// # The set is wired once, not once per workspace
+//
+// It used to be per workspace, and this test used to say so. It is not any
+// more: every controller serves every workspace, and each resolves the
+// workspace from the context of the reconcile it is running. So the wiring is
+// installed once, before the manager starts, and what the per-workspace
+// columns of this report measure is what a workspace adds to a process already
+// serving others — which is the number that sizes a shard.
 //
 // # Why the in-memory backend
 //
@@ -152,7 +162,16 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 		},
 		crdTransform: keepStorageVersion,
 
-		newSetup: func(t *testing.T, ctx context.Context) providerwiring.SetupFunc {
+		// Nothing is wired per workspace any more, so this contributes no
+		// reconcilers. The seam stays registered because engagement is what the
+		// sweep waits on before measuring a point, and because a deployment
+		// still registers it — for the engagement telemetry, which is all it
+		// does now.
+		newSetup: func(*testing.T, context.Context) providerwiring.SetupFunc {
+			return func(context.Context, multicluster.ClusterName, manager.Manager) error { return nil }
+		},
+
+		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager) {
 			t.Helper()
 
 			// MachinePool defaults to enabled upstream, and the core
@@ -170,12 +189,10 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			dev, err := coremanager.NewDevInfrastructure(ctx)
 			must(t, err)
 
-			return func(ctx context.Context, _ multicluster.ClusterName, wsMgr manager.Manager) error {
-				// The production wiring itself, unmodified — not a
-				// reimplementation of it. Anything this sweep measures that a
-				// deployment would not pay would make the numbers a fiction.
-				return coremanager.SetupReconcilers(ctx, wsMgr, dev)
-			}
+			// The production wiring itself, unmodified — not a
+			// reimplementation of it. Anything this sweep measures that a
+			// deployment would not pay would make the numbers a fiction.
+			must(t, coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{}))
 		},
 
 		activate: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {
