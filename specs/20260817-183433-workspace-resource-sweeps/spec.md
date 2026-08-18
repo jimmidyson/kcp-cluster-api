@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-17
 
-**Status**: Draft
+**Status**: Shipped in [#26](https://github.com/jimmidyson/kcp-cluster-api/pull/26)
 
 **Input**: The "Scalability" section of
 [`docs/conversion-plan.md`](../../docs/conversion-plan.md), and Constitution
