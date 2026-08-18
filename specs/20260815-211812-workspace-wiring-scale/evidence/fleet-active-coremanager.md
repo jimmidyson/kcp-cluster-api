@@ -10,10 +10,10 @@
 | goroutinesPerWorkspace | 2.0 |
 | goroutinesReclaimedPerWorkspace | -10.8 |
 | goroutinesRetainedPerDepartedWorkspace | 0.0 |
-| heapBytesPerWorkspace | 1096900 |
+| heapBytesPerWorkspace | 725133 |
 | objectsPerWorkspace | 1 |
 | reconciledTypes | cluster.x-k8s.io/clusters + infrastructure.cluster.x-k8s.io/devclusters |
-| secondsPerWorkspaceEngagement | -0.2 |
+| secondsPerWorkspaceEngagement | 0.1 |
 | shape | coremanager.SetupFleetControllers: ClusterCache, Cluster, Machine, DevCluster, DevMachine — one controller each for the whole shard |
 | watchStreamsPerWorkspace | 0.00 |
 | watchedTypesPerWorkspace | 6 |
@@ -21,31 +21,31 @@
 
 | Step | Workspaces | Goroutines | Heap | Watch streams (wildcard/scoped) | Lists | Discovery | Requests | Step time |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| baseline (manager not started) | 0 | 19 | 12.1 MiB | 0 (0/0) | 0 | 7 | 7 | 0.0s |
-| 1 bound, idle | 1 | 223 | 13.1 MiB | 8 (7/1) | 0 | 12 | 20 | 8.8s |
-| 1 active | 1 | 243 | 13.6 MiB | 8 (7/1) | 0 | 16 | 48 | 10.1s |
-| 2 bound, idle | 2 | 245 | 13.7 MiB | 8 (7/1) | 0 | 16 | 48 | 2.5s |
-| 2 active | 2 | 245 | 13.9 MiB | 8 (7/1) | 0 | 20 | 75 | 8.4s |
-| 3 bound, idle | 3 | 247 | 19.9 MiB | 8 (7/1) | 0 | 20 | 75 | 2.5s |
-| 3 active | 3 | 247 | 20.0 MiB | 8 (7/1) | 0 | 24 | 102 | 7.6s |
-| 4 bound, idle | 4 | 249 | 20.1 MiB | 8 (7/1) | 0 | 24 | 102 | 2.5s |
-| 4 active | 4 | 249 | 20.2 MiB | 8 (7/1) | 0 | 28 | 129 | 9.3s |
-| 5 bound, idle | 5 | 251 | 20.3 MiB | 8 (7/1) | 0 | 28 | 129 | 3.7s |
-| 5 active | 5 | 251 | 20.4 MiB | 8 (7/1) | 0 | 32 | 156 | 9.4s |
-| 6 bound, idle | 6 | 253 | 20.5 MiB | 8 (7/1) | 0 | 32 | 156 | 4.6s |
-| 6 active | 6 | 253 | 20.6 MiB | 8 (7/1) | 0 | 36 | 183 | 9.3s |
-| 7 bound, idle | 7 | 255 | 20.7 MiB | 8 (7/1) | 0 | 36 | 183 | 2.5s |
-| 7 active | 7 | 255 | 20.8 MiB | 8 (7/1) | 0 | 40 | 210 | 7.3s |
-| 8 bound, idle | 8 | 257 | 20.8 MiB | 8 (7/1) | 0 | 40 | 210 | 2.7s |
-| 8 active | 8 | 257 | 21.0 MiB | 8 (7/1) | 0 | 44 | 237 | 7.3s |
-| 7 left | 7 | 255 | 20.9 MiB | 8 (7/1) | 0 | 44 | 248 | 3.5s |
-| 6 left | 6 | 253 | 20.9 MiB | 8 (7/1) | 0 | 44 | 259 | 7.0s |
-| 5 left | 5 | 251 | 20.9 MiB | 8 (7/1) | 0 | 44 | 270 | 5.3s |
-| 4 left | 4 | 249 | 20.8 MiB | 8 (7/1) | 0 | 44 | 281 | 5.3s |
-| 3 left | 3 | 247 | 20.8 MiB | 8 (7/1) | 0 | 44 | 292 | 5.3s |
-| 2 left | 2 | 245 | 20.8 MiB | 8 (7/1) | 0 | 44 | 303 | 6.3s |
-| 1 left | 1 | 243 | 20.7 MiB | 8 (7/1) | 0 | 44 | 314 | 5.3s |
-| 0 left | 0 | 136 | 20.2 MiB | 8 (7/1) | 0 | 44 | 325 | 5.3s |
+| baseline (manager not started) | 0 | 22 | 12.1 MiB | 0 (0/0) | 0 | 7 | 7 | 0.0s |
+| 1 bound, idle | 1 | 226 | 13.1 MiB | 8 (7/1) | 0 | 12 | 20 | 8.9s |
+| 1 active | 1 | 237 | 13.5 MiB | 8 (7/1) | 0 | 16 | 46 | 9.3s |
+| 2 bound, idle | 2 | 239 | 13.6 MiB | 8 (7/1) | 0 | 16 | 46 | 2.5s |
+| 2 active | 2 | 239 | 19.7 MiB | 8 (7/1) | 0 | 20 | 71 | 8.4s |
+| 3 bound, idle | 3 | 241 | 19.8 MiB | 8 (7/1) | 0 | 20 | 71 | 2.5s |
+| 3 active | 3 | 241 | 19.9 MiB | 8 (7/1) | 0 | 24 | 96 | 8.2s |
+| 4 bound, idle | 4 | 243 | 20.0 MiB | 8 (7/1) | 0 | 24 | 96 | 2.5s |
+| 4 active | 4 | 243 | 20.1 MiB | 8 (7/1) | 0 | 28 | 121 | 7.3s |
+| 5 bound, idle | 5 | 245 | 20.2 MiB | 8 (7/1) | 0 | 28 | 121 | 3.7s |
+| 5 active | 5 | 245 | 20.3 MiB | 8 (7/1) | 0 | 32 | 146 | 7.6s |
+| 6 bound, idle | 6 | 247 | 20.3 MiB | 8 (7/1) | 0 | 32 | 146 | 2.5s |
+| 6 active | 6 | 247 | 20.5 MiB | 8 (7/1) | 0 | 36 | 171 | 9.9s |
+| 7 bound, idle | 7 | 249 | 20.5 MiB | 8 (7/1) | 0 | 36 | 171 | 2.5s |
+| 7 active | 7 | 249 | 20.7 MiB | 8 (7/1) | 0 | 40 | 196 | 11.1s |
+| 8 bound, idle | 8 | 251 | 20.7 MiB | 8 (7/1) | 0 | 40 | 196 | 2.5s |
+| 8 active | 8 | 251 | 20.9 MiB | 8 (7/1) | 0 | 44 | 221 | 7.3s |
+| 7 left | 7 | 249 | 20.8 MiB | 8 (7/1) | 0 | 44 | 230 | 4.8s |
+| 6 left | 6 | 247 | 20.7 MiB | 8 (7/1) | 0 | 44 | 239 | 5.3s |
+| 5 left | 5 | 245 | 20.7 MiB | 8 (7/1) | 0 | 44 | 248 | 6.2s |
+| 4 left | 4 | 245 | 20.6 MiB | 8 (7/1) | 0 | 44 | 257 | 5.3s |
+| 3 left | 3 | 241 | 20.5 MiB | 8 (7/1) | 0 | 44 | 266 | 5.3s |
+| 2 left | 2 | 239 | 20.5 MiB | 8 (7/1) | 0 | 44 | 275 | 5.3s |
+| 1 left | 1 | 237 | 20.4 MiB | 8 (7/1) | 0 | 44 | 284 | 5.3s |
+| 0 left | 0 | 130 | 19.9 MiB | 8 (7/1) | 0 | 44 | 293 | 6.1s |
 
 Every stream open at the widest point of the sweep:
 
