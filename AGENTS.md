@@ -55,6 +55,12 @@ tooling, no process of its own. Its contract:
   `vX.Y.Z-kcp.N`, `api/vX.Y.Z-kcp.N` and `test/vX.Y.Z-kcp.N`. `api/` and
   `test/` are separate Go modules resolved by tag prefix; a partial tag set
   fails dependency resolution with a confusing "unknown revision" error.
+- Tags are **signed and annotated** (`git tag -s`), all three at the same
+  commit. Annotated because a tag this project pins to should carry what
+  changed and who made it, and signed because it is the artefact a build
+  resolves rather than a name anyone can move. A lightweight tag is not an
+  acceptable substitute, and this is written down because it is the kind of
+  convention that is invisible until somebody produces the wrong thing.
 
 ## Repository layout
 
