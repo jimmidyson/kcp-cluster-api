@@ -1,0 +1,124 @@
+{
+  "service": "cluster-api-core",
+  "profile": {
+    "name": "idle-heavy-fleet",
+    "objectsPerWorkspace": 0,
+    "eventsPerWorkspacePerSecond": 0
+  },
+  "mode": "synthetic",
+  "points": [
+    {
+      "workspaces": 1,
+      "value": 6420920
+    },
+    {
+      "workspaces": 2,
+      "value": 7133992
+    },
+    {
+      "workspaces": 4,
+      "value": 7275424
+    },
+    {
+      "workspaces": 8,
+      "value": 7571440
+    },
+    {
+      "workspaces": 16,
+      "value": 8683344
+    },
+    {
+      "workspaces": 32,
+      "value": 9834968
+    },
+    {
+      "workspaces": 64,
+      "value": 13193904
+    },
+    {
+      "workspaces": 100,
+      "value": 17851088
+    }
+  ],
+  "departure": {
+    "found": false,
+    "reason": "no point exceeded the linear projection by more than 25% within the swept range (up to 100 workspaces)",
+    "tolerance": 0.25,
+    "points": 8
+  },
+  "measurements": [
+    {
+      "workspaces": 1,
+      "heapBytes": 6420920,
+      "goroutines": 141,
+      "loadDuration": 873,
+      "events": 0,
+      "processBytes": 27715864,
+      "stackBytes": 1114112
+    },
+    {
+      "workspaces": 2,
+      "heapBytes": 7133992,
+      "goroutines": 165,
+      "loadDuration": 244,
+      "events": 0,
+      "processBytes": 27715864,
+      "stackBytes": 1212416
+    },
+    {
+      "workspaces": 4,
+      "heapBytes": 7275424,
+      "goroutines": 169,
+      "loadDuration": 334,
+      "events": 0,
+      "processBytes": 27715864,
+      "stackBytes": 1212416
+    },
+    {
+      "workspaces": 8,
+      "heapBytes": 7571440,
+      "goroutines": 177,
+      "loadDuration": 274,
+      "events": 0,
+      "processBytes": 27715864,
+      "stackBytes": 1212416
+    },
+    {
+      "workspaces": 16,
+      "heapBytes": 8683344,
+      "goroutines": 193,
+      "loadDuration": 271,
+      "events": 0,
+      "processBytes": 27978008,
+      "stackBytes": 1245184
+    },
+    {
+      "workspaces": 32,
+      "heapBytes": 9834968,
+      "goroutines": 225,
+      "loadDuration": 207,
+      "events": 0,
+      "processBytes": 32172312,
+      "stackBytes": 1343488
+    },
+    {
+      "workspaces": 64,
+      "heapBytes": 13193904,
+      "goroutines": 289,
+      "loadDuration": 367,
+      "events": 0,
+      "processBytes": 40823064,
+      "stackBytes": 1507328
+    },
+    {
+      "workspaces": 100,
+      "heapBytes": 17851088,
+      "goroutines": 361,
+      "loadDuration": 266,
+      "events": 0,
+      "processBytes": 45279512,
+      "stackBytes": 1638400
+    }
+  ],
+  "listenersPerWorkspace": 1
+}
