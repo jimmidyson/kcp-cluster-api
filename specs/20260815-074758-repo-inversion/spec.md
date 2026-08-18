@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-15
 
-**Status**: Draft
+**Status**: Shipped in [#22](https://github.com/jimmidyson/kcp-cluster-api/pull/22)
 
 **Input**: User description: "Invert the repository so kcp-cluster-api is a standalone Go module that consumes cluster-api as an external dependency, replace Make with go-task, and migrate GitHub Actions to this project."
 

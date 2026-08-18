@@ -8,8 +8,29 @@
 > recorded here stand; only their locations moved. See
 > [`docs/site/content/en/docs/design/fork-architecture.md`](site/content/en/docs/design/fork-architecture.md).
 
-Status: draft, for discussion. Owner: none yet — this is a coordination
-document for splitting the work across contributors/agents.
+This document is the record of what is done and what is next. Every item
+below carries its own status, and a change that lands one updates that status
+in the same pull request — see [`AGENTS.md`](../AGENTS.md#tracking-work). Read
+it before starting work: it is meant to answer "what now?" without anyone
+having to reconstruct the answer from the commit log.
+
+## Next
+
+- **G4, the webhook dispatch layer, is the gating item.** Phase 3's P4 waits
+  on it, and until it lands webhook wiring serves one named workspace and
+  refuses a second rather than silently serving it wrong. It keeps a human
+  review checkpoint (see [Executing this
+  plan](#executing-this-plan-what-needs-a-human-first)) — a
+  workspace-resolution bug here is a cross-tenant bleed, not an ordinary bug.
+- **P1–P3 are dispatchable in parallel now.** Each ports one provider's
+  `main.go` wiring onto the per-workspace glue G2 already provides — same
+  recipe as Phase 1's core-provider port, each in its own `cmd/<name>/`
+  directory, so simultaneous work won't collide.
+- **G3 has no caller and is not built.** Building it is the first step of P5
+  (clusterctl), and nothing else needs it today.
+- Phase 0, Phase 1 and the rest of Phase 2 are done. Phase 4 starts once
+  Phase 3 lands, and Phase 4's idle eviction now has the measurements it
+  needs (see [Scalability](#scalability)).
 
 ## Goal
 
@@ -113,7 +134,9 @@ cache/transport per workspace.
 > first. See
 > [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
 > for the numbers, the method, and the one thing that does *not* come back
-> when a workspace leaves.
+> when a workspace leaves, and
+> [`specs/20260817-183433-workspace-resource-sweeps`](../specs/20260817-183433-workspace-resource-sweeps/spec.md)
+> for the specification the sweeps were built against.
 
 What it does *not* obviously solve, and needs verifying in the Phase 1 spike
 rather than assumed:
@@ -177,14 +200,14 @@ dependency. Treat that as the documented fallback, not the default.
 These block essentially everything else; they're cheap to get wrong
 early and expensive to unwind later.
 
-| # | Decision | Notes |
-|---|---|---|
-| D1 | Target kcp version + client libs to pin (`kcp-dev/kcp`, `kcp-dev/client-go`, `kcp-dev/multicluster-provider`, `sigs.k8s.io/multicluster-runtime`) | Record in an ADR under `kcp/docs/`, including the library-maturity check from D4/"Scalability" above. |
-| D2 | Go module layout for `kcp/` | AGENTS.md prefers a second module over editing root `go.mod`. Use `kcp/go.mod` with a `replace sigs.k8s.io/cluster-api => ../` so it can import `core/reconcilers/*` etc. without touching root `go.mod`. Confirm this doesn't break `go work`/CI tooling. |
-| D3 | APIExport/APIBinding schema strategy | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. Permission-claim mechanism for *provider* CRDs (the reciprocal problem — core reading/writing provider-owned objects) is decided in [ADR-0001](adr-0001-provider-api-permissions.md); still open here: the `Secret`/`ConfigMap` claim scope specifically. |
-| D4 | Discovery + cache engine: adopt `kcp-dev/multicluster-provider`'s `Provider` + `multicluster-runtime`'s `mcmanager.Manager.GetManager()`, or hand-roll | Default to adopting (see "Chosen model"/"Scalability" above). Confirm write-path routing, leader-election behavior, and library maturity in the Phase 1 spike before locking this in; hand-rolling a `WildcardCache`-alike layer is the documented fallback, not the default. |
-| D5 | Identity/RBAC model | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). **Decided:** single system identity via the virtual workspace — see [ADR-0001](adr-0001-provider-api-permissions.md). |
-| D6 | Partition topology for horizontal sharding: how many `Partition`/`APIExportEndpointSlice` pairs, how they map to replica-group deployments | Use kcp's own `PartitionSet`→`Partition`→`APIExportEndpointSlice` chain (see "Chosen model"/"Scalability" above) rather than app-level hashing. Only matters once a kcp install runs multiple shards — moot for single-shard dev/small deployments, so this can start as "one partition, one replica-group" and grow later. |
+| # | Decision | Status | Notes |
+|---|---|---|---|
+| D1 | Target kcp version + client libs to pin (`kcp-dev/kcp`, `kcp-dev/client-go`, `kcp-dev/multicluster-provider`, `sigs.k8s.io/multicluster-runtime`) | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md) | Record in an ADR under `kcp/docs/`, including the library-maturity check from D4/"Scalability" above. |
+| D2 | Go module layout for `kcp/` | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md); later superseded by the repository inversion (#22), which made `kcp/` the root module | AGENTS.md prefers a second module over editing root `go.mod`. Use `kcp/go.mod` with a `replace sigs.k8s.io/cluster-api => ../` so it can import `core/reconcilers/*` etc. without touching root `go.mod`. Confirm this doesn't break `go work`/CI tooling. |
+| D3 | APIExport/APIBinding schema strategy | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md); `Secret`/`ConfigMap` claim scope still open | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. Permission-claim mechanism for *provider* CRDs (the reciprocal problem — core reading/writing provider-owned objects) is decided in [ADR-0001](adr-0001-provider-api-permissions.md); still open here: the `Secret`/`ConfigMap` claim scope specifically. |
+| D4 | Discovery + cache engine: adopt `kcp-dev/multicluster-provider`'s `Provider` + `multicluster-runtime`'s `mcmanager.Manager.GetManager()`, or hand-roll | done — adopted, confirmed empirically in Phase 1 ([ADR-0001](adr-0001-per-workspace-manager-pool.md)) | Default to adopting (see "Chosen model"/"Scalability" above). Confirm write-path routing, leader-election behavior, and library maturity in the Phase 1 spike before locking this in; hand-rolling a `WildcardCache`-alike layer is the documented fallback, not the default. |
+| D5 | Identity/RBAC model | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md) | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). **Decided:** single system identity via the virtual workspace — see [ADR-0001](adr-0001-provider-api-permissions.md). |
+| D6 | Partition topology for horizontal sharding: how many `Partition`/`APIExportEndpointSlice` pairs, how they map to replica-group deployments | deferred — one partition, one replica-group until an install runs multiple shards | Use kcp's own `PartitionSet`→`Partition`→`APIExportEndpointSlice` chain (see "Chosen model"/"Scalability" above) rather than app-level hashing. Only matters once a kcp install runs multiple shards — moot for single-shard dev/small deployments, so this can start as "one partition, one replica-group" and grow later. |
 
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.
@@ -277,12 +300,21 @@ keep it minimal and get it merged before fanning out.
   file only): build/vet/lint `kcp/go.mod`, run Phase 1's walking-skeleton
   test as an integration job (kind + kcp).
 
-**Status: G1, G2 and G5 done; G3 deferred with its trigger recorded; G4
-outstanding.** See
+**Status**
+
+| # | Status | Evidence |
+|---|---|---|
+| G1 | done | #25 — no code of its own beyond `cmd/core-manager`'s provider construction |
+| G2 | done | #25 — `internal/providerwiring` |
+| G3 | deferred, no caller | trigger: P5, or anything else reaching a specific workspace from outside the engaged pool |
+| G4 | not started — **gates P4** | keeps a human review checkpoint |
+| G5 | done | #22 — `.github/workflows/pr.yaml` |
+
+See
 [Per-workspace wiring](site/content/en/docs/design/per-workspace-wiring.md)
 for the contract and the reasoning, and
 [`specs/20260815-185524-per-workspace-wiring`](../specs/20260815-185524-per-workspace-wiring/spec.md)
-for the specification it was built against.
+for the specification G1 and G2 were built against.
 
 - **G1** needed no code of its own beyond `cmd/core-manager`'s existing
   provider construction, and deliberately gets no project-owned interface:
@@ -314,22 +346,36 @@ tracks are independent of each other and can be owned by different
 people/agents simultaneously. Each one is "repeat Phase 1's port for a
 different binary/concern."
 
-| Track | Scope | Depends on |
-|---|---|---|
-| P1 | `kcp/cmd/kubeadm-bootstrap-manager`: port `bootstrap/kubeadm/main.go` wiring onto G2 | G2, G3 |
-| P2 | `kcp/cmd/kubeadm-control-plane-manager`: port `controlplane/kubeadm/main.go` wiring onto G2 | G2, G3 |
-| P3 | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
-| P4 | Webhook wiring for all 4 providers through G4 | G4, P1–P3 (can stub against G4's interface early) |
-| P5 | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
-| P6 | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
-| P7 | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
-| P9 | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
-| P10 | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
+| Track | Status | Scope | Depends on |
+|---|---|---|---|
+| P1 | not started | `kcp/cmd/kubeadm-bootstrap-manager`: port `bootstrap/kubeadm/main.go` wiring onto G2 | G2, G3 |
+| P2 | not started | `kcp/cmd/kubeadm-control-plane-manager`: port `controlplane/kubeadm/main.go` wiring onto G2 | G2, G3 |
+| P3 | not started | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
+| P4 | blocked on G4 | Webhook wiring for all 4 providers through G4 | G4, P1–P3 (can stub against G4's interface early) |
+| P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
+| P6 | not started | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
+| P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
+| P8 | partly — the two halves exist separately, never together (see note) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
+| P10 | in progress — user docs exist, last refreshed in #26 | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
 P1–P3 are mechanically identical to Phase 1's core-provider port, so
 they're the safest to parallelize across multiple agents/contributors at
 once — same recipe, different source `main.go`.
+
+**P8** is further along than "not started" and less far than done:
+`TestEveryBoundWorkspaceIsWired` exercises many workspaces, and
+`TestCoreManagerClusterToMachine` exercises a full Cluster→Machine reconcile,
+but no test does both at once and nothing yet asserts that one workspace's
+reconciler cannot see another's objects — which is the property P8 exists to
+prove.
+
+**Unsettled:** this table lists G3 as a dependency of P1–P3, while Phase 2
+records G3's trigger as P5 alone — i.e. that a ported provider binary needs
+nothing outside the engaged manager pool. The second reading is what G2's
+implementation supports, but the two statements have never been reconciled
+deliberately. Settle it before dispatching P1, and correct whichever line is
+wrong.
 
 ## Phase 4 — hardening (after Phase 3 lands)
 
@@ -349,6 +395,12 @@ once — same recipe, different source `main.go`.
   the one component that fans a single network listener out across tenant
   boundaries, so a workspace-resolution bug there is a cross-tenant
   bleed, not just a bug.
+
+**Status: not started**, and deliberately so — this phase waits on Phase 3.
+One piece of its groundwork does exist: idle eviction needs a per-workspace
+cost to bound, and #26 measured it (see [Scalability](#scalability) and
+[Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)),
+including the one cost that is not reclaimed when a workspace disengages.
 
 ## Dependency summary
 
@@ -385,22 +437,23 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
    shards), or requires a restart to pick up a new endpoint set — drives
    whether D6's partition topology can change without a rollout.
 
-## Executing this plan: what's dispatchable now vs. what needs a human first
+## Executing this plan: what needs a human first
 
 This doc is written to be handed to multiple contributors/agents, but not
-uniformly — some of it is ready for direct autonomous dispatch today, and
-some of it isn't, yet.
+uniformly. What is dispatchable right now is in [Next](#next) at the top of
+this file; what follows here is the standing rule about which work cannot be
+handed over unsupervised, whatever its status says.
 
-**Needs a human decision before any agent touches it:** D1 (kcp version to
-pin), D3 (APIExport schema + permission-claim scope), and D5
-(RBAC/identity model) are written as options to weigh, not answers. An
-agent hand this without a resolved ADR either stalls or silently picks a
-default — and for D3/D5 specifically, a wrong silent default is a
-security decision made without review (permission-claim scope creep, an
-identity model that's more permissive than intended), not just a rework
-cost. Get these into the `kcp/docs/adr-0001-*.md` as actual decisions
-before dispatching Phase 1, and don't let an agent write that ADR
-unsupervised.
+**Needed a human decision, and got one:** D1 (kcp version to pin), D3
+(APIExport schema + permission-claim scope) and D5 (RBAC/identity model) were
+written as options to weigh, not answers, and were resolved by the repository
+owner in the ADRs before Phase 1 was dispatched. The rule they set stands for
+anything of the same shape: an agent handed such a question without a resolved
+ADR either stalls or silently picks a default — and for D3/D5-shaped
+questions a wrong silent default is a security decision made without review
+(permission-claim scope creep, an identity model more permissive than
+intended), not just a rework cost. Record the decision as an ADR first, and
+don't let an agent write that ADR unsupervised.
 
 **Keeps a human review checkpoint regardless of who writes the code:**
 G4 (webhook dispatch) and anything implementing D5. G4 is explicitly
@@ -411,20 +464,15 @@ without a human (or a dedicated security review pass) checking the
 workspace-resolution logic specifically, independent of normal code
 review.
 
-**Ready for dispatch now:** Phase 1, as one closely-watched session (it's
-the spike everything else depends on — don't parallelize it). Once Phase
-0's ADR and Phase 1 land: P1–P3 and P5 are the best-shaped tasks in this
-doc for parallel agent dispatch — "port `<provider>/main.go`'s wiring onto
-G2, same recipe as Phase 1's core-provider port" is concrete and bounded,
-and each track lives in its own `kcp/cmd/<name>/` directory, so agents
-working them simultaneously won't collide on files.
-
-**Before fanning Phase 2/3 out to multiple agents with no shared
-context:** pin G1–G3's behavioral descriptions into actual Go interface
-signatures first (a types-only skeleton, landed as its own small PR) —
-right now they're prose ("turns a workspace path + config into a
-`*rest.Config`"), which is fine for a human but leaves room for two
-agents to independently build incompatible shapes for the same seam. Add
-a one-line acceptance check per G/P item as each is concretized (a test
-or a minimal manual verification command), so an agent has an unambiguous
-done-condition instead of "compiles."
+**Before fanning Phase 3 out to multiple agents with no shared context:**
+pin G3's behavioural description into an actual Go interface signature first
+(a types-only skeleton, landed as its own small PR) — it is still prose
+("turns a workspace path + config into a `*rest.Config`"), which is fine for
+a human but leaves room for two agents to independently build incompatible
+shapes for the same seam. G1 and G2 no longer have this problem: they are
+built, and their contract is written down in
+[Per-workspace wiring](site/content/en/docs/design/per-workspace-wiring.md).
+Give each P item a one-line acceptance check as it is picked up (a test, or a
+minimal verification command), so whoever takes it has an unambiguous
+done-condition instead of "compiles" — `task verify` is the project's
+done-condition, but it does not know what a given track was supposed to add.

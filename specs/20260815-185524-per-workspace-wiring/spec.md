@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-15
 
-**Status**: Draft
+**Status**: Shipped in [#25](https://github.com/jimmidyson/kcp-cluster-api/pull/25)
 
 **Input**: Phase 2 of [`docs/conversion-plan.md`](../../docs/conversion-plan.md),
 items G1 (discovery and cache engine), G2 (per-workspace glue) and G3

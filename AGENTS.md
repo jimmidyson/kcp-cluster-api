@@ -59,15 +59,38 @@ tooling, no process of its own. Its contract:
 ## Repository layout
 
 ```
-Taskfile.yaml     the named operations; `task --list` to see them
-DRIFT.md          what we carry against upstream, and why
-cmd/              binaries: core-manager, verify, drift
-internal/         implementation packages
-test/integration/ integration tests against a real kcp server
-docs/             ADRs, design notes, and the documentation site
-specs/            spec-driven feature specifications
-.specify/         Spec Kit state, constitution and extensions
+docs/conversion-plan.md   the roadmap and current state — read this first
+Taskfile.yaml             the named operations; `task --list` to see them
+DRIFT.md                  what we carry against upstream, and why
+cmd/                      binaries: core-manager, verify, drift
+internal/                 implementation packages
+test/integration/         integration tests against a real kcp server
+docs/                     ADRs, design notes, and the documentation site
+specs/                    spec-driven feature specifications
+.specify/                 Spec Kit state, constitution and extensions
 ```
+
+## Tracking work
+
+[`docs/conversion-plan.md`](docs/conversion-plan.md) is the record of what
+this project is doing and where it has got to. It is the first thing to read
+when picking work up and the last thing to update when putting it down. A
+session that has to reconstruct the next step from the commit log is paying a
+cost this file exists to remove.
+
+- Every D/G/P item in the plan carries its own status. A change that lands one
+  **updates that item's status in the same pull request**, with the evidence:
+  the pull request number, and the spec directory or design doc it was built
+  against. A stale status is a defect, exactly as a stale `DRIFT.md` entry is.
+- The plan's **Next** section names what is dispatchable now and what gates
+  the rest. Whoever lands something that changes that answer rewrites it —
+  a wrong answer there is worse than no answer, because it is believed.
+- A specification under `specs/` carries `Status: Draft` while it is being
+  written and `Status: Shipped in #N` once its pull request merges. `Draft` on
+  a merged feature is the same defect in the other direction.
+- The two are not substitutes. The plan says what the project is doing and
+  where it stands; a spec says what one change was meant to do and why. Each
+  links to the other, so either one answers "what now?" without a search.
 
 ## Adopting a newer Cluster API release
 
