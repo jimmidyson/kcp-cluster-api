@@ -160,10 +160,16 @@ rather than assumed:
   shard-membership and rebalancing. See D6/Phase 4 — this is now mostly
   manifest work (Partitions + APIExportEndpointSlices + one
   `--endpoint-slice-name` flag per replica-group), not new code, and it's
-  irrelevant until a kcp install actually runs multiple shards. What's
-  still unverified: whether the Provider picks up `.status.endpoints`
-  changes live if shard membership changes underneath a running partition
-  (workspace migration between shards) — confirm in the Phase 1/P8 spike.
+  irrelevant until a kcp install actually runs multiple shards. **Resolved:**
+  the Provider *does* pick up `.status.endpoints` changes live —
+  `endpointSliceUpdate` (`multicluster-provider@v0.8.0`
+  `pkg/provider/provider.go:259-293`) reconciles the watched endpoint set on
+  every slice change, starting watches for new URLs and cancelling those no
+  longer listed. So topology changes underneath a running partition are handled.
+  What remains unverified is kcp's half — whether a logical cluster can move
+  between shards at all. See
+  [ADR-0002](adr-0002-shard-appliance-scaling.md) A1, which defers rebalancing
+  on that basis.
 - **Per-workspace controller overhead still scales with W.** Each
   workspace still gets its own real `controller.Controller`
   (workqueue, goroutines, rate limiter) once `SetupWithManager` runs
