@@ -11,3 +11,9 @@
 
 # Pinned tooling installed by `task tools`.
 bin/
+
+# Local multi-module development against the Cluster API fork.
+# The pin in go.mod is the source of truth for CI and for reproduction; a
+# committed go.work would silently override it for everyone.
+go.work
+go.work.sum

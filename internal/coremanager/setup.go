@@ -21,7 +21,6 @@ package coremanager
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -34,21 +33,16 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
-	"sigs.k8s.io/cluster-api/controllers/clustercache"
-	"sigs.k8s.io/cluster-api/controllers/remote"
-	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
-	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
 	coreadmission "sigs.k8s.io/cluster-api/core/webhooks/admission"
 	"sigs.k8s.io/cluster-api/test/infrastructure/container"
-	"sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers"
 	infrawebhooks "sigs.k8s.io/cluster-api/test/infrastructure/docker/webhooks/admission"
 	cloudv1 "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/cloud/api/v1alpha1"
 	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
@@ -67,7 +61,75 @@ const (
 	// skeleton doesn't expose the full flag surface core/main.go does.
 	defaultRemoteConnectionGracePeriod = 50 * time.Second
 	defaultRemoteConditionsGracePeriod = 5 * time.Minute
+
+	// DefaultMaxConcurrentReconciles is the per-controller worker count a
+	// workspace gets unless an operator raises it.
+	//
+	// Upstream's core/main.go uses 10. That is the right order of magnitude
+	// when it is the whole process's budget; here it is paid once per
+	// controller *per workspace*, and controller-runtime starts every worker
+	// eagerly rather than on demand. At five controllers, 10 means fifty
+	// goroutines per workspace before a single object exists — a cost paid by
+	// every idle tenant.
+	//
+	// # Chosen against measurement, not intuition
+	//
+	// This was 2, with a comment saying so was reasoned rather than measured
+	// and that the sweep should set it. The sweep now has
+	// (evidence/reconcile-throughput.md), and it says two things.
+	//
+	// Throughput is **linear** in this number: one worker retires 4 reconciles
+	// per second per workspace at a 250 ms reconcile, two retire 8.0 — 100% of
+	// linear — and the relationship holds within 9% to eight workers. So the
+	// return on raising it is exact rather than hoped for.
+	//
+	// And the cost is exactly 1 goroutine and under 1 KiB per worker per
+	// controller per workspace. At the wired census of five controllers, 4
+	// costs 85 goroutines per workspace against 2's 75 — 13% more — and halves
+	// the worst case a single tenant can hit.
+	//
+	// Four rather than upstream's 10 because the remaining gap is bought at 53%
+	// more goroutines, and because raising this partition is the *expensive*
+	// way to buy burst capacity: these workers are statically partitioned per
+	// workspace, so a bursting tenant cannot use the thousands sitting idle in
+	// other workspaces. Pooling them behind fleet-wide controllers raises burst
+	// capacity and lowers total goroutines at once, and that is the fix this
+	// number is standing in for.
+	DefaultMaxConcurrentReconciles = 4
 )
+
+// SetupOptions configures what SetupReconcilers wires.
+type SetupOptions struct {
+	// MaxConcurrentReconciles is the per-controller worker count for each
+	// workspace. Zero means DefaultMaxConcurrentReconciles.
+	MaxConcurrentReconciles int
+
+	// FleetMaxConcurrentReconciles is the worker count for each controller that
+	// serves every workspace. Zero means DefaultFleetMaxConcurrentReconciles.
+	//
+	// Separate from MaxConcurrentReconciles because the two size different
+	// things: one is multiplied by the number of workspaces and the other is
+	// not. One knob meaning both would make raising the shared pool — which is
+	// cheap — also raise every workspace's private pool, which is not.
+	FleetMaxConcurrentReconciles int
+
+	// ShardConfig addresses the kcp shard the workspaces live on, as opposed to
+	// the APIExport virtual workspace the multi-cluster manager is built
+	// against.
+	//
+	// Required by SetupFleetControllers, and only by it. The two endpoints
+	// describe different API surfaces: the virtual workspace serves exactly
+	// what the export serves, and the ClusterCache has to read a core
+	// v1.Secret, which it does not. See NewWorkspaceSecretReader.
+	ShardConfig *rest.Config
+}
+
+func (o SetupOptions) maxConcurrentReconciles() int {
+	if o.MaxConcurrentReconciles <= 0 {
+		return DefaultMaxConcurrentReconciles
+	}
+	return o.MaxConcurrentReconciles
+}
 
 // inmemoryScheme is the scheme for the docker/dev infrastructure provider's
 // in-memory workload-cluster backend (its own apiserver-like resources), kept
@@ -127,91 +189,6 @@ func NewDevInfrastructure(ctx context.Context) (*DevInfrastructure, error) {
 		inMemoryManager:  inMemoryManager,
 		apiServerMux:     apiServerMux,
 	}, nil
-}
-
-// SetupReconcilers wires the walking skeleton's reconciler set onto one
-// workspace's manager: the core Cluster/Machine reconcilers and the docker/dev
-// infrastructure provider's DevCluster/DevMachine reconcilers, all unmodified
-// upstream exported types, per ADR-0001's D3 scope. Everything else
-// core/main.go and test/infrastructure/docker/main.go wire up
-// (ClusterClass/topology, RuntimeSDK, MachineSet/MachineDeployment/MachinePool,
-// ClusterResourceSet, MachineHealthCheck, CRD migration) is intentionally out
-// of scope: proving the KCP-workspace-aware mechanism holds for a real
-// Cluster->Machine loop is a different job from reaching feature parity with
-// core/main.go (that's Phase 3).
-//
-// It is a providerwiring.SetupFunc in all but signature, and is called once per
-// engaged workspace. Everything it creates is derived from mgr and so is scoped
-// to that workspace; the only shared argument is dev, whose sharing is
-// explained on DevInfrastructure.
-//
-// CRDMigrator is skipped entirely and deliberately, not just deferred: it
-// operates on CustomResourceDefinition objects directly, but a workspace
-// consuming a bound API via APIBinding has no such object to migrate - the
-// CRD-shaped source of truth (the APIResourceSchema) lives in the exporting
-// workspace instead. Running it here would be reconciling a concept that
-// doesn't apply under kcp's APIBinding model.
-func SetupReconcilers(ctx context.Context, mgr ctrl.Manager, dev *DevInfrastructure) error {
-	if dev == nil {
-		return errors.New("DevInfrastructure must not be nil: create it once per process with NewDevInfrastructure")
-	}
-
-	secretCachingClient, err := client.New(mgr.GetConfig(), client.Options{
-		HTTPClient: mgr.GetHTTPClient(),
-		Cache:      &client.CacheOptions{Reader: mgr.GetCache()},
-	})
-	if err != nil {
-		return fmt.Errorf("creating secret caching client: %w", err)
-	}
-
-	clusterCache, err := clustercache.SetupWithManager(ctx, mgr, clustercache.Options{
-		SecretClient: secretCachingClient,
-		Client: clustercache.ClientOptions{
-			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
-		},
-	}, controllerOptions(10))
-	if err != nil {
-		return fmt.Errorf("creating ClusterCache: %w", err)
-	}
-
-	if err := (&cluster.Reconciler{
-		Client:                      mgr.GetClient(),
-		APIReader:                   mgr.GetAPIReader(),
-		ClusterCache:                clusterCache,
-		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
-		return fmt.Errorf("creating Cluster controller: %w", err)
-	}
-
-	if err := (&machine.Reconciler{
-		Client:                      mgr.GetClient(),
-		APIReader:                   mgr.GetAPIReader(),
-		ClusterCache:                clusterCache,
-		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
-		return fmt.Errorf("creating Machine controller: %w", err)
-	}
-
-	if err := (&reconcilers.DevCluster{
-		Client:           mgr.GetClient(),
-		ContainerRuntime: dev.containerRuntime,
-		InMemoryManager:  dev.inMemoryManager,
-		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
-		return fmt.Errorf("creating DevCluster controller: %w", err)
-	}
-
-	if err := (&reconcilers.DevMachine{
-		Client:           mgr.GetClient(),
-		ContainerRuntime: dev.containerRuntime,
-		ClusterCache:     clusterCache,
-		InMemoryManager:  dev.inMemoryManager,
-		APIServerMux:     dev.apiServerMux,
-	}).SetupWithManager(ctx, mgr, controllerOptions(10)); err != nil {
-		return fmt.Errorf("creating DevMachine controller: %w", err)
-	}
-
-	return nil
 }
 
 // webhookWorkspace records the workspace whose webhooks are being served, so a

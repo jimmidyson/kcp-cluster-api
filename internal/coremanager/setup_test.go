@@ -66,3 +66,41 @@ func TestControllerOptionsSkipNameValidation(t *testing.T) {
 		t.Errorf("MaxConcurrentReconciles = %d, want 10", opts.MaxConcurrentReconciles)
 	}
 }
+
+// TestDefaultMaxConcurrentReconcilesIsChosenForManyTenants covers FR-010.
+//
+// Upstream's core/main.go uses 10, which is the whole process's budget in a
+// single-tenant deployment. Here it is paid once per controller *per
+// workspace*: five controllers at 10 is fifty eagerly-started worker goroutines
+// for every workspace, whether or not it has any objects. A default inherited
+// from a single-tenant binary is a scaling defect rather than a tuning
+// preference.
+func TestDefaultMaxConcurrentReconcilesIsChosenForManyTenants(t *testing.T) {
+	if DefaultMaxConcurrentReconciles >= 10 {
+		t.Errorf("DefaultMaxConcurrentReconciles = %d: still upstream's single-tenant value, which is paid per workspace here",
+			DefaultMaxConcurrentReconciles)
+	}
+	if DefaultMaxConcurrentReconciles < 1 {
+		t.Errorf("DefaultMaxConcurrentReconciles = %d: a workspace must be able to make progress",
+			DefaultMaxConcurrentReconciles)
+	}
+	// Throughput is linear in this number (evidence/reconcile-throughput.md),
+	// so one worker means a workspace's backlog drains strictly serially — one
+	// slow reconcile stalls every other object it owns. That is a per-tenant
+	// failure mode rather than a footprint saving worth having.
+	if DefaultMaxConcurrentReconciles < 2 {
+		t.Errorf("DefaultMaxConcurrentReconciles = %d: a single worker drains a tenant's backlog serially",
+			DefaultMaxConcurrentReconciles)
+	}
+}
+
+// TestSetupOptionsDefaultsConcurrency covers the "configurable" half of FR-010:
+// an operator must be able to raise it, and leaving it unset must not mean zero.
+func TestSetupOptionsDefaultsConcurrency(t *testing.T) {
+	if got := (SetupOptions{}).maxConcurrentReconciles(); got != DefaultMaxConcurrentReconciles {
+		t.Errorf("unset concurrency = %d, want the default %d", got, DefaultMaxConcurrentReconciles)
+	}
+	if got := (SetupOptions{MaxConcurrentReconciles: 7}).maxConcurrentReconciles(); got != 7 {
+		t.Errorf("configured concurrency = %d, want 7", got)
+	}
+}

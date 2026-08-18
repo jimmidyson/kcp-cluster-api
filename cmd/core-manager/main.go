@@ -50,10 +50,10 @@ import (
 	_ "k8s.io/component-base/logs/json/register"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -61,11 +61,13 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 var (
@@ -81,7 +83,10 @@ var (
 	webhookCertName    string
 	webhookKeyName     string
 	healthAddr         string
-	logOptions         = logs.NewOptions()
+
+	maxConcurrentReconciles int
+
+	logOptions = logs.NewOptions()
 )
 
 func init() {
@@ -123,6 +128,13 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key", "Webhook key name.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 
+	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultMaxConcurrentReconciles,
+		"Worker goroutines per controller, per workspace. This is paid once for every engaged workspace, "+
+			"not once for the process, and controller-runtime starts the workers eagerly — so the total is "+
+			"this value times the number of controllers times the number of workspaces, whether or not those "+
+			"workspaces hold any objects. Upstream's single-tenant default of 10 is deliberately not used here. "+
+			"Raise it for a small fleet with busy workspaces; leave it alone for a large one.")
+
 	// cluster.Reconciler and machine.Reconciler unconditionally watch every
 	// core type gated by a feature flag they support (e.g. MachinePool,
 	// enabled by default upstream) as an event source that can trigger a
@@ -158,15 +170,40 @@ func main() {
 
 	coremanager.SetupProcessGlobals()
 
+	ctx := ctrl.SetupSignalHandler()
+
 	cfg := ctrl.GetConfigOrDie()
 
-	provider, err := apiexport.New(cfg, endpointSliceName, apiexport.Options{Scheme: scheme})
+	// The registry is what joins the fleet-wide controllers' watches to the
+	// caches the provider builds for each shard. Both sides are wired below and
+	// neither exists when the other is created, which is the whole reason it is
+	// a registry rather than a value passed one way.
+	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
+
+	provider, err := providerwiring.NewAPIExportProvider(cfg, endpointSliceName, scheme, wildcardRegistry)
 	if err != nil {
 		setupLog.Error(err, "Unable to construct kcp APIExport cluster provider")
 		os.Exit(1)
 	}
 
-	mgr, err := mcmanager.New(cfg, provider, ctrl.Options{
+	// The local manager is addressed at the APIExport's virtual workspace, not
+	// at the shard this process was configured with. Its RESTMapper answers
+	// every question a fleet-wide controller asks that has no cluster to
+	// resolve from, and setup asks several before any workspace has engaged —
+	// so it has to describe the API surface the engaged clusters share, which
+	// the exporting workspace does not. See providerwiring.VirtualWorkspaceConfig.
+	shardClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Unable to build a client for the shard")
+		os.Exit(1)
+	}
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, 0)
+	if err != nil {
+		setupLog.Error(err, "Unable to resolve the APIExport's virtual workspace")
+		os.Exit(1)
+	}
+
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		WebhookServer: webhook.NewServer(webhook.Options{
@@ -181,8 +218,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := ctrl.SetupSignalHandler()
-
 	// The docker/dev infrastructure provider's backend binds a fixed port, so
 	// it is created once and shared by every workspace. See
 	// coremanager.DevInfrastructure for what that sharing does and does not
@@ -193,16 +228,51 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Registered before Start, and that ordering is load-bearing:
+	// Wired before Start, and that ordering is load-bearing: the controllers
+	// register their watches with the multi-cluster manager, and
 	// multicluster-runtime hands each engagement to the components registered
-	// at that moment and never replays earlier ones, so wiring registered
-	// after the manager is running misses every workspace that engaged in the
-	// meantime - without an error, and without a log line.
-	if _, err := providerwiring.AddToManager(mgr, func(ctx context.Context, workspace multicluster.ClusterName, wsMgr manager.Manager) error {
-		setupLog.Info("Wiring reconcilers onto a workspace", "clusterName", workspace)
-		return coremanager.SetupReconcilers(ctx, wsMgr, dev)
-	}, providerwiring.Options{Log: ctrl.Log.WithName("providerwiring")}); err != nil {
-		setupLog.Error(err, "Unable to register per-workspace wiring")
+	// at that moment and never replays earlier ones. Wiring after the manager
+	// is running misses every workspace that engaged in the meantime - without
+	// an error, and without a log line.
+	//
+	// One set of controllers for the process. Each resolves the workspace from
+	// the context of the reconcile it is running, so there is no per-workspace
+	// setup left to run and nothing to re-run as workspaces come and go.
+	setupLog.Info("Wiring fleet-wide reconcilers")
+	if err := coremanager.SetupFleetControllers(ctx, mgr, wildcardRegistry, dev, coremanager.SetupOptions{
+		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
+
+		// The shard, deliberately, and not the manager's config: kubeconfig
+		// Secrets live in the workspaces on the shard, and the virtual
+		// workspace above does not serve core types at all.
+		ShardConfig: cfg,
+	}); err != nil {
+		setupLog.Error(err, "Unable to wire fleet-wide reconcilers")
+		os.Exit(1)
+	}
+
+	// Per-workspace wiring with nothing to wire.
+	//
+	// There is no longer any per-workspace setup: the controllers above serve
+	// every workspace. What remains worth having is the lifecycle itself -
+	// which workspaces engaged, which failed, how many are live - because an
+	// operator sizing a shard needs the count and a workspace that never
+	// engages is otherwise invisible. So the seam stays, with an empty
+	// SetupFunc, purely to drive the recorder.
+	//
+	// One recorder for the process. It attributes load without letting exported
+	// series grow with workspace count; see internal/workspacetelemetry for why
+	// that asymmetry is deliberate.
+	telemetry := workspacetelemetry.New(workspacetelemetry.Options{})
+
+	if _, err := providerwiring.AddToManager(mgr, func(_ context.Context, workspace multicluster.ClusterName, _ manager.Manager) error {
+		setupLog.V(4).Info("Workspace engaged", "clusterName", workspace)
+		return nil
+	}, providerwiring.Options{
+		Log:       ctrl.Log.WithName("providerwiring"),
+		Telemetry: telemetry,
+	}); err != nil {
+		setupLog.Error(err, "Unable to register workspace engagement telemetry")
 		os.Exit(1)
 	}
 
