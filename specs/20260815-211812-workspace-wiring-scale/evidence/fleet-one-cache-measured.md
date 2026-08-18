@@ -95,12 +95,35 @@ That residue is bounded by the number of shards a fleet has ever had — a
 handful of long-lived endpoints — rather than by tenants. Stated rather than
 fixed, because the fix would have to come from controller-runtime.
 
+## Events
+
+Fixed after this run, and measured on the next one. Every event Cluster API
+emitted was being rejected — the recorder was the local manager's, so events
+went to the virtual workspace at `/clusters/*`, which serves no core `v1.Event`
+and names no logical cluster to write to.
+
+`test/integration/events` establishes both halves. A kcp workspace *does* serve
+core v1 Events, so there is somewhere for a tenant's events to land; and with
+one broadcaster and one sink serving two workspaces, each event reaches the
+workspace of its own object and no other, with the routing annotation stripped
+before the write.
+
+`record.EventRecorder` takes no context, so the cluster cannot travel the way it
+does for the clients. It travels on the event: the recorder marks each one with
+the cluster of the object it is about, and the sink routes on the mark.
+
+The cost is **three goroutines for the process and none per workspace** — the
+sweep's baseline moves from 19 to 22, and `goroutinesPerWorkspace` stays at 2.0
+with `goroutinesRetainedPerDepartedWorkspace` at 0.0. One broadcaster, whose
+single watcher goroutine calls the sink, keeps events off the reconcile path.
+Aggregation is shared but does not merge across workspaces, because client-go
+keys it on the involved object's UID among other things.
+
+Rejected events across a full eight-workspace sweep: **0**, against one per
+event before.
+
 ## What is still open
 
-- **Events are still dropped.** The recorder posts through the manager's
-  client, so every event Cluster API emits goes to the virtual workspace, which
-  serves no core `v1.Event`. Same class as the Secret fault, same shape of fix,
-  not done.
 - **`test/integration/coremanager`** compiles and vets against this change but
   skips here: it needs a container runtime.
 - Not measured: above eight active workspaces, more than one object per

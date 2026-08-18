@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
@@ -109,8 +111,8 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // none. That column is new because until the two-cache fault was fixed the
 // sweep never reached the end of a departure phase to measure it.
 //
-// The fixed cost is one watch-list per watched type for the whole shard, and
-// no LISTs at all across a sweep.
+// The fixed cost is one watch-list per watched type for the whole shard, no
+// LISTs at all across a sweep, and three goroutines for the event broadcaster.
 //
 // It was 51.7 when the controllers were fleet-wide but their watches were still
 // registered per cluster. Making the controllers fleet-wide collapsed the
@@ -189,13 +191,11 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 	// The resolver is logicalcluster.From, which reads kcp's own annotation. It
 	// is supplied here because it is the one piece of this that is kcp-specific,
 	// and Cluster API should not know it.
-	wildcard := capicontrollerutil.WithWildcard(
-		registry,
-		func(o client.Object) (multicluster.ClusterName, bool) {
-			name := logicalcluster.From(o)
-			return multicluster.ClusterName(name), name != ""
-		},
-	)
+	clusterOf := func(o client.Object) (multicluster.ClusterName, bool) {
+		name := logicalcluster.From(o)
+		return multicluster.ClusterName(name), name != ""
+	}
+	wildcard := capicontrollerutil.WithWildcard(registry, clusterOf)
 
 	// Note the absence of SkipNameValidation, which every per-workspace
 	// controller needed. controller-runtime rejects a duplicate controller name
@@ -207,6 +207,45 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 
 	clusterAwareClient := capimulticluster.NewClusterAwareClient(mgr)
 	clusterAwareReader := capimulticluster.NewClusterAwareAPIReader(mgr)
+
+	// Events go to the workspace the object lives in, on the shard.
+	//
+	// They used to go nowhere. The recorder was the local manager's, so every
+	// event Cluster API emitted was POSTed to the virtual workspace at
+	// /clusters/* — which serves no core v1.Event and names no logical cluster
+	// to write to — and rejected with "the server could not find the requested
+	// resource (post events)".
+	//
+	// record.EventRecorder takes no context, so the cluster cannot travel the
+	// way it does for the clients. It travels on the event instead: the
+	// cluster-aware recorder marks each one with the cluster of the object it is
+	// about, and the sink routes on the mark and strips it before writing.
+	//
+	// One broadcaster for the process, not one per workspace. Its single watcher
+	// goroutine is what calls the sink, so events stay off the reconcile path
+	// and a workspace still costs two goroutines. Aggregation does not merge
+	// across workspaces despite the sharing, because client-go keys it on the
+	// involved object's UID among other things.
+	eventSink, err := NewWorkspaceEventSink(opts.ShardConfig)
+	if err != nil {
+		return fmt.Errorf("building the workspace event sink: %w", err)
+	}
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartRecordingToSink(eventSink)
+	// Stopped with the context rather than left running: the broadcaster owns
+	// goroutines, and a process that wired this more than once would otherwise
+	// accumulate them silently.
+	go func() {
+		<-ctx.Done()
+		broadcaster.Shutdown()
+	}()
+
+	recorderFor := capicontrollerutil.WithEventRecorderFactory(func(name string) record.EventRecorder {
+		return capimulticluster.NewClusterAwareRecorder(
+			broadcaster.NewRecorder(mgr.GetLocalManager().GetScheme(), corev1.EventSource{Component: name}),
+			clusterOf,
+		)
+	})
 
 	// The ClusterCache reads each Cluster's kubeconfig Secret through
 	// SecretClient, so it has to be workspace-scoped for the same reason
@@ -230,7 +269,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		Client: clustercache.ClientOptions{
 			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
 		},
-	}, options, wildcard)
+	}, options, wildcard, recorderFor)
 	if err != nil {
 		return fmt.Errorf("creating fleet-wide ClusterCache: %w", err)
 	}
@@ -240,7 +279,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
 		return fmt.Errorf("creating fleet-wide Cluster controller: %w", err)
 	}
 
@@ -249,7 +288,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
 		return fmt.Errorf("creating fleet-wide Machine controller: %w", err)
 	}
 
@@ -262,7 +301,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		ContainerRuntime: dev.containerRuntime,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, wildcard); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, wildcard, recorderFor); err != nil {
 		return fmt.Errorf("creating fleet-wide DevCluster controller: %w", err)
 	}
 
@@ -272,7 +311,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		ClusterCache:     clusterCache,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
 		return fmt.Errorf("creating fleet-wide DevMachine controller: %w", err)
 	}
 

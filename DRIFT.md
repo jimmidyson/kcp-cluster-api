@@ -25,7 +25,7 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-thirty-three deliberate entries below, thirteen are new files and twenty modify
+thirty-five deliberate entries below, fifteen are new files and twenty modify
 existing ones — and the twenty are the number that matters.
 
 ## Where the check runs, and why not on every pull request
@@ -55,7 +55,7 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.2`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.3`
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
@@ -72,6 +72,8 @@ cannot build without them. See the feature's research notes (R2).
 | `internal/contract/version.go` | Factors the contract-metadata resolver into an overridable package variable. Every contract-version lookup funnels through it, so one seam covers `GetObjectFromContractVersionedRef`, `GetContractVersion` and `GetAPIVersion` uniformly. Default behaviour is unchanged. | **Pending**, due **2026-11-13** |
 | `controllers/external/metadata.go` | Exposes `SetGKMetadataGetter` and `GetAPIVersion` publicly, so a module outside `sigs.k8s.io/cluster-api/` can supply its own resolver. Mirrors the existing `conversion.SetAPIVersionGetter` escape hatch. | **Pending**, due **2026-11-13** |
 | `util/multicluster/lift.go` | New file. Adapts a single-cluster event handler for a fleet-wide controller, putting the cluster in both the requests it enqueues and the context it runs in. multicluster-runtime does only the former. | None — carried deliberately, ADR-0003 |
+| `util/multicluster/recorder.go` | New file. An event recorder for a controller serving many clusters: it marks each event with the cluster of the object it is about, because record.EventRecorder takes no context and the cluster cannot travel the way it does for clients. The caller supplies the sink that routes on the mark. | None — carried deliberately, ADR-0003 |
+| `util/multicluster/recorder_test.go` | New file. All three recorder entry points mark; the caller's annotation map is copied rather than written into, which would send the next event to the previous object's cluster; an object naming no cluster is passed through unmarked rather than guessed at. | None — carried deliberately, ADR-0003 |
 | `util/multicluster/client.go` | New file. A `client.Client` that resolves per call to the cluster named in the call's context. What lets one controller serve many clusters with no reconciler changing. | None — carried deliberately, ADR-0003 |
 | `util/multicluster/wildcard.go` | New file. Registers one event handler per type against a fleet-spanning cache and demultiplexes per event, in place of one registration per cluster per type. Measured at 45 of the 51.7 goroutines a workspace cost before it. | None — carried deliberately, ADR-0003 |
 | `util/multicluster/fleet_test.go` | New file. Envtest for the three above, over multicluster-runtime's namespace provider: that one controller keeps two clusters' work apart, and that a request naming a cluster the provider does not have is dropped rather than retried. | None — carried deliberately, ADR-0003 |
@@ -109,15 +111,15 @@ The first two paths belong to a single patch, carried as one commit in the
 fork. The rest are the workspace-aware wiring, and they are listed
 per-path rather than as one entry because the check is per-path.
 
-**Not yet on `kcp/v1.15`.** The wiring lives on the fork's
-`claude/workspace-aware-wiring` branch. Until it merges, `task drift` will
-report these as *missing* — recorded but not diverging — which is reported
-and does not fail. That is the correct state to be in while the branch is
-open, and it flips to silence when the branch lands.
+These are on `kcp/v1.15` and in the pinned tag. A path recorded here that the
+fork does not carry is reported as *missing* rather than failing, which is the
+right state while a change is in flight between the two repositories — it
+appears when this record is updated ahead of a tag, and goes quiet once the pin
+moves.
 
 ### What to watch on the deliberate entries
 
-Thirteen are new files and rebase for free. Twenty modify upstream files, and
+Fifteen are new files and rebase for free. Twenty modify upstream files, and
 those are the real recurring cost:
 
 - `util/controller/controller.go` and `builder.go` — the largest, and the
