@@ -21,13 +21,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
 	"github.com/jimmidyson/kcp-cluster-api/internal/verify"
 )
 
 func sampleRun() SweepRun {
 	return SweepRun{
 		Service: "configmaps",
-		Profile: IdleHeavy(),
+		Profile: Profile{Name: "idle-heavy"},
 		Mode:    ModeSynthetic,
 		Points: []Point{
 			{Workspaces: 8, Value: 80},
@@ -35,12 +36,12 @@ func sampleRun() SweepRun {
 			{Workspaces: 32, Value: 320},
 			{Workspaces: 64, Value: 1280},
 		},
-		Departure: FindDeparture([]Point{
+		Departure: sweep.FindDeparture([]Point{
 			{Workspaces: 8, Value: 80},
 			{Workspaces: 16, Value: 160},
 			{Workspaces: 32, Value: 320},
 			{Workspaces: 64, Value: 1280},
-		}, DepartureOptions{Tolerance: 0.25}),
+		}, sweep.DepartureOptions{Tolerance: 0.25}),
 	}
 }
 
@@ -91,7 +92,7 @@ func TestOutcomeUsesTheExistingContract(t *testing.T) {
 
 	noDeparture := sampleRun()
 	noDeparture.Points = noDeparture.Points[:2]
-	noDeparture.Departure = FindDeparture(noDeparture.Points, DepartureOptions{Tolerance: 0.25})
+	noDeparture.Departure = sweep.FindDeparture(noDeparture.Points, sweep.DepartureOptions{Tolerance: 0.25})
 	if got := noDeparture.Outcome(); got != verify.OutcomeCouldNotRun {
 		t.Errorf("a sweep too short to establish a departure point reported %v, want could-not-run", got)
 	}
@@ -110,7 +111,7 @@ func TestLinearSweepIsAPass(t *testing.T) {
 		{Workspaces: 32, Value: 320},
 		{Workspaces: 64, Value: 640},
 	}
-	run.Departure = FindDeparture(run.Points, DepartureOptions{Tolerance: 0.25})
+	run.Departure = sweep.FindDeparture(run.Points, sweep.DepartureOptions{Tolerance: 0.25})
 
 	if run.Departure.Found {
 		t.Fatal("test setup is wrong: this series is linear")

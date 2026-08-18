@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package scaleharness
+package sweep
 
 import (
 	"go/parser"
@@ -163,10 +163,24 @@ func TestZeroToleranceIsDefaulted(t *testing.T) {
 // the next controller means rewriting it rather than supplying an
 // implementation. Asserted rather than asserted-about, because "we intend to
 // keep this generic" decays silently.
+//
+// Two directories, because the machinery lives in two packages: this one is the
+// live instrument, and internal/scaleharness fits models to what it recorded.
+// Scanning only the directory the test happens to sit in would leave half the
+// property unguarded, which is how an assertion like this stops meaning
+// anything.
 func TestAgnosticMachineryImportsNoServiceSpecifics(t *testing.T) {
-	entries, err := os.ReadDir(".")
+	for _, dir := range []string{".", filepath.Join("..", "scaleharness")} {
+		assertNoServiceImports(t, dir)
+	}
+}
+
+func assertNoServiceImports(t *testing.T, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("reading package dir: %v", err)
+		t.Fatalf("reading %s: %v", dir, err)
 	}
 
 	fset := token.NewFileSet()
@@ -175,20 +189,21 @@ func TestAgnosticMachineryImportsNoServiceSpecifics(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		f, err := parser.ParseFile(fset, filepath.Join(".", name), nil, parser.ImportsOnly)
+		path := filepath.Join(dir, name)
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 		if err != nil {
-			t.Fatalf("parsing %s: %v", name, err)
+			t.Fatalf("parsing %s: %v", path, err)
 		}
 		for _, imp := range f.Imports {
-			path := strings.Trim(imp.Path.Value, `"`)
+			imported := strings.Trim(imp.Path.Value, `"`)
 			// Matched on the upstream module path, not on the substring
 			// "cluster-api": this repository is itself kcp-cluster-api, so a
 			// substring test flags every internal import and the check becomes
 			// noise that gets deleted. Cluster API is reached as
 			// sigs.k8s.io/cluster-api even through the fork's replace
 			// directive, so this is the path that matters.
-			if strings.HasPrefix(path, "sigs.k8s.io/cluster-api") {
-				t.Errorf("%s imports %q: the service-agnostic harness must not know about a particular service", name, path)
+			if strings.HasPrefix(imported, "sigs.k8s.io/cluster-api") {
+				t.Errorf("%s imports %q: the service-agnostic harness must not know about a particular service", path, imported)
 			}
 		}
 	}

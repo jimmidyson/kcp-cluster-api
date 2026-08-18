@@ -27,7 +27,7 @@ import (
 func linearRun(baseHeap, perHeap float64, baseGoroutines, perGoroutines float64, counts ...int) SweepRun {
 	run := SweepRun{
 		Service:               "test",
-		Profile:               ActiveHeavy(),
+		Profile:               Profile{Name: "active-heavy", ObjectsPerWorkspace: 10, EventsPerWorkspacePerSecond: 1},
 		Mode:                  ModeSynthetic,
 		ListenersPerWorkspace: 19,
 	}

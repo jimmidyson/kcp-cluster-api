@@ -22,7 +22,21 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
 	"github.com/jimmidyson/kcp-cluster-api/internal/verify"
+)
+
+// Point and Departure are internal/sweep's, aliased rather than redeclared.
+//
+// Committed runs in this package's format and samples taken by the live
+// instrument describe the same quantity, and departure detection is one
+// procedure applied to both. Two definitions of the pair would let the
+// published sizing tables and the instrument's own verdict drift apart while
+// both looked correct — which is the failure this alias exists to make
+// impossible rather than merely unlikely.
+type (
+	Point     = sweep.Point
+	Departure = sweep.Departure
 )
 
 // LoadMode records how a figure's load was produced.

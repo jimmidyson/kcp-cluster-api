@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package capiservice is the Cluster API implementation of the scale harness's
-// service seam.
+// Package capiservice populates workspaces with the Cluster API objects a
+// measurement runs against.
 //
 // It is a package of its own rather than a file in internal/scaleharness for a
-// structural reason: the harness asserts, by parsing its own imports, that the
-// sweep, fit and departure point machinery knows nothing about any particular service. A
-// Cluster API implementation living beside that machinery would defeat the
+// structural reason: the machinery that fits and detects asserts, by parsing
+// its own imports, that it knows nothing about any particular service. A
+// Cluster API populator living beside that machinery would defeat the
 // assertion the moment it compiled. Keeping it here means the property is
 // enforced by the package boundary rather than by everyone remembering.
 package capiservice
@@ -37,8 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-
-	"github.com/jimmidyson/kcp-cluster-api/internal/scaleharness"
 )
 
 // Namespace is where the harness's objects are created. A single namespace
@@ -57,8 +55,6 @@ type Service struct {
 	// Prefix distinguishes one run's objects from another's.
 	Prefix string
 }
-
-var _ scaleharness.Service = Service{}
 
 // Name identifies this service in reports and published figures.
 func (s Service) Name() string { return "cluster-api-core" }

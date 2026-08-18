@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package scaleharness
+package sweep
 
 import (
 	"fmt"
@@ -39,6 +39,22 @@ const (
 	// than not-found.
 	DefaultMinPoints = 4
 )
+
+// PointsOf projects samples onto the (workspaces, cost) pairs FindDeparture
+// works in.
+//
+// It exists so that a sweep answers two different questions from one set of
+// samples: PerWorkspace fits a slope through all of them, which says what a
+// workspace costs on average, and FindDeparture asks whether that slope holds —
+// which is the question a capacity figure actually turns on. A mean slope
+// through a curve is still a number, and still wrong.
+func PointsOf(samples []Sample, measure func(Sample) float64) []Point {
+	points := make([]Point, 0, len(samples))
+	for _, s := range samples {
+		points = append(points, Point{Workspaces: s.Workspaces, Value: measure(s)})
+	}
+	return points
+}
 
 // Point is one measured quantity at one workspace count.
 type Point struct {
