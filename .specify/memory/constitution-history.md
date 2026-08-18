@@ -9,6 +9,27 @@ carries the rest, newest first.
 Moving an entry here changes no rule. The constitution remains the authority.
 
 ---- Previous entry ----
+Version change: 2.1.0 → 2.1.1
+Rationale: PATCH — no principle is added, removed or redefined. This change
+moves superseded amendment entries out of this file and states where they
+went. Every rule reads exactly as it did at 2.1.0.
+
+Modified principles: none.
+
+Added sections: none. Removed sections: none.
+
+The stacked entries for 2.1.0 and earlier now live in
+`.specify/memory/constitution-history.md`. They had grown to 108 lines ahead
+of the first principle — a third of the file — which every reader and every
+agent that opens the constitution paid for before reaching a rule. Git already
+holds that history; this keeps one entry here, as the workflow requires, and
+the rest one link away.
+
+Follow-up TODOs: `/speckit-constitution` prepends the report for each
+amendment and does not roll older entries out. Whoever runs the next amendment
+moves the entry it supersedes into the history file, or teaches the command to.
+
+---- Previous entry ----
 Version change: 1.2.0 → 2.0.0
 Rationale: MAJOR — Principle VII's pull-request title rule is redefined,
 not extended. The emoji-prefix convention inherited from upstream Cluster

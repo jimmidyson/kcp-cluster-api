@@ -55,6 +55,12 @@ tooling, no process of its own. Its contract:
   `vX.Y.Z-kcp.N`, `api/vX.Y.Z-kcp.N` and `test/vX.Y.Z-kcp.N`. `api/` and
   `test/` are separate Go modules resolved by tag prefix; a partial tag set
   fails dependency resolution with a confusing "unknown revision" error.
+- Tags are **signed and annotated** (`git tag -s`), all three at the same
+  commit. Annotated because a tag this project pins to should carry what
+  changed and who made it, and signed because it is the artefact a build
+  resolves rather than a name anyone can move. A lightweight tag is not an
+  acceptable substitute, and this is written down because it is the kind of
+  convention that is invisible until somebody produces the wrong thing.
 
 ## Repository layout
 
@@ -170,6 +176,33 @@ it refuses a commit made with the agent's identity and says what to set.
 Getting this wrong produces the trailer the next section forbids: squash
 merging commits whose author GitHub does not recognise makes GitHub add
 `Co-authored-by:` naming the agent.
+
+## Scalability claims are measured
+
+This project exists to make Cluster API affordable at many workspaces, so a
+statement about what a workspace costs is a load-bearing claim, not colour.
+
+- A change that alters per-workspace cost reports the **measured** figure.
+  `task test:scale` is the instrument; the run is committed under the
+  feature's `evidence/` directory so the figure is re-derivable rather than
+  quoted.
+- A figure derived from a formula or from reading the code is a
+  **prediction**, and says so wherever it appears — doc comment, commit
+  message, design doc.
+- A claim is re-measured when the wiring it describes changes. A figure that
+  was true of an earlier design is not a figure about this one.
+- A measurement that could not be taken is reported as "not measured", never
+  rounded to the nearest available number.
+
+The reason this is a rule: the fleet-wide conversion shipped with "Cluster
+and Machine leave the per-workspace sum entirely" in its doc comment,
+reasoned from a formula with five out-of-sample confirmations. A workspace
+still cost 51.7 goroutines, and nothing in the repository disagreed until
+the sweep was run. The measurement also found the cause, which is what made
+the fix findable — an unmeasured claim hides the work that has not been
+done.
+
+See [Principle IX](.specify/memory/constitution.md).
 
 ## Commit and PR descriptions
 

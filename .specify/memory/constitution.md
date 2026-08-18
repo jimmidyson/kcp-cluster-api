@@ -1,25 +1,30 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.1.0 → 2.1.1
-Rationale: PATCH — no principle is added, removed or redefined. This change
-moves superseded amendment entries out of this file and states where they
-went. Every rule reads exactly as it did at 2.1.0.
+Version change: 2.1.1 → 2.2.0
+Rationale: MINOR — a new principle is added. Nothing previously valid
+becomes invalid.
 
-Modified principles: none.
+Added principles:
+  IX. Scalability Claims Are Measured, And Re-Measured — a claim about what
+  a workspace costs must be measured rather than derived, labelled as a
+  prediction where it is not, committed as evidence where it is published,
+  and re-measured when the design it describes changes.
 
-Added sections: none. Removed sections: none.
+Reason: the fleet-wide conversion shipped a per-workspace cost claim
+reasoned from a validated formula. It was wrong by a factor that mattered,
+and nothing in the repository disagreed with it until a sweep was run. The
+project's whole purpose is a scalability property, and it had no rule
+requiring that property to be measured before being asserted.
 
-The stacked entries for 2.1.0 and earlier now live in
-`.specify/memory/constitution-history.md`. They had grown to 108 lines ahead
-of the first principle — a third of the file — which every reader and every
-agent that opens the constitution paid for before reaching a rule. Git already
-holds that history; this keeps one entry here, as the workflow requires, and
-the rest one link away.
+Templates and downstream documents requiring updates:
+  AGENTS.md — working summary gains a matching section and bullet. Done.
 
-Follow-up TODOs: `/speckit-constitution` prepends the report for each
-amendment and does not roll older entries out. Whoever runs the next amendment
-moves the entry it supersedes into the history file, or teaches the command to.
+Follow-up: none for this principle. The sweep and its evidence directory
+already exist; it governs their use rather than requiring new tooling. The
+2.1.1 entry this supersedes has been moved to
+`.specify/memory/constitution-history.md`, which is the follow-up 2.1.1 asked
+of whoever amended next.
 -->
 
 # kcp-cluster-api Constitution
@@ -200,6 +205,41 @@ Deferring a seam costs correctness, quietly.
 Principle V is not subject to this principle either: investigating how a
 dependency actually behaves is never premature.
 
+### IX. Scalability Claims Are Measured, And Re-Measured
+
+This project exists to make Cluster API affordable at many workspaces. A
+statement about what a workspace costs is therefore a load-bearing claim,
+and MUST be treated as one.
+
+- A change that alters what a workspace costs MUST report the **measured**
+  per-workspace figure. A figure derived from a formula, a profile, or
+  reasoning about the code is a prediction, and MUST be labelled one
+  wherever it appears.
+- Doc comments, commit messages, and design documents MUST NOT assert a
+  resource-usage outcome that no run has produced. Stating the expected
+  outcome is fine; stating it as fact is not.
+- A run that produces a published figure MUST be committed as evidence, so
+  the figure is re-derivable from the points that produced it rather than
+  quoted.
+- A claim does not stop being checked once made. When the wiring it
+  describes changes, the claim MUST be re-measured or withdrawn — a figure
+  that was true of an earlier design is not a figure about this one.
+- Where a measurement cannot be taken — the environment lacks a capability,
+  the harness cannot reach steady state — that MUST be reported as "not
+  measured", never rounded to the nearest available number. This is
+  Principle IV applied to evidence: a measurement that could not run is
+  never a measurement.
+
+**Why this is a principle and not a habit.** The fleet-wide conversion
+shipped with "Cluster and Machine leave the per-workspace sum entirely"
+written into its doc comment. It was reasoned from a validated formula, it
+was wrong, and nothing in the repository disagreed with it until the sweep
+was run: a workspace still cost 51.7 goroutines, because the term the
+reasoning treated as secondary was the dominant one. The measurement did not
+just correct the number — it identified the cause, which is what made the
+fix findable. An unmeasured claim is not merely unverified; it hides the work
+that has not been done.
+
 ## Environment And Tooling Constraints
 
 - Development tooling MUST be installable at pinned versions using only the
@@ -254,4 +294,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 2.1.1 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-18
+**Version**: 2.2.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-18
