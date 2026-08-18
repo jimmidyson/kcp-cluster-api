@@ -9,7 +9,7 @@ Instrument: `test/integration/sweep`, `TestCoreReconcilerWorkspaceSweep`,
 against a real kcp, eight workspaces, one Cluster and one DevCluster each,
 `GOMAXPROCS=4`. Raw output: `fleet-active-coremanager.{md,json}`.
 
-The committed run is against the **tagged** fork at `v1.15.0-kcp.4`, with
+The committed run is against the **tagged** fork at `v1.15.0-kcp.6`, with
 `GOWORK=off` — the pinned version, not the local checkout a `go.work` would
 substitute. That distinction is worth keeping: every earlier figure in this
 directory was measured through the workspace override, which is right for
