@@ -292,7 +292,11 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	// engage - including ones created later in this test. That ordering is not
 	// stylistic: multicluster-runtime hands each engagement to the components
 	// registered at that moment and never replays earlier ones.
-	if err := coremanager.SetupFleetControllers(mgrCtx, mgr, dev, coremanager.SetupOptions{}); err != nil {
+	if err := coremanager.SetupFleetControllers(mgrCtx, mgr, dev, coremanager.SetupOptions{
+		// The shard, not the manager's config: the ClusterCache reads
+		// kubeconfig Secrets, which live in the workspaces themselves.
+		ShardConfig: baseCfg,
+	}); err != nil {
 		t.Fatalf("failed to set up fleet-wide reconcilers: %v", err)
 	}
 

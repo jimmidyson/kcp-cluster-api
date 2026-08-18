@@ -33,6 +33,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -111,6 +112,16 @@ type SetupOptions struct {
 	// not. One knob meaning both would make raising the shared pool — which is
 	// cheap — also raise every workspace's private pool, which is not.
 	FleetMaxConcurrentReconciles int
+
+	// ShardConfig addresses the kcp shard the workspaces live on, as opposed to
+	// the APIExport virtual workspace the multi-cluster manager is built
+	// against.
+	//
+	// Required by SetupFleetControllers, and only by it. The two endpoints
+	// describe different API surfaces: the virtual workspace serves exactly
+	// what the export serves, and the ClusterCache has to read a core
+	// v1.Secret, which it does not. See NewWorkspaceSecretReader.
+	ShardConfig *rest.Config
 }
 
 func (o SetupOptions) maxConcurrentReconciles() int {

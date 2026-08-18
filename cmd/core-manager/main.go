@@ -50,6 +50,7 @@ import (
 	_ "k8s.io/component-base/logs/json/register"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -169,6 +170,8 @@ func main() {
 
 	coremanager.SetupProcessGlobals()
 
+	ctx := ctrl.SetupSignalHandler()
+
 	cfg := ctrl.GetConfigOrDie()
 
 	provider, err := apiexport.New(cfg, endpointSliceName, apiexport.Options{Scheme: scheme})
@@ -177,7 +180,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := mcmanager.New(cfg, provider, ctrl.Options{
+	// The local manager is addressed at the APIExport's virtual workspace, not
+	// at the shard this process was configured with. Its RESTMapper answers
+	// every question a fleet-wide controller asks that has no cluster to
+	// resolve from, and setup asks several before any workspace has engaged —
+	// so it has to describe the API surface the engaged clusters share, which
+	// the exporting workspace does not. See providerwiring.VirtualWorkspaceConfig.
+	shardClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Unable to build a client for the shard")
+		os.Exit(1)
+	}
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, 0)
+	if err != nil {
+		setupLog.Error(err, "Unable to resolve the APIExport's virtual workspace")
+		os.Exit(1)
+	}
+
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		WebhookServer: webhook.NewServer(webhook.Options{
@@ -191,8 +211,6 @@ func main() {
 		setupLog.Error(err, "Unable to set up multicluster manager")
 		os.Exit(1)
 	}
-
-	ctx := ctrl.SetupSignalHandler()
 
 	// The docker/dev infrastructure provider's backend binds a fixed port, so
 	// it is created once and shared by every workspace. See
@@ -217,6 +235,11 @@ func main() {
 	setupLog.Info("Wiring fleet-wide reconcilers")
 	if err := coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{
 		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
+
+		// The shard, deliberately, and not the manager's config: kubeconfig
+		// Secrets live in the workspaces on the shard, and the virtual
+		// workspace above does not serve core types at all.
+		ShardConfig: cfg,
 	}); err != nil {
 		setupLog.Error(err, "Unable to wire fleet-wide reconcilers")
 		os.Exit(1)

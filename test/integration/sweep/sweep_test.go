@@ -166,7 +166,16 @@ type sweepConfig struct {
 	// workspace rather than the workspace holding the export, because a
 	// fleet-wide controller resolves types through the local RESTMapper at
 	// setup time and the exporting workspace does not bind what it exports.
-	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager)
+	//
+	// It is handed the shard config as well as the manager, because the two
+	// address different API surfaces and some wiring needs the one the manager
+	// is not built on: the virtual workspace serves what the APIExport serves,
+	// and a kubeconfig Secret is not that.
+	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config)
+
+	// diagnose runs when a workspace never becomes active, with the fixture
+	// still up. Optional.
+	diagnose func(t *testing.T, ctx context.Context, tn *tenant, objects int)
 
 	// activate writes the objects that make one workspace active, and active
 	// reports whether that workspace's controllers have finished acting on
@@ -203,7 +212,14 @@ func envInt(t *testing.T, name string, fallback int) int {
 	return value
 }
 
-func eventually(t *testing.T, describe string, condition func() bool) {
+// eventually polls until the condition holds, and on timeout runs diagnose
+// before failing.
+//
+// The diagnostic is not decoration. When a workspace stops progressing, the
+// question is always which object is in which state, and the kcp fixture is
+// torn down with the test — so a timeout that says only "timed out" throws away
+// the one moment the answer was still reachable.
+func eventually(t *testing.T, describe string, condition func() bool, diagnose ...func()) {
 	t.Helper()
 	deadline := time.Now().Add(pollTimeout)
 	for {
@@ -211,6 +227,9 @@ func eventually(t *testing.T, describe string, condition func() bool) {
 			return
 		}
 		if time.Now().After(deadline) {
+			for _, d := range diagnose {
+				d()
+			}
 			t.Fatalf("timed out after %s waiting for %s", pollTimeout, describe)
 		}
 		time.Sleep(pollInterval)
@@ -288,7 +307,7 @@ func keepStorageVersion(crd *apiextensionsv1.CustomResourceDefinition) {
 // test fail for a reason nobody had agreed on. The numbers are the
 // deliverable; see bin/<reportName>.md after a run.
 func runSweep(t *testing.T, cfg sweepConfig) {
-	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: false}))
+	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: false, Verbosity: envInt(t, "SWEEP_LOG_VERBOSITY", 0)}))
 	ctx := t.Context()
 
 	workspaceCount := envInt(t, cfg.workspacesEnv, cfg.defaultWorkspaces)
@@ -385,7 +404,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	must(t, err)
 
 	if cfg.newFleetSetup != nil {
-		cfg.newFleetSetup(t, ctx, mgr)
+		cfg.newFleetSetup(t, ctx, mgr, baseCfg)
 	}
 
 	// The baseline is taken before the manager starts: the first workspace has
@@ -427,6 +446,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		cfg.activate(t, ctx, tn, objectCount)
 		eventually(t, fmt.Sprintf("workspace %s to reconcile its %d object set(s)", tn.name, objectCount), func() bool {
 			return cfg.active(t, ctx, tn, objectCount)
+		}, func() {
+			if cfg.diagnose != nil {
+				cfg.diagnose(t, ctx, tn, objectCount)
+			}
 		})
 		settle(t, fmt.Sprintf("with %d workspaces active", count))
 		sample(t, report, counter, sweep.PhaseActive, fmt.Sprintf("%d active", count), count)

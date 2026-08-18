@@ -28,8 +28,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"strings"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 
@@ -143,7 +145,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 		watchedTypes:  coreReconcilerWatchedTypes,
 		eventHandlers: coreReconcilerEventHandlers,
 		facts: map[string]string{
-			"shape":             "coremanager.SetupReconcilers: ClusterCache, Cluster, Machine, DevCluster, DevMachine",
+			"shape":             "coremanager.SetupFleetControllers: ClusterCache, Cluster, Machine, DevCluster, DevMachine — one controller each for the whole shard",
 			"reconciledTypes":   "cluster.x-k8s.io/clusters + infrastructure.cluster.x-k8s.io/devclusters",
 			"devClusterBackend": "inMemory",
 		},
@@ -171,7 +173,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			return func(context.Context, multicluster.ClusterName, manager.Manager) error { return nil }
 		},
 
-		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager) {
+		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config) {
 			t.Helper()
 
 			// MachinePool defaults to enabled upstream, and the core
@@ -192,7 +194,12 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// The production wiring itself, unmodified — not a
 			// reimplementation of it. Anything this sweep measures that a
 			// deployment would not pay would make the numbers a fiction.
-			must(t, coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{}))
+			must(t, coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{
+				// The shard, not the manager's config: the ClusterCache reads
+				// kubeconfig Secrets, which live in the workspaces themselves
+				// and not in the virtual workspace the manager addresses.
+				ShardConfig: shardCfg,
+			}))
 		},
 
 		activate: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {
@@ -255,5 +262,50 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			}
 			return true
 		},
+
+		// What the chain looked like when it stopped. Owner references first:
+		// the DevCluster reconciler refuses to act until the Cluster reconciler
+		// has claimed it, so their absence and their presence point at
+		// different halves of the chain.
+		diagnose: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {
+			t.Helper()
+			for n := range objects {
+				key := client.ObjectKey{Namespace: "default", Name: fmt.Sprintf("sweep-%02d", n)}
+
+				var cluster clusterv1.Cluster
+				if err := tn.directClient.Get(ctx, key, &cluster); err != nil {
+					t.Logf("diagnose: reading Cluster %s in %s: %v", key.Name, tn.name, err)
+				} else {
+					t.Logf("diagnose: Cluster %s in %s: rv=%s infraRef=%s/%s initialization=%+v conditions=%s",
+						key.Name, tn.name, cluster.ResourceVersion,
+						cluster.Spec.InfrastructureRef.Kind, cluster.Spec.InfrastructureRef.Name,
+						cluster.Status.Initialization, conditionSummary(cluster.Status.Conditions))
+				}
+
+				var devCluster infrav1.DevCluster
+				if err := tn.directClient.Get(ctx, key, &devCluster); err != nil {
+					t.Logf("diagnose: reading DevCluster %s in %s: %v", key.Name, tn.name, err)
+					continue
+				}
+				owners := make([]string, 0, len(devCluster.OwnerReferences))
+				for _, o := range devCluster.OwnerReferences {
+					owners = append(owners, fmt.Sprintf("%s/%s(uid=%s)", o.Kind, o.Name, o.UID))
+				}
+				t.Logf("diagnose: DevCluster %s in %s: rv=%s owners=%v initialization=%+v conditions=%s",
+					key.Name, tn.name, devCluster.ResourceVersion, owners,
+					devCluster.Status.Initialization, conditionSummary(devCluster.Status.Conditions))
+			}
+		},
 	})
+}
+
+func conditionSummary(conditions []metav1.Condition) string {
+	if len(conditions) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(conditions))
+	for _, c := range conditions {
+		parts = append(parts, fmt.Sprintf("%s=%s(%s)", c.Type, c.Status, c.Reason))
+	}
+	return strings.Join(parts, ",")
 }

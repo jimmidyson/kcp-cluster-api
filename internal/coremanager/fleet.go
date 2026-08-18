@@ -178,13 +178,20 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 	// everything else here is: reading the wrong workspace's Secret is how a
 	// workload cluster gets handed to the wrong tenant.
 	//
-	// It is the same client rather than the separate caching one the
-	// per-workspace path built. That one existed because the manager's cache is
-	// configured not to cache Secrets; here each engaged workspace's own cache
-	// answers, and giving the fleet a second Secret-caching layer would hold
-	// every tenant's kubeconfigs in memory at once.
+	// It is deliberately *not* the cluster-aware client every other field here
+	// gets. That client reads through the APIExport's virtual workspace, which
+	// serves what the export serves and nothing else — so a core v1.Secret has
+	// no REST mapping there and every connection attempt fails before it
+	// reaches the wire. This project wired it that way first, and no idle sweep
+	// could see the fault, because an idle workspace holds no Cluster for the
+	// ClusterCache to try. See NewWorkspaceSecretReader.
+	secretReader, err := NewWorkspaceSecretReader(opts.ShardConfig)
+	if err != nil {
+		return fmt.Errorf("building the workspace Secret reader: %w", err)
+	}
+
 	clusterCache, err := clustercache.SetupWithMulticlusterManager(ctx, mgr, clusterAwareClient, clustercache.Options{
-		SecretClient: clusterAwareClient,
+		SecretClient: secretReader,
 		Client: clustercache.ClientOptions{
 			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
 		},
