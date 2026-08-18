@@ -101,8 +101,16 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // A workspace costs **2.0 goroutines** at the margin, exactly, from two
 // workspaces to a hundred while idle (evidence/fleet-wide-measured.md), and
 // the same 2.0 with each workspace holding a Cluster and a DevCluster
-// reconciled to provisioned (evidence/fleet-active-measured.md). Work does not
-// leave a per-workspace residue.
+// reconciled to provisioned (evidence/fleet-one-cache-measured.md). Work does
+// not leave a per-workspace residue.
+//
+// It gives all of it back, too: **0.0 goroutines retained per departed
+// workspace**, measured across the full departure from eight workspaces to
+// none. That column is new because until the two-cache fault was fixed the
+// sweep never reached the end of a departure phase to measure it.
+//
+// The fixed cost is one watch-list per watched type for the whole shard, and
+// no LISTs at all across a sweep.
 //
 // It was 51.7 when the controllers were fleet-wide but their watches were still
 // registered per cluster. Making the controllers fleet-wide collapsed the
@@ -139,52 +147,50 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // nothing else — 48 MB of a 62 MB live heap, scaling with workspace creation
 // and so indistinguishable from a per-workspace cost until it was profiled.
 
-func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevInfrastructure, opts SetupOptions) error {
+func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry *capicontrollerutil.WildcardRegistry, dev *DevInfrastructure, opts SetupOptions) error {
 	if mgr == nil {
 		return errors.New("a multi-cluster manager is required")
+	}
+	if registry == nil {
+		return errors.New("a wildcard registry is required: it is what joins these controllers' watches to the caches their reconcilers read through")
 	}
 
 	options := controller.TypedOptions[mcreconcile.Request]{
 		MaxConcurrentReconciles: opts.fleetMaxConcurrentReconciles(),
 	}
 
-	// Every watch is one registration for the shard rather than one per
-	// workspace.
+	// Every watch is one registration per shard rather than one per workspace.
 	//
-	// The cache is the local manager's, and that is not a convenience: the
-	// manager is built against the APIExport's virtual workspace at /clusters/*,
-	// so its cache already holds every workspace's objects behind one informer
-	// per type. Registering there is what makes the per-workspace watch cost
-	// zero; registering per workspace against the same informer is what made it
-	// 45 goroutines each.
+	// The registration does not happen here. It happens when the provider builds
+	// the cache for a shard, which is after the manager starts — so what is
+	// declared here is *what* to watch, and providerwiring's registry replays it
+	// onto each cache as it appears. That indirection is not incidental: the
+	// cache a watch goes on has to be the cache its reconciler reads through.
+	//
+	// It was not, and the fault was measured rather than reasoned about.
+	// Pointing the watches at the provider's cache also removed the second set
+	// of informers entirely: fifty-four goroutines and every LIST the sweep
+	// made, with one watch-list per watched type for the whole shard where
+	// there had been five or six (evidence/fleet-one-cache-measured.md).
+	// Watches were registered on the local manager's cache and reads went
+	// through the provider's — two informers over one endpoint with independent
+	// lag. A reconcile woken by one could read a version older than the event
+	// that woke it, take the wrong branch, and return without requeueing;
+	// nothing woke it again, because the event was spent and the other cache
+	// emits none of its own when it catches up. A DevCluster deletion routed at
+	// resourceVersion 967 ran the *provisioning* path, which is only possible
+	// against an object that has no deletion timestamp
+	// (evidence/fleet-two-caches.md).
+	//
+	// The provider's cache is also the only one of the two that is kcp-aware in
+	// its store keys, so it can hold two workspaces' identically named objects
+	// apart. A plain controller-runtime cache keys on namespace and name alone.
 	//
 	// The resolver is logicalcluster.From, which reads kcp's own annotation. It
 	// is supplied here because it is the one piece of this that is kcp-specific,
 	// and Cluster API should not know it.
-	//
-	// # This cache is the wrong one, and that is a known fault
-	//
-	// It is not the cache the reconcilers read from. Reads go through the
-	// cluster-aware client to mgr.GetCluster, and so to the *provider's*
-	// wildcard cache — a different informer over the same endpoint, with its own
-	// lag. A reconcile woken by an event from this cache can read a version
-	// older than the event that woke it, take the wrong branch, and return
-	// without requeueing; nothing wakes it again, because the event is spent and
-	// the other cache produces none of its own when it catches up.
-	//
-	// Measured, not suspected: evidence/fleet-two-caches.md has a DevCluster
-	// deletion routed at resourceVersion 967 and the reconcile it woke running
-	// the *provisioning* path, which is only possible against an object with no
-	// deletion timestamp. That is the sweep's activation and departure hangs,
-	// both of them.
-	//
-	// The fix is to register on the provider's cache, which is also the only one
-	// of the two that is kcp-aware in its store keys. It is not reachable
-	// through apiexport.Provider today — see the evidence note for the seam that
-	// does reach it and the two complications (wiring happens before the cache
-	// exists; there is one cache per shard).
 	wildcard := capicontrollerutil.WithWildcard(
-		mgr.GetLocalManager().GetCache(),
+		registry,
 		func(o client.Object) (multicluster.ClusterName, bool) {
 			name := logicalcluster.From(o)
 			return multicluster.ClusterName(name), name != ""

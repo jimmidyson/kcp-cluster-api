@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 // The contract inside the fork, checked from here because here is where both
@@ -65,7 +66,7 @@ func TestFleetMaxConcurrentReconcilesDefaults(t *testing.T) {
 func TestSetupFleetControllersRequiresItsCollaborators(t *testing.T) {
 	g := NewWithT(t)
 
-	err := SetupFleetControllers(context.Background(), nil, &DevInfrastructure{}, SetupOptions{})
+	err := SetupFleetControllers(context.Background(), nil, &capicontrollerutil.WildcardRegistry{}, &DevInfrastructure{}, SetupOptions{})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("multi-cluster manager"))
 }

@@ -54,7 +54,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -68,6 +67,7 @@ import (
 	"sigs.k8s.io/cluster-api/feature"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 var (
@@ -174,7 +174,13 @@ func main() {
 
 	cfg := ctrl.GetConfigOrDie()
 
-	provider, err := apiexport.New(cfg, endpointSliceName, apiexport.Options{Scheme: scheme})
+	// The registry is what joins the fleet-wide controllers' watches to the
+	// caches the provider builds for each shard. Both sides are wired below and
+	// neither exists when the other is created, which is the whole reason it is
+	// a registry rather than a value passed one way.
+	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
+
+	provider, err := providerwiring.NewAPIExportProvider(cfg, endpointSliceName, scheme, wildcardRegistry)
 	if err != nil {
 		setupLog.Error(err, "Unable to construct kcp APIExport cluster provider")
 		os.Exit(1)
@@ -233,7 +239,7 @@ func main() {
 	// the context of the reconcile it is running, so there is no per-workspace
 	// setup left to run and nothing to re-run as workspaces come and go.
 	setupLog.Info("Wiring fleet-wide reconcilers")
-	if err := coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{
+	if err := coremanager.SetupFleetControllers(ctx, mgr, wildcardRegistry, dev, coremanager.SetupOptions{
 		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
 
 		// The shard, deliberately, and not the manager's config: kubeconfig

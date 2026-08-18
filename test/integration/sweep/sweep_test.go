@@ -75,7 +75,6 @@ import (
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
-	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
@@ -86,6 +85,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 const (
@@ -171,7 +171,7 @@ type sweepConfig struct {
 	// address different API surfaces and some wiring needs the one the manager
 	// is not built on: the virtual workspace serves what the APIExport serves,
 	// and a kubeconfig Secret is not that.
-	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config)
+	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry)
 
 	// diagnose runs when a workspace never becomes active or never disengages,
 	// with the fixture still up. Optional.
@@ -371,7 +371,12 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	counter := sweep.NewCounter()
 	countedCfg := counter.WrapConfig(rootCfg)
 
-	provider, err := apiexport.New(countedCfg, cfg.exportName, apiexport.Options{Scheme: cfg.scheme})
+	// Built through providerwiring rather than apiexport.New so that the caches
+	// it makes per shard are reachable: the fleet-wide watches have to be
+	// registered on the cache their reconcilers read through, and through
+	// apiexport.New that cache cannot be got at.
+	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
+	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry)
 	must(t, err)
 
 	// The manager's local cluster. Per-workspace wiring wants the workspace
@@ -404,7 +409,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	must(t, err)
 
 	if cfg.newFleetSetup != nil {
-		cfg.newFleetSetup(t, ctx, mgr, baseCfg)
+		cfg.newFleetSetup(t, ctx, mgr, baseCfg, wildcardRegistry)
 	}
 
 	// The baseline is taken before the manager starts: the first workspace has

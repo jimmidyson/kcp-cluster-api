@@ -46,6 +46,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 // The CRDs the real reconciler set needs bound in every workspace. This is not
@@ -175,7 +176,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			return func(context.Context, multicluster.ClusterName, manager.Manager) error { return nil }
 		},
 
-		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config) {
+		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
 			// MachinePool defaults to enabled upstream, and the core
@@ -200,7 +201,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// The production wiring itself, unmodified — not a
 			// reimplementation of it. Anything this sweep measures that a
 			// deployment would not pay would make the numbers a fiction.
-			must(t, coremanager.SetupFleetControllers(ctx, mgr, dev, coremanager.SetupOptions{
+			must(t, coremanager.SetupFleetControllers(ctx, mgr, registry, dev, coremanager.SetupOptions{
 				// The shard, not the manager's config: the ClusterCache reads
 				// kubeconfig Secrets, which live in the workspaces themselves
 				// and not in the virtual workspace the manager addresses.

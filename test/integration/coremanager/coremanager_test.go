@@ -53,7 +53,6 @@ import (
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
-	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 	kcptestinghelpers "github.com/kcp-dev/sdk/testing/helpers"
@@ -71,6 +70,7 @@ import (
 	"sigs.k8s.io/cluster-api/feature"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 const (
@@ -259,7 +259,8 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	must(t, infrav1beta1.AddToScheme(mgrScheme))
 	must(t, infrav1.AddToScheme(mgrScheme))
 
-	provider, err := apiexport.New(rootCfg, exportName, apiexport.Options{Scheme: mgrScheme})
+	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
+	provider, err := providerwiring.NewAPIExportProvider(rootCfg, exportName, mgrScheme, wildcardRegistry)
 	if err != nil {
 		t.Fatalf("failed to construct kcp APIExport provider: %v", err)
 	}
@@ -292,7 +293,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	// engage - including ones created later in this test. That ordering is not
 	// stylistic: multicluster-runtime hands each engagement to the components
 	// registered at that moment and never replays earlier ones.
-	if err := coremanager.SetupFleetControllers(mgrCtx, mgr, dev, coremanager.SetupOptions{
+	if err := coremanager.SetupFleetControllers(mgrCtx, mgr, wildcardRegistry, dev, coremanager.SetupOptions{
 		// The shard, not the manager's config: the ClusterCache reads
 		// kubeconfig Secrets, which live in the workspaces themselves.
 		ShardConfig: baseCfg,

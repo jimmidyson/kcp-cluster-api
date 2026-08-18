@@ -54,6 +54,17 @@ import (
 // provider builds each engaged cluster from, so its discovery is by construction
 // the surface the fleet has in common.
 //
+// # Why taking the first endpoint is enough
+//
+// A slice can name several — one per shard — and this takes the first. That is
+// safe precisely because the local manager is not a source of events: the
+// fleet-wide watches are registered on the provider's per-shard caches, through
+// NewAPIExportProvider and the wildcard registry, not on the local manager's.
+// What is left for the local manager to answer are scheme, RESTMapper and
+// discovery questions, and every shard serving the same APIExport describes the
+// same API surface. Choosing among them for locality is a scheduling question
+// this does not answer.
+//
 // # Why it polls
 //
 // The endpoint slice has no URLs until something has bound the APIExport, so a

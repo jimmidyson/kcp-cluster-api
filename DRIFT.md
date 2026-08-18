@@ -25,7 +25,7 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-thirty-one deliberate entries below, eleven are new files and twenty modify
+thirty-three deliberate entries below, thirteen are new files and twenty modify
 existing ones — and the twenty are the number that matters.
 
 ## Where the check runs, and why not on every pull request
@@ -76,6 +76,8 @@ cannot build without them. See the feature's research notes (R2).
 | `util/multicluster/wildcard.go` | New file. Registers one event handler per type against a fleet-spanning cache and demultiplexes per event, in place of one registration per cluster per type. Measured at 45 of the 51.7 goroutines a workspace cost before it. | None — carried deliberately, ADR-0003 |
 | `util/multicluster/fleet_test.go` | New file. Envtest for the three above, over multicluster-runtime's namespace provider: that one controller keeps two clusters' work apart, and that a request naming a cluster the provider does not have is dropped rather than retried. | None — carried deliberately, ADR-0003 |
 | `util/controller/builder_workspace.go` | New file. `MulticlusterBuilder`: the same controller wiring as `Builder`, keyed on a request that carries the cluster. | None — carried deliberately, ADR-0003 |
+| `util/controller/wildcard_registry.go` | New file. Joins fleet-wide controllers to the caches their watches go on, in either order. Controllers are wired before the manager starts; a provider builds its caches after. It also fans each watch out across a fleet spanning shards, which is one cache each. | None — carried deliberately, ADR-0003 |
+| `util/controller/wildcard_registry_test.go` | New file. Both arrival orders, fan-out across several caches, idempotence when one cache is offered once per workspace, and which controller and cache a failed registration names. | None — carried deliberately, ADR-0003 |
 | `util/controller/controller.go` | **Modified.** The reconciler and controller wrappers take the request type as a parameter, so both builders share one implementation of rate limiting, deferral and the reconcile cache rather than two that can drift. | None — carried deliberately, ADR-0003 |
 | `util/controller/builder.go` | **Modified.** `Controller` becomes a generic alias `ControllerFor[reconcile.Request]`, so every existing declaration keeps compiling. | None — carried deliberately, ADR-0003 |
 | `util/controller/controller_test.go` | **Modified.** The wrappers are built as struct literals here, so the new fields have to be supplied. | None — carried deliberately, ADR-0003 |
@@ -115,7 +117,7 @@ open, and it flips to silence when the branch lands.
 
 ### What to watch on the deliberate entries
 
-Eleven are new files and rebase for free. Twenty modify upstream files, and
+Thirteen are new files and rebase for free. Twenty modify upstream files, and
 those are the real recurring cost:
 
 - `util/controller/controller.go` and `builder.go` — the largest, and the
