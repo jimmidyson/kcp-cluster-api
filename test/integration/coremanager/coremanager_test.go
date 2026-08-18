@@ -265,7 +265,25 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 		t.Fatalf("failed to construct kcp APIExport provider: %v", err)
 	}
 
-	mgr, err := mcmanager.New(rootCfg, provider, ctrl.Options{
+	// The local manager is addressed at the APIExport's virtual workspace, not
+	// at the workspace holding the export — exactly as cmd/core-manager does,
+	// and for a reason this test exists to catch: the local RESTMapper answers
+	// every question a fleet-wide controller asks that has no cluster to
+	// resolve from, and setup asks several before any workspace has engaged.
+	// util.ClusterToTypedObjectsMapper asks whether MachineList is namespaced,
+	// and the exporting workspace does not bind what it exports, so pointing
+	// the manager at rootCfg fails setup with
+	//
+	//	failed to get restmapping: no matches for kind "MachineList"
+	//
+	// The endpoint slice is already populated at this point, because the
+	// binding above is what populates it.
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, rootClient, exportName, baseCfg, 30*time.Second)
+	if err != nil {
+		t.Fatalf("failed to resolve the APIExport's virtual workspace: %v", err)
+	}
+
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme: mgrScheme,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Host:    whOpts.LocalServingHost,
