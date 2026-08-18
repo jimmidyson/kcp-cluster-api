@@ -173,8 +173,8 @@ type sweepConfig struct {
 	// and a kubeconfig Secret is not that.
 	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config)
 
-	// diagnose runs when a workspace never becomes active, with the fixture
-	// still up. Optional.
+	// diagnose runs when a workspace never becomes active or never disengages,
+	// with the fixture still up. Optional.
 	diagnose func(t *testing.T, ctx context.Context, tn *tenant, objects int)
 
 	// activate writes the objects that make one workspace active, and active
@@ -509,6 +509,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		}))
 		eventually(t, fmt.Sprintf("workspace %s to disengage", tn.name), func() bool {
 			return len(wiring.Engaged()) == remaining
+		}, func() {
+			if cfg.diagnose != nil {
+				cfg.diagnose(t, ctx, tn, objectCount)
+			}
 		})
 		settle(t, fmt.Sprintf("with %d workspaces left", remaining))
 		sample(t, report, counter, sweep.PhaseDisengaged, fmt.Sprintf("%d left", remaining), remaining)

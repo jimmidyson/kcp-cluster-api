@@ -161,6 +161,28 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, dev *DevI
 	// The resolver is logicalcluster.From, which reads kcp's own annotation. It
 	// is supplied here because it is the one piece of this that is kcp-specific,
 	// and Cluster API should not know it.
+	//
+	// # This cache is the wrong one, and that is a known fault
+	//
+	// It is not the cache the reconcilers read from. Reads go through the
+	// cluster-aware client to mgr.GetCluster, and so to the *provider's*
+	// wildcard cache — a different informer over the same endpoint, with its own
+	// lag. A reconcile woken by an event from this cache can read a version
+	// older than the event that woke it, take the wrong branch, and return
+	// without requeueing; nothing wakes it again, because the event is spent and
+	// the other cache produces none of its own when it catches up.
+	//
+	// Measured, not suspected: evidence/fleet-two-caches.md has a DevCluster
+	// deletion routed at resourceVersion 967 and the reconcile it woke running
+	// the *provisioning* path, which is only possible against an object with no
+	// deletion timestamp. That is the sweep's activation and departure hangs,
+	// both of them.
+	//
+	// The fix is to register on the provider's cache, which is also the only one
+	// of the two that is kcp-aware in its store keys. It is not reachable
+	// through apiexport.Provider today — see the evidence note for the seam that
+	// does reach it and the two complications (wiring happens before the cache
+	// exists; there is one cache per shard).
 	wildcard := capicontrollerutil.WithWildcard(
 		mgr.GetLocalManager().GetCache(),
 		func(o client.Object) (multicluster.ClusterName, bool) {
