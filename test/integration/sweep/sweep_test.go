@@ -75,7 +75,6 @@ import (
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
-	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
@@ -86,6 +85,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
+	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
 const (
@@ -158,6 +158,25 @@ type sweepConfig struct {
 	// installed exactly once.
 	newSetup func(t *testing.T, ctx context.Context) providerwiring.SetupFunc
 
+	// newFleetSetup builds wiring that is installed once for every workspace
+	// rather than once per workspace. Optional; nil means the sweep measures
+	// per-workspace wiring alone.
+	//
+	// When it is set the manager's local cluster is the APIExport's virtual
+	// workspace rather than the workspace holding the export, because a
+	// fleet-wide controller resolves types through the local RESTMapper at
+	// setup time and the exporting workspace does not bind what it exports.
+	//
+	// It is handed the shard config as well as the manager, because the two
+	// address different API surfaces and some wiring needs the one the manager
+	// is not built on: the virtual workspace serves what the APIExport serves,
+	// and a kubeconfig Secret is not that.
+	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry)
+
+	// diagnose runs when a workspace never becomes active or never disengages,
+	// with the fixture still up. Optional.
+	diagnose func(t *testing.T, ctx context.Context, tn *tenant, objects int)
+
 	// activate writes the objects that make one workspace active, and active
 	// reports whether that workspace's controllers have finished acting on
 	// them. Both use the workspace's own client rather than the manager's, so
@@ -193,7 +212,14 @@ func envInt(t *testing.T, name string, fallback int) int {
 	return value
 }
 
-func eventually(t *testing.T, describe string, condition func() bool) {
+// eventually polls until the condition holds, and on timeout runs diagnose
+// before failing.
+//
+// The diagnostic is not decoration. When a workspace stops progressing, the
+// question is always which object is in which state, and the kcp fixture is
+// torn down with the test — so a timeout that says only "timed out" throws away
+// the one moment the answer was still reachable.
+func eventually(t *testing.T, describe string, condition func() bool, diagnose ...func()) {
 	t.Helper()
 	deadline := time.Now().Add(pollTimeout)
 	for {
@@ -201,6 +227,9 @@ func eventually(t *testing.T, describe string, condition func() bool) {
 			return
 		}
 		if time.Now().After(deadline) {
+			for _, d := range diagnose {
+				d()
+			}
 			t.Fatalf("timed out after %s waiting for %s", pollTimeout, describe)
 		}
 		time.Sleep(pollInterval)
@@ -278,7 +307,7 @@ func keepStorageVersion(crd *apiextensionsv1.CustomResourceDefinition) {
 // test fail for a reason nobody had agreed on. The numbers are the
 // deliverable; see bin/<reportName>.md after a run.
 func runSweep(t *testing.T, cfg sweepConfig) {
-	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: false}))
+	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: false, Verbosity: envInt(t, "SWEEP_LOG_VERBOSITY", 0)}))
 	ctx := t.Context()
 
 	workspaceCount := envInt(t, cfg.workspacesEnv, cfg.defaultWorkspaces)
@@ -342,10 +371,32 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	counter := sweep.NewCounter()
 	countedCfg := counter.WrapConfig(rootCfg)
 
-	provider, err := apiexport.New(countedCfg, cfg.exportName, apiexport.Options{Scheme: cfg.scheme})
+	// Built through providerwiring rather than apiexport.New so that the caches
+	// it makes per shard are reachable: the fleet-wide watches have to be
+	// registered on the cache their reconcilers read through, and through
+	// apiexport.New that cache cannot be got at.
+	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
+	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry)
 	must(t, err)
 
-	mgr, err := mcmanager.New(countedCfg, provider, ctrl.Options{
+	// The manager's local cluster. Per-workspace wiring wants the workspace
+	// holding the export; fleet-wide wiring wants the virtual workspace, whose
+	// discovery describes the API surface every engaged workspace shares.
+	//
+	// The URL is derived rather than read from the APIExportEndpointSlice,
+	// which is what production does (providerwiring.VirtualWorkspaceConfig).
+	// The slice is empty until a workspace has bound, and this sweep binds them
+	// one at a time *after* the manager is built, deliberately — reading the
+	// slice here would force a workspace to be bound before the baseline, and
+	// the baseline is the one sample taken with none.
+	localCfg := countedCfg
+	if cfg.newFleetSetup != nil {
+		vw := rest.CopyConfig(baseCfg)
+		vw.Host = strings.TrimSuffix(baseCfg.Host, "/") + "/services/apiexport/root/" + cfg.exportName + "/clusters/*"
+		localCfg = counter.WrapConfig(vw)
+	}
+
+	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 cfg.scheme,
 		HealthProbeBindAddress: "0",
 		Metrics:                metricsserver.Options{BindAddress: "0"},
@@ -356,6 +407,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		Log: ctrl.Log.WithName("providerwiring"),
 	})
 	must(t, err)
+
+	if cfg.newFleetSetup != nil {
+		cfg.newFleetSetup(t, ctx, mgr, baseCfg, wildcardRegistry)
+	}
 
 	// The baseline is taken before the manager starts: the first workspace has
 	// to be bound before kcp populates the APIExportEndpointSlice the provider
@@ -396,6 +451,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		cfg.activate(t, ctx, tn, objectCount)
 		eventually(t, fmt.Sprintf("workspace %s to reconcile its %d object set(s)", tn.name, objectCount), func() bool {
 			return cfg.active(t, ctx, tn, objectCount)
+		}, func() {
+			if cfg.diagnose != nil {
+				cfg.diagnose(t, ctx, tn, objectCount)
+			}
 		})
 		settle(t, fmt.Sprintf("with %d workspaces active", count))
 		sample(t, report, counter, sweep.PhaseActive, fmt.Sprintf("%d active", count), count)
@@ -455,6 +514,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		}))
 		eventually(t, fmt.Sprintf("workspace %s to disengage", tn.name), func() bool {
 			return len(wiring.Engaged()) == remaining
+		}, func() {
+			if cfg.diagnose != nil {
+				cfg.diagnose(t, ctx, tn, objectCount)
+			}
 		})
 		settle(t, fmt.Sprintf("with %d workspaces left", remaining))
 		sample(t, report, counter, sweep.PhaseDisengaged, fmt.Sprintf("%d left", remaining), remaining)

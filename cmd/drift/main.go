@@ -32,9 +32,17 @@ import (
 func main() {
 	record := flag.String("record", "DRIFT.md", "path to the drift record")
 	fork := flag.String("fork", "https://github.com/jimmidyson/cluster-api", "fork repository to measure")
-	ref := flag.String("ref", "v1.15.0-kcp.1", "fork ref carrying the patches")
+	ref := flag.String("ref", "", "fork ref carrying the patches; empty reads the version this module pins")
 	upstream := flag.String("upstream", "https://github.com/kubernetes-sigs/cluster-api", "upstream repository")
 	flag.Parse()
+
+	if *ref == "" {
+		v, err := pinnedForkVersion()
+		if err != nil {
+			fail("%v", err)
+		}
+		*ref = v
+	}
 
 	md, err := os.ReadFile(*record)
 	if err != nil {
@@ -57,6 +65,34 @@ func main() {
 	if !res.OK() {
 		os.Exit(1)
 	}
+}
+
+// pinnedForkVersion reports the fork version this module actually depends on.
+//
+// # Why this is not a constant
+//
+// It was one, and it went stale the moment the pin moved: the check went on
+// measuring the previous tag and reported every path added since as one the
+// fork "no longer carries" — the exact opposite of the truth, in a tool whose
+// only job is to say whether the record matches reality.
+//
+// A default that has to be edited in step with go.mod is a second pin, and two
+// pins disagree eventually. Reading it from the module graph means the check
+// measures what the project builds against, which is the only version the
+// record is a record of.
+func pinnedForkVersion() (string, error) {
+	// The replace directive rather than the require: the require names
+	// sigs.k8s.io/cluster-api at an upstream version, and what is actually
+	// fetched is the fork the replace points at.
+	out, err := exec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}", "sigs.k8s.io/cluster-api").Output()
+	if err != nil {
+		return "", fmt.Errorf("reading the pinned fork version from the module graph: %w", err)
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "" {
+		return "", fmt.Errorf("the module graph reports no version for sigs.k8s.io/cluster-api")
+	}
+	return v, nil
 }
 
 // divergingPaths returns the files that differ between the upstream base
