@@ -105,6 +105,69 @@ tasks:
     cmds:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/coremanager/...
 
+  test:scale:
+    desc: Measure this environment's workspace ceiling and reconcile throughput — evidence, not a gate
+    deps: [tools]
+    # Deliberately not part of `verify` or `check`. Its output is evidence for
+    # capacity decisions, not a pass/fail on every change: making the
+    # done-condition depend on a multi-workspace kcp environment would hold
+    # unrelated work hostage to it, for the same reason the drift check does not
+    # run on every pull request.
+    #
+    # This used to drive a second sweep as well, with its own load profiles and
+    # departure detection. It no longer does: `task test:sweep` is the sweep, and
+    # two instruments measuring one process could disagree about it. What is left
+    # here is the two measurements that instrument does not make — how many
+    # workspaces this environment can create and bind at all, and how reconcile
+    # throughput responds to worker count.
+    #
+    # Read the ceiling's outcome from bin/verify-result.json, not the exit
+    # status. A workspace count this environment cannot host reports "could not
+    # run", which is never a pass.
+    vars:
+      # How many workspaces the ceiling probe tries to reach.
+      CEILING_TARGET: '{{.CEILING_TARGET | default "32"}}'
+      # Worker counts to measure throughput at. Throughput is stated per worker
+      # count because the two are not proportional past a point.
+      WORKERS: '{{.WORKERS | default "1,2,4,8"}}'
+      # Extra flags, e.g. -throughput-workspaces.
+      SCALE_FLAGS: '{{.SCALE_FLAGS | default ""}}'
+    cmds:
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m -count=1 ./test/integration/scale/...
+        -args -ceiling-target={{.CEILING_TARGET}} -throughput-workers={{.WORKERS}} {{.SCALE_FLAGS}}
+
+  scale:census:
+    desc: Count the controllers and watches a deployment registers, by parsing its setup functions
+    # The two counts the whole per-workspace cost model turns on. Derived by an
+    # AST parse rather than by hand or by grep: the builder's chained calls have
+    # no leading dot, so a regex silently misses every Watches() — which is how
+    # the first census was wrong in both terms, quietly.
+    #
+    # Roots are resolved with `go list` because the wired set spans two modules.
+    vars:
+      SCOPE: '{{.SCOPE | default "wired"}}'
+    cmds:
+      - |
+        CORE=$(go list -m -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api)
+        DOCKER=$(go list -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers)
+        case "{{.SCOPE}}" in
+          wired)  ROOTS="$CORE/core/reconcilers/cluster,$CORE/core/reconcilers/machine,$CORE/controllers/clustercache,$DOCKER" ;;
+          parity) ROOTS="$CORE/core/reconcilers,$CORE/controllers/clustercache" ;;
+          *)      ROOTS="{{.SCOPE}}" ;;
+        esac
+        go run ./cmd/controllercensus -roots "$ROOTS"
+
+  scale:model:
+    desc: Fit resource models to the committed sweep runs and report held-out accuracy
+    # Arithmetic over committed evidence, not a measurement: it needs no kcp and
+    # runs in milliseconds, so a figure can be re-derived or corrected without
+    # re-running a sweep. That separation is the point — the runs are the
+    # evidence, this is the reading of them.
+    vars:
+      EVIDENCE_DIR: '{{.EVIDENCE_DIR | default "specs/20260815-211812-workspace-wiring-scale/evidence"}}'
+    cmds:
+      - go run ./cmd/scalemodel -runs={{.EVIDENCE_DIR}} -out={{.EVIDENCE_DIR}}/model-accuracy.md
+
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]

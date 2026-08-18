@@ -19,8 +19,11 @@ package providerwiring
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 )
 
 // waitFor fails the test if c is not closed promptly. Everything this package
@@ -452,6 +457,153 @@ func TestWebhookRegistrationIsRefused(t *testing.T) {
 // immediately after cancelling races that. Waiting for the expected set is not
 // a weaker assertion than reading it once: the set still has to be exactly
 // want, and the test still fails if it never gets there.
+// TestTelemetryRecordsEngagementOutcomes covers FR-018.
+//
+// The harness cannot report load the process does not expose, and engagement
+// is where a workspace's existence becomes observable at all. Reasons are fixed
+// categories rather than error text: they are a metric label, so deriving them
+// from an error string would make their cardinality unbounded — the problem the
+// telemetry package exists to avoid.
+func TestTelemetryRecordsEngagementOutcomes(t *testing.T) {
+	recorder := workspacetelemetry.New(workspacetelemetry.Options{})
+
+	managers := newFakeManagers()
+	var failNext bool
+	w, err := New(managers, func(context.Context, multicluster.ClusterName, manager.Manager) error {
+		if failNext {
+			return errors.New("setup exploded")
+		}
+		return nil
+	}, Options{Log: logr.Discard(), Telemetry: recorder})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, disengage := context.WithCancel(t.Context())
+	if err := w.Engage(ctx, "good", nil); err != nil {
+		t.Fatalf("Engage(good): %v", err)
+	}
+	if got := recorder.Snapshot().EngagedWorkspaces; got != 1 {
+		t.Errorf("engaged workspaces = %d after one success, want 1", got)
+	}
+
+	failNext = true
+	if err := w.Engage(t.Context(), "bad", nil); err == nil {
+		t.Fatal("Engage(bad) succeeded; the test needs it to fail")
+	}
+
+	snap := recorder.Snapshot()
+	if snap.EngagementFailures != 1 {
+		t.Errorf("engagement failures = %d, want 1", snap.EngagementFailures)
+	}
+	if snap.EngagedWorkspaces != 1 {
+		t.Errorf("engaged = %d after one success and one failure, want 1: a failed engagement is not an engaged workspace", snap.EngagedWorkspaces)
+	}
+	for reason := range snap.EngagementFailuresByReason {
+		if strings.Contains(reason, "exploded") {
+			t.Errorf("failure reason %q carries the error text: reasons are labels, and unbounded labels are the cardinality problem this avoids", reason)
+		}
+	}
+
+	disengage()
+	waitForEmpty(t, w)
+	if got := recorder.Snapshot().EngagedWorkspaces; got != 0 {
+		t.Errorf("engaged = %d after disengagement, want 0", got)
+	}
+}
+
+// Telemetry is optional, and nothing about wiring may depend on it being
+// present: a nil recorder is the configuration every existing caller uses.
+func TestWiringWorksWithoutTelemetry(t *testing.T) {
+	w := newWiring(t, newFakeManagers(), func(context.Context, multicluster.ClusterName, manager.Manager) error {
+		return nil
+	})
+
+	if err := w.Engage(t.Context(), "tenant-a", nil); err != nil {
+		t.Fatalf("Engage with no recorder configured: %v", err)
+	}
+}
+
+// TestSustainedChurnLeavesNoResidue covers FR-012 at the scale that makes it
+// matter.
+//
+// TestRunnablesStopOnDisengage already shows that one workspace's runnables
+// stop. This asserts the property the fleet target depends on: that repeating
+// engage and disengage many times leaves nothing behind. A per-workspace leak
+// is individually small and therefore invisible in a two-workspace test, and
+// the appliance model's whole premise is that a shard's cost is bounded — which
+// a leak under churn quietly falsifies.
+//
+// What this discriminates, established by mutating the implementation rather
+// than assumed:
+//
+//   - Residue in the engaged map is caught: dropping the delete in disengage
+//     fails this test and passes the rest of the suite.
+//   - A runnable that never terminates is caught, since every cycle's runnable
+//     is waited on.
+//
+// What it does *not* catch, recorded so the next reader does not over-trust
+// it: removing group.stop() entirely still passes, because a group's context
+// descends from the engagement's, so cancelling the engagement stops the
+// runnables by propagation regardless. group.stop()'s distinct value is the
+// synchronous wait, which matters on Start's shutdown path rather than here.
+//
+// The goroutine count is a backstop for leaks that are anchored to neither of
+// the above, not the primary assertion.
+func TestSustainedChurnLeavesNoResidue(t *testing.T) {
+	const cycles = 50
+
+	managers := newFakeManagers()
+	var mu sync.Mutex
+	var runnables []*blockingRunnable
+
+	w := newWiring(t, managers, func(_ context.Context, _ multicluster.ClusterName, mgr manager.Manager) error {
+		r := newBlockingRunnable()
+		mu.Lock()
+		runnables = append(runnables, r)
+		mu.Unlock()
+		return mgr.Add(r)
+	})
+
+	settle(t, "the baseline")
+	baseline := runtime.NumGoroutine()
+
+	for i := range cycles {
+		ctx, cancel := context.WithCancel(t.Context())
+		workspace := multicluster.ClusterName(fmt.Sprintf("churn-%d", i))
+		if err := w.Engage(ctx, workspace, nil); err != nil {
+			cancel()
+			t.Fatalf("Engage %s: %v", workspace, err)
+		}
+		waitForEngaged(t, w, workspace)
+		cancel()
+		waitForEmpty(t, w)
+	}
+
+	mu.Lock()
+	started := runnables
+	mu.Unlock()
+
+	if len(started) != cycles {
+		t.Fatalf("started %d runnables, want %d", len(started), cycles)
+	}
+	for i, r := range started {
+		select {
+		case <-r.stopped:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("runnable %d never stopped: work for a departed workspace outlives it", i)
+		}
+	}
+
+	settle(t, "the end of the engage/disengage cycles")
+	// A small allowance absorbs runtime bookkeeping; the failure this guards
+	// against is growth proportional to cycles, not a handful of stragglers.
+	if grew := runtime.NumGoroutine() - baseline; grew > cycles/10 {
+		t.Errorf("goroutines grew by %d over %d engage/disengage cycles (baseline %d): per-workspace state is surviving disengagement",
+			grew, cycles, baseline)
+	}
+}
+
 func waitForEngaged(t *testing.T, w *Wiring, want ...multicluster.ClusterName) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

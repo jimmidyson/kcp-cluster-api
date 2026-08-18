@@ -330,6 +330,26 @@ func (r *Report) Write(dir, name string) error {
 }
 
 // Markdown renders the sweep as a table.
+// Departure reports whether a measured cost stopped being linear within the
+// swept range.
+//
+// Only samples taken while workspaces were being added are considered: the
+// baseline is taken with the manager stopped and a phase that activates
+// existing workspaces adds none, so including either would put two points at
+// the same workspace count and make the projection meaningless.
+func (r *Report) Departure(measure func(Sample) float64, opts DepartureOptions) Departure {
+	scaling := make([]Sample, 0, len(r.Samples))
+	seen := map[int]bool{}
+	for _, s := range r.Samples {
+		if s.Phase == PhaseBaseline || seen[s.Workspaces] {
+			continue
+		}
+		seen[s.Workspaces] = true
+		scaling = append(scaling, s)
+	}
+	return FindDeparture(PointsOf(scaling, measure), opts)
+}
+
 func (r *Report) Markdown() string {
 	var b strings.Builder
 
