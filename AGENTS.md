@@ -68,7 +68,8 @@ tooling, no process of its own. Its contract:
 docs/conversion-plan.md   the roadmap and current state — read this first
 Taskfile.yaml             the named operations; `task --list` to see them
 DRIFT.md                  what we carry against upstream, and why
-cmd/                      binaries: core-manager, verify, drift
+cmd/                      binaries: core-manager, kubeadm-bootstrap-manager,
+                          demo, verify, drift
 internal/                 implementation packages
 test/integration/         integration tests against a real kcp server
 docs/                     ADRs, design notes, and the documentation site

@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
@@ -118,4 +119,112 @@ func RenderTable(w io.Writer, statuses []ClusterStatus) error {
 		}
 	}
 	return tw.Flush()
+}
+
+// MachineStatus is what the demo reports about one control plane machine.
+type MachineStatus struct {
+	Workspace      string
+	LogicalCluster string
+	Machine        string
+
+	// Bootstrapped reports that the bootstrap provider produced this
+	// machine's data secret - the thing that has to happen before any
+	// infrastructure provider can turn a Machine into a node.
+	Bootstrapped bool
+
+	// DataSecret names the Secret holding that data, in this workspace.
+	DataSecret string
+
+	// Phase is the Machine's own phase, reported alongside rather than waited
+	// on: a Machine reaching Running needs a control plane provider, which is
+	// not wired.
+	Phase string
+
+	// Detail says what the machine is waiting on when it has no data secret.
+	Detail string
+}
+
+// SummariseMachine reads one machine's demo status.
+func SummariseMachine(workspace, logicalCluster string, machine *clusterv1.Machine, config *bootstrapv1.KubeadmConfig) MachineStatus {
+	status := MachineStatus{
+		Workspace:      workspace,
+		LogicalCluster: logicalCluster,
+		Machine:        machine.Name,
+		Phase:          machine.Status.Phase,
+	}
+
+	if name := machine.Spec.Bootstrap.DataSecretName; name != nil && *name != "" {
+		status.Bootstrapped = true
+		status.DataSecret = *name
+		status.Detail = "bootstrap data ready"
+		return status
+	}
+
+	if config == nil {
+		status.Detail = "waiting for the KubeadmConfig to be created"
+		return status
+	}
+	if name := config.Status.DataSecretName; name != "" {
+		// The config has produced the secret but the Machine has not picked it
+		// up yet: a real state worth naming, because it separates a bootstrap
+		// provider that is not working from a Machine controller that has not
+		// caught up.
+		status.Bootstrapped = true
+		status.DataSecret = name
+		status.Detail = "bootstrap data ready, not yet on the Machine"
+		return status
+	}
+
+	if cond := meta.FindStatusCondition(config.Status.Conditions, bootstrapv1.KubeadmConfigDataSecretAvailableCondition); cond != nil {
+		status.Detail = cond.Reason
+		if cond.Message != "" {
+			status.Detail = fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
+		}
+		return status
+	}
+	status.Detail = "waiting for the bootstrap provider"
+	return status
+}
+
+// AllBootstrapped reports whether every machine has its bootstrap data. An
+// empty snapshot is vacuously true here, unlike AllProvisioned: a run that
+// asked for no machines is not waiting for any.
+func AllBootstrapped(statuses []MachineStatus) bool {
+	for _, s := range statuses {
+		if !s.Bootstrapped {
+			return false
+		}
+	}
+	return true
+}
+
+// RenderMachineTable writes the machine snapshot as an aligned table, and
+// nothing at all when there are no machines.
+func RenderMachineTable(w io.Writer, statuses []MachineStatus) error {
+	if len(statuses) == 0 {
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tMACHINE\tBOOTSTRAPPED\tDATA SECRET\tPHASE\tDETAIL"); err != nil {
+		return err
+	}
+	for _, s := range statuses {
+		bootstrapped := "no"
+		if s.Bootstrapped {
+			bootstrapped = "yes"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			s.Workspace, s.Machine, bootstrapped, orDash(s.DataSecret), orDash(s.Phase), s.Detail); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

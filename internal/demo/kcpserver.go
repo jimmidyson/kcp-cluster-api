@@ -71,7 +71,7 @@ func (s *KcpServer) Stop() {
 //
 // The binary is resolved from PATH as "kcp", which is where `task tools` puts
 // the pinned one (bin/).
-func StartKcp(ctx context.Context, dir string, timeout time.Duration, log logr.Logger) (*KcpServer, error) {
+func StartKcp(ctx context.Context, dir string, timeout time.Duration, log logr.Logger, extraArgs ...string) (*KcpServer, error) {
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
@@ -123,6 +123,10 @@ func StartKcp(ctx context.Context, dir string, timeout time.Duration, log logr.L
 		"--shard-external-url="+local,
 		"--shard-virtual-workspace-url="+local,
 	)
+	// Extra flags last, so a caller can raise the server's verbosity or change
+	// a default this function chose. Debugging what kcp did with a request
+	// otherwise means editing this file.
+	cmd.Args = append(cmd.Args, extraArgs...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -261,4 +265,20 @@ func ConfigFromKubeconfig(path, context string) (*rest.Config, error) {
 		return nil, fmt.Errorf("building a config from %s (context %q): %w", path, context, err)
 	}
 	return cfg, nil
+}
+
+// devInfrastructurePorts picks the ports the dev provider's in-memory backend
+// serves on: one for its debug endpoint and a range for the workload clusters
+// it stands up.
+//
+// A range rather than a port per cluster because the backend allocates from it
+// itself, one listener per workload cluster. Fifty is enough for any demo and
+// small enough that two runs are unlikely to overlap; the base is a free port
+// rather than a constant so that they do not start from the same place.
+func devInfrastructurePorts() (debug, min, max int32, err error) {
+	ports, err := freePorts(2)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return int32(ports[0]), int32(ports[1]), int32(ports[1]) + 50, nil
 }

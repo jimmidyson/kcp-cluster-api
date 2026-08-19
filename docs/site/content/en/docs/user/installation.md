@@ -21,6 +21,10 @@ one workspace or none — see [Design & architecture](../design/_index.md).
   `APIExport` publishing the Cluster API types, an `APIExportEndpointSlice`
   for that export, and an `APIBinding` to it in each workspace you want
   reconciled
+- If you run the bootstrap provider: that export must also **claim** `secrets`
+  and `configmaps`, and each workspace's `APIBinding` must accept those claims.
+  Without them the provider starts cleanly and every write it makes is refused
+  — see [The bootstrap provider](../design/bootstrap-provider.md)
 - A container runtime — only for the integration tests, which start a real
   kcp server
 
@@ -65,6 +69,22 @@ bin/core-manager \
 No workspace is named anywhere. Every workspace whose `APIBinding` to the
 export becomes ready is reconciled from that moment, and stops being
 reconciled when it unbinds.
+
+### The bootstrap provider
+
+The kubeadm bootstrap provider is a second binary, deployed the way Cluster API
+deploys providers — one process each, both pointed at the same endpoint slice:
+
+```sh
+go build -o bin/kubeadm-bootstrap-manager ./cmd/kubeadm-bootstrap-manager
+
+bin/kubeadm-bootstrap-manager \
+  --kubeconfig ~/.kube/kcp.kubeconfig \
+  --endpoint-slice-name <apiexportendpointslice-name>
+```
+
+It serves no webhooks, and it needs the permission claims listed under
+Prerequisites. `--bootstrap-token-ttl` is the one knob of its own.
 
 ### Serving webhooks
 

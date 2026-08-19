@@ -104,7 +104,8 @@ done-condition. `task check` is the sub-minute subset for the inner loop.
 Taskfile.yaml     the named operations
 AGENTS.md         the rules, for people and agents alike
 DRIFT.md          what we carry against upstream, and why
-cmd/              binaries: core-manager, verify, drift
+cmd/              binaries: core-manager, kubeadm-bootstrap-manager, demo,
+                  verify, drift
 internal/         implementation packages
 test/integration/ integration tests against a real kcp server
 docs/             ADRs, design notes and the documentation site

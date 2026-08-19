@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 
@@ -51,6 +52,45 @@ func TestDevInfraContractLabelsMatchKustomization(t *testing.T) {
 
 	if !maps.Equal(devInfraContractLabels, want) {
 		t.Errorf("devInfraContractLabels = %v, want %v (matching %s)", devInfraContractLabels, want, path)
+	}
+}
+
+// TestBootstrapContractLabelsMatchKustomization is the same guard for the
+// kubeadm bootstrap provider's CRDs.
+func TestBootstrapContractLabelsMatchKustomization(t *testing.T) {
+	const rel = "bootstrap/kubeadm/config/crd/kustomization.yaml"
+
+	path, err := kcpfixtures.ManifestPath(kcpfixtures.ModuleClusterAPI, rel)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", rel, err)
+	}
+
+	want, err := contractmetadata.LoadKustomizeLabels(path)
+	if err != nil {
+		t.Fatalf("LoadKustomizeLabels(%q) error = %v", path, err)
+	}
+
+	if !maps.Equal(bootstrapContractLabels, want) {
+		t.Errorf("bootstrapContractLabels = %v, want %v (matching %s)", bootstrapContractLabels, want, path)
+	}
+}
+
+// The core Machine reconciler resolves spec.bootstrap.configRef through this
+// registry, so a Machine referring to a KubeadmConfig fails at reference
+// resolution unless the type is registered - in a process that may wire no
+// bootstrap controller at all.
+func TestSetupProcessGlobalsRegistersBootstrapTypes(t *testing.T) {
+	SetupProcessGlobals()
+
+	for _, kind := range []string{"KubeadmConfig", "KubeadmConfigTemplate"} {
+		gk := schema.GroupKind{Group: bootstrapv1.GroupVersion.Group, Kind: kind}
+		md, err := external.GetGKMetadata(t.Context(), nil, gk)
+		if err != nil {
+			t.Fatalf("GetGKMetadata(%v) error = %v", gk, err)
+		}
+		if got := md.GetLabels()["cluster.x-k8s.io/v1beta2"]; got != "v1beta2" {
+			t.Errorf("GetGKMetadata(%v) labels[cluster.x-k8s.io/v1beta2] = %q, want %q", gk, got, "v1beta2")
+		}
 	}
 }
 

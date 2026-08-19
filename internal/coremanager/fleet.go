@@ -82,10 +82,13 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 	return o.FleetMaxConcurrentReconciles
 }
 
-// SetupFleetControllers wires every reconciler this binary runs, once, as
-// controllers that serve every workspace the provider engages.
+// Fleet-wide wiring: what it is, and what it costs.
 //
-// It MUST be called before mgr.Start, and exactly once.
+// Every reconciler this process runs is wired once, as a controller serving
+// every workspace the provider engages, rather than once per workspace. The
+// entry points are NewFleet (the shared half) and the per-provider setup
+// functions below; all of them must be called before mgr.Start, and each
+// exactly once.
 //
 // # Nothing is left per workspace
 //
@@ -149,12 +152,54 @@ func (o SetupOptions) fleetMaxConcurrentReconciles() int {
 // nothing else — 48 MB of a 62 MB live heap, scaling with workspace creation
 // and so indistinguishable from a per-workspace cost until it was profiled.
 
-func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry *capicontrollerutil.WildcardRegistry, dev *DevInfrastructure, opts SetupOptions) error {
+// Fleet is what every fleet-wide controller in this process shares: the
+// clients that resolve the workspace from the context, the wildcard
+// registration their watches go through, the recorder that routes events to
+// the workspace their object lives in, and the one ClusterCache.
+//
+// It exists because there is more than one provider now. Each of Cluster API's
+// providers wires its own controllers, and every one of them needs exactly
+// this set - but two ClusterCaches in a process is not a duplication, it is an
+// error: controller-runtime rejects the second controller registered under the
+// same name, which is the check that stops two controllers reporting one
+// metric. Building the shared half once and handing it to each provider is
+// what lets them run in one process at all.
+type Fleet struct {
+	// Client and APIReader resolve the workspace from the context of the call.
+	Client    client.Client
+	APIReader client.Reader
+
+	// ClusterCache connects to workload clusters, keyed by logical cluster as
+	// well as by name.
+	ClusterCache clustercache.ClusterCache
+
+	// ClusterSource is how a controller watches its workload clusters:
+	// ClusterCache.GetClusterSource takes no context, so it cannot resolve the
+	// workspace the way the clients do and has to be passed instead.
+	ClusterSource clustercache.MulticlusterClusterSourceFunc
+
+	// Options is the controller configuration each fleet-wide controller gets.
+	Options controller.TypedOptions[mcreconcile.Request]
+
+	// builderOptions carry the wildcard registration and the event recorder
+	// factory into each provider's builder.
+	builderOptions []capicontrollerutil.MulticlusterOption
+}
+
+// BuilderOptions returns what a provider passes through to its own
+// SetupWithMulticlusterManager.
+func (f *Fleet) BuilderOptions() []capicontrollerutil.MulticlusterOption {
+	return f.builderOptions
+}
+
+// NewFleet builds the shared half and the ClusterCache, in that order, and
+// must be called before mgr.Start.
+func NewFleet(ctx context.Context, mgr mcmanager.Manager, registry *capicontrollerutil.WildcardRegistry, opts SetupOptions) (*Fleet, error) {
 	if mgr == nil {
-		return errors.New("a multi-cluster manager is required")
+		return nil, errors.New("a multi-cluster manager is required")
 	}
 	if registry == nil {
-		return errors.New("a wildcard registry is required: it is what joins these controllers' watches to the caches their reconcilers read through")
+		return nil, errors.New("a wildcard registry is required: it is what joins these controllers' watches to the caches their reconcilers read through")
 	}
 
 	options := controller.TypedOptions[mcreconcile.Request]{
@@ -228,7 +273,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 	// involved object's UID among other things.
 	eventSink, err := NewWorkspaceEventSink(opts.ShardConfig)
 	if err != nil {
-		return fmt.Errorf("building the workspace event sink: %w", err)
+		return nil, fmt.Errorf("building the workspace event sink: %w", err)
 	}
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventSink)
@@ -261,7 +306,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 	// ClusterCache to try. See NewWorkspaceSecretReader.
 	secretReader, err := NewWorkspaceSecretReader(opts.ShardConfig)
 	if err != nil {
-		return fmt.Errorf("building the workspace Secret reader: %w", err)
+		return nil, fmt.Errorf("building the workspace Secret reader: %w", err)
 	}
 
 	clusterCache, err := clustercache.SetupWithMulticlusterManager(ctx, mgr, clusterAwareClient, clustercache.Options{
@@ -271,15 +316,52 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		},
 	}, options, wildcard, recorderFor)
 	if err != nil {
-		return fmt.Errorf("creating fleet-wide ClusterCache: %w", err)
+		return nil, fmt.Errorf("creating fleet-wide ClusterCache: %w", err)
 	}
+
+	return &Fleet{
+		Client:         clusterAwareClient,
+		APIReader:      clusterAwareReader,
+		ClusterCache:   clusterCache,
+		ClusterSource:  clusterCache.GetMulticlusterClusterSource,
+		Options:        options,
+		builderOptions: []capicontrollerutil.MulticlusterOption{wildcard, recorderFor},
+	}, nil
+}
+
+// SetupFleetControllers wires the core Cluster and Machine reconcilers, and
+// the dev infrastructure provider's, as controllers that serve every workspace
+// the provider engages.
+//
+// It MUST be called before mgr.Start, and exactly once.
+func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry *capicontrollerutil.WildcardRegistry, dev *DevInfrastructure, opts SetupOptions) error {
+	fleet, err := NewFleet(ctx, mgr, registry, opts)
+	if err != nil {
+		return err
+	}
+	return SetupCoreControllers(ctx, mgr, fleet, dev)
+}
+
+// SetupCoreControllers wires the core and dev-infrastructure reconcilers onto
+// an already-built Fleet, for a process that wires more than one provider and
+// so has to share it.
+func SetupCoreControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fleet, dev *DevInfrastructure) error {
+	if fleet == nil {
+		return errors.New("a fleet is required")
+	}
+
+	clusterAwareClient := fleet.Client
+	clusterAwareReader := fleet.APIReader
+	clusterCache := fleet.ClusterCache
+	options := fleet.Options
+	builderOpts := fleet.BuilderOptions()
 
 	if err := (&cluster.Reconciler{
 		Client:                      clusterAwareClient,
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConnectionGracePeriod: defaultRemoteConnectionGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, fleet.ClusterSource, builderOpts...); err != nil {
 		return fmt.Errorf("creating fleet-wide Cluster controller: %w", err)
 	}
 
@@ -288,7 +370,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		APIReader:                   clusterAwareReader,
 		ClusterCache:                clusterCache,
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, fleet.ClusterSource, builderOpts...); err != nil {
 		return fmt.Errorf("creating fleet-wide Machine controller: %w", err)
 	}
 
@@ -301,7 +383,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		ContainerRuntime: dev.containerRuntime,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, wildcard, recorderFor); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, builderOpts...); err != nil {
 		return fmt.Errorf("creating fleet-wide DevCluster controller: %w", err)
 	}
 
@@ -311,7 +393,7 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 		ClusterCache:     clusterCache,
 		InMemoryManager:  dev.inMemoryManager,
 		APIServerMux:     dev.apiServerMux,
-	}).SetupWithMulticlusterManager(ctx, mgr, options, clusterCache.GetMulticlusterClusterSource, wildcard, recorderFor); err != nil {
+	}).SetupWithMulticlusterManager(ctx, mgr, options, fleet.ClusterSource, builderOpts...); err != nil {
 		return fmt.Errorf("creating fleet-wide DevMachine controller: %w", err)
 	}
 

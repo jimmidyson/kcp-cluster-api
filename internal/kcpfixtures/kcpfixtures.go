@@ -31,6 +31,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -107,6 +109,13 @@ type PublishAPIExportOptions struct {
 	// Service references for this).
 	ConversionWebhookClientConfig *apiextensionsv1.WebhookClientConfig
 
+	// PermissionClaims are claimed on resources the export does not publish
+	// but its controllers need - core v1 Secrets and ConfigMaps, for the
+	// bootstrap provider's data secrets and certificates. A claim only
+	// declares the need; the binding workspace has to accept it, which is
+	// what BindExportOptions.PermissionClaims does.
+	PermissionClaims []apisv1alpha1.PermissionClaim
+
 	// CRDTransform, if set, is called on each loaded CRD before conversion
 	// to an APIResourceSchema (and before the ConversionWebhookClientConfig
 	// injection above). Use it to work around CRDs whose conversion isn't
@@ -165,10 +174,23 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 
 	export := &apisv1alpha1.APIExport{
 		ObjectMeta: metav1.ObjectMeta{Name: opts.ExportName},
-		Spec:       apisv1alpha1.APIExportSpec{LatestResourceSchemas: schemaNames},
+		Spec: apisv1alpha1.APIExportSpec{
+			LatestResourceSchemas: schemaNames,
+			PermissionClaims:      opts.PermissionClaims,
+		},
 	}
-	if err := cl.Create(ctx, export); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("creating APIExport %s: %w", opts.ExportName, err)
+	if err := cl.Create(ctx, export); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating APIExport %s: %w", opts.ExportName, err)
+		}
+		// An existing export is brought up to the requested shape rather than
+		// left alone. Idempotence that stops at "it exists" is a trap here:
+		// a re-run that adds a schema or a permission claim would report
+		// success and change nothing, and the failure surfaces much later as a
+		// controller that cannot see a resource it was told it could.
+		if err := updateAPIExport(ctx, cl, export); err != nil {
+			return err
+		}
 	}
 
 	slice := &apisv1alpha1.APIExportEndpointSlice{
@@ -181,6 +203,24 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 		return fmt.Errorf("creating APIExportEndpointSlice %s: %w", opts.ExportName, err)
 	}
 
+	return nil
+}
+
+// updateAPIExport brings an existing APIExport in line with want.
+func updateAPIExport(ctx context.Context, cl client.Client, want *apisv1alpha1.APIExport) error {
+	got := &apisv1alpha1.APIExport{}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(want), got); err != nil {
+		return fmt.Errorf("reading existing APIExport %s: %w", want.Name, err)
+	}
+	if slices.Equal(got.Spec.LatestResourceSchemas, want.Spec.LatestResourceSchemas) &&
+		reflect.DeepEqual(got.Spec.PermissionClaims, want.Spec.PermissionClaims) {
+		return nil
+	}
+	got.Spec.LatestResourceSchemas = want.Spec.LatestResourceSchemas
+	got.Spec.PermissionClaims = want.Spec.PermissionClaims
+	if err := cl.Update(ctx, got); err != nil {
+		return fmt.Errorf("updating APIExport %s: %w", want.Name, err)
+	}
 	return nil
 }
 
@@ -218,6 +258,18 @@ type BindExportOptions struct {
 	// ExportName is the APIExport's name.
 	ExportName string
 
+	// PermissionClaims are accepted by the binding, and must be the claims
+	// the export declares: kcp serves a claimed resource to the export's
+	// controllers only where the consuming workspace has accepted the claim.
+	//
+	// Accepting them here rather than leaving it to whoever owns the
+	// workspace is [ADR-0001's decision 3] in the form this project can
+	// currently express it - a real deployment automates acceptance through a
+	// WorkspaceType's Maintain lifecycle instead.
+	//
+	// [ADR-0001's decision 3]: ../../docs/adr-0001-provider-api-permissions.md
+	PermissionClaims []apisv1alpha1.PermissionClaim
+
 	// ReadyTimeout bounds how long BindExport waits for the APIBinding to
 	// reach phase Bound. Defaults to 30s.
 	ReadyTimeout time.Duration
@@ -231,6 +283,14 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 		opts.ReadyTimeout = 30 * time.Second
 	}
 
+	accepted := make([]apisv1alpha1.AcceptablePermissionClaim, 0, len(opts.PermissionClaims))
+	for _, claim := range opts.PermissionClaims {
+		accepted = append(accepted, apisv1alpha1.AcceptablePermissionClaim{
+			PermissionClaim: claim,
+			State:           apisv1alpha1.ClaimAccepted,
+		})
+	}
+
 	binding := &apisv1alpha1.APIBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: opts.BindingName},
 		Spec: apisv1alpha1.APIBindingSpec{
@@ -240,10 +300,25 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 					Name: opts.ExportName,
 				},
 			},
+			PermissionClaims: accepted,
 		},
 	}
-	if err := cl.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("creating APIBinding %s: %w", opts.BindingName, err)
+	if err := cl.Create(ctx, binding); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating APIBinding %s: %w", opts.BindingName, err)
+		}
+		// Same reasoning as the export: a binding that exists but accepts
+		// fewer claims than asked for is not the binding that was asked for.
+		got := &apisv1alpha1.APIBinding{}
+		if err := cl.Get(ctx, client.ObjectKeyFromObject(binding), got); err != nil {
+			return fmt.Errorf("reading existing APIBinding %s: %w", opts.BindingName, err)
+		}
+		if !reflect.DeepEqual(got.Spec.PermissionClaims, accepted) {
+			got.Spec.PermissionClaims = accepted
+			if err := cl.Update(ctx, got); err != nil {
+				return fmt.Errorf("updating APIBinding %s: %w", opts.BindingName, err)
+			}
+		}
 	}
 
 	return wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, opts.ReadyTimeout, true, func(ctx context.Context) (bool, error) {
