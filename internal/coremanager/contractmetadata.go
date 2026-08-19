@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/core/webhooks/conversion"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -38,6 +39,17 @@ import (
 // than read from that file at runtime: a built binary doesn't carry the
 // source tree with it.
 var devInfraContractLabels = map[string]string{
+	"cluster.x-k8s.io/v1beta1": "v1beta1",
+	"cluster.x-k8s.io/v1beta2": "v1beta2",
+}
+
+// bootstrapContractLabels is the same thing for the kubeadm bootstrap
+// provider's CRDs (bootstrap/kubeadm/config/crd/kustomization.yaml). It is a
+// separate variable rather than a shared one because the two are the same by
+// coincidence of both being at the same contract version, not by
+// construction: a provider that moved to a new contract would change one and
+// not the other, and a shared variable would move both.
+var bootstrapContractLabels = map[string]string{
 	"cluster.x-k8s.io/v1beta1": "v1beta1",
 	"cluster.x-k8s.io/v1beta2": "v1beta2",
 }
@@ -70,6 +82,19 @@ func SetupProcessGlobals() {
 	reg := contractmetadata.New()
 	for _, kind := range []string{"DevCluster", "DevMachine", "DevClusterTemplate", "DevMachineTemplate"} {
 		reg.Add(schema.GroupKind{Group: infrav1.GroupVersion.Group, Kind: kind}, devInfraContractLabels)
+	}
+	// The bootstrap provider's types are registered whether or not this
+	// process wires that provider. What consults the registry is the *core*
+	// Machine reconciler resolving spec.bootstrap.configRef, so a Machine
+	// pointing at a KubeadmConfig fails here with
+	//
+	//	failed to get object from ref: customresourcedefinitions.apiextensions.k8s.io
+	//	"KubeadmConfig.bootstrap.cluster.x-k8s.io" not found
+	//
+	// in a process that never ran a bootstrap controller. Registering the type
+	// is a statement about what a Machine may refer to, not about what runs.
+	for _, kind := range []string{"KubeadmConfig", "KubeadmConfigTemplate"} {
+		reg.Add(schema.GroupKind{Group: bootstrapv1.GroupVersion.Group, Kind: kind}, bootstrapContractLabels)
 	}
 	external.SetGKMetadataGetter(reg.GetGKMetadata)
 

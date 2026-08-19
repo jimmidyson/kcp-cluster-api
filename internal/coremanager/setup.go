@@ -168,7 +168,14 @@ type DevInfrastructure struct {
 // NewDevInfrastructure connects to the container runtime and starts the
 // in-memory workload-cluster backend. Call it once, before any workspace is
 // set up, and pass the result to every SetupReconcilers call.
-func NewDevInfrastructure(ctx context.Context) (*DevInfrastructure, error) {
+//
+// The options are upstream's, and the one that matters is the ports. The mux
+// binds a fixed debug port and allocates workload-cluster listeners from a
+// fixed range, so two of these in one machine collide - which for a deployment
+// is the constraint documented on DevInfrastructure, and for a test suite is
+// two packages that happen to run at the same time failing with "address
+// already in use". A caller that may not be alone passes its own ports.
+func NewDevInfrastructure(ctx context.Context, opts ...inmemoryserver.WorkloadClustersMuxOption) (*DevInfrastructure, error) {
 	runtimeClient, err := container.NewDockerClient()
 	if err != nil {
 		return nil, fmt.Errorf("establishing container runtime connection: %w", err)
@@ -179,7 +186,7 @@ func NewDevInfrastructure(ctx context.Context) (*DevInfrastructure, error) {
 		return nil, fmt.Errorf("starting in-memory manager: %w", err)
 	}
 
-	apiServerMux, err := inmemoryserver.NewWorkloadClustersMux(inMemoryManager, os.Getenv("POD_IP"))
+	apiServerMux, err := inmemoryserver.NewWorkloadClustersMux(inMemoryManager, os.Getenv("POD_IP"), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating workload clusters mux: %w", err)
 	}

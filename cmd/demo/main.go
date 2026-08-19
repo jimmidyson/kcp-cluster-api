@@ -48,8 +48,10 @@ type options struct {
 	kubeconfig      string
 	kubeconfigCtx   string
 	kcpDirectory    string
+	kcpArgs         []string
 	workspaces      int
 	clusters        int
+	machines        int
 	backend         demo.Backend
 	parent          string
 	exportName      string
@@ -70,8 +72,10 @@ func main() {
 		kubeconfig      = flag.String("kcp-kubeconfig", "", "Kubeconfig of an existing kcp server. Empty starts one, with its state under --kcp-directory. --kubeconfig is accepted too.")
 		kubeconfigCtx   = flag.String("kcp-kubeconfig-context", demo.BaseContext, "Kubeconfig context to use. It must be cluster-unaware: the demo scopes it to each workspace itself.")
 		kcpDirectory    = flag.String("kcp-directory", ".demo/kcp", "Where a demo-started kcp server keeps its state and its log.")
+		kcpArgs         = flag.String("kcp-args", "", "Extra space-separated flags for a demo-started kcp server, e.g. \"--v=5\".")
 		workspaces      = flag.Int("workspaces", demo.DefaultWorkspaces, "How many workspaces to create, bind and provision a cluster in.")
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
+		machines        = flag.Int("control-plane-machines", 0, "Control plane machines per cluster. Each is a Machine, a KubeadmConfig and a DevMachine, and asking for any wires the kubeadm bootstrap provider.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
 		exportName      = flag.String("export-name", demo.DefaultExportName, "Name of the APIExport and its APIExportEndpointSlice.")
@@ -96,8 +100,10 @@ func main() {
 		kubeconfig:      firstSet(*kubeconfig, lookupString("kubeconfig")),
 		kubeconfigCtx:   *kubeconfigCtx,
 		kcpDirectory:    *kcpDirectory,
+		kcpArgs:         strings.Fields(*kcpArgs),
 		workspaces:      *workspaces,
 		clusters:        *clusters,
+		machines:        *machines,
 		backend:         demo.Backend(*backend),
 		parent:          *parent,
 		exportName:      *exportName,
@@ -154,6 +160,7 @@ func run(ctx context.Context, opts options) error {
 		WorkspacePrefix:      opts.workspacePrefix,
 		Workspaces:           opts.workspaces,
 		ClustersPerWorkspace: opts.clusters,
+		ControlPlaneMachines: opts.machines,
 		Backend:              opts.backend,
 		RunManager:           opts.runManager,
 		Timeout:              opts.timeout,
@@ -165,6 +172,12 @@ func run(ctx context.Context, opts options) error {
 	fmt.Println()
 	if err := demo.RenderTable(os.Stdout, result.Statuses); err != nil {
 		return err
+	}
+	if len(result.Machines) > 0 {
+		fmt.Println()
+		if err := demo.RenderMachineTable(os.Stdout, result.Machines); err != nil {
+			return err
+		}
 	}
 	fmt.Println()
 
@@ -194,7 +207,7 @@ func connect(ctx context.Context, opts options) (cfg *rest.Config, kubeconfigPat
 		return cfg, opts.kubeconfig, func() {}, nil
 	}
 
-	server, err := demo.StartKcp(ctx, opts.kcpDirectory, 0, opts.log)
+	server, err := demo.StartKcp(ctx, opts.kcpDirectory, 0, opts.log, opts.kcpArgs...)
 	if err != nil {
 		return nil, "", func() {}, err
 	}

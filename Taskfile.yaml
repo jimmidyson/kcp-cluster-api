@@ -77,7 +77,7 @@ tasks:
       # PATH is the right mechanism despite what the fixture's failure hint
       # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
       # fixture resolves the server as a bare "kcp" and relies on lookup.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/...
 
   demo:
     desc: Provision clusters across several kcp workspaces from one manager, and watch them come up

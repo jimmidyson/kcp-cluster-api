@@ -63,6 +63,7 @@ list.
 |---|---|---|
 | `--workspaces` | 2 | How many workspaces to create, bind and provision in |
 | `--clusters` | 1 | Clusters per workspace |
+| `--control-plane-machines` | 0 | Control plane machines per cluster. Any number above zero also wires the kubeadm bootstrap provider |
 | `--backend` | `inmemory` | `inmemory` needs nothing; `docker` provisions real containers and pulls `kindest` images |
 | `--wait` | false | Stay up after provisioning |
 | `--kcp-kubeconfig` | — | Run against a kcp server you already have, instead of starting one |
@@ -74,6 +75,32 @@ Ten workspaces is as easy as two, and is the more interesting run:
 ```sh
 task demo DEMO_FLAGS="--workspaces 10 --wait"
 ```
+
+## Machines, and the bootstrap provider
+
+```sh
+task demo DEMO_FLAGS="--control-plane-machines 1"
+```
+
+Each cluster gets a control plane `Machine`, a `KubeadmConfig` and a
+`DevMachine`, and the run wires the kubeadm bootstrap provider alongside the
+core one — still one manager, still serving every workspace. A second table
+appears:
+
+```
+WORKSPACE         MACHINE       BOOTSTRAPPED  DATA SECRET   PHASE         DETAIL
+root:capi-demo-1  demo-00-cp-0  yes           demo-00-cp-0  Provisioning  bootstrap data ready
+root:capi-demo-2  demo-00-cp-0  yes           demo-00-cp-0  Provisioning  bootstrap data ready
+```
+
+Each workspace's bootstrap data and cluster certificate authority are its own —
+different bytes under identical names, which is what
+`test/integration/bootstrap` asserts.
+
+The machines stop at `Provisioning`. Bootstrap data is what the bootstrap
+provider produces; turning it into a node needs the control plane provider,
+which is not wired yet. See
+[The bootstrap provider](../design/bootstrap-provider.md).
 
 ## Against your own kcp
 
@@ -93,9 +120,10 @@ provisioning infrastructure in many kcp workspaces at once, from one manager
 that was told about none of them — each workspace is engaged because its
 `APIBinding` became ready, and nothing names a workspace in configuration.
 
-It stops at cluster infrastructure — `DevCluster` — and does not create
-`Machine`s. A Machine reaching Ready needs a bootstrap provider and a
-control-plane provider, and neither is wired yet (the conversion plan's P1 and
+By default it stops at cluster infrastructure — `DevCluster`.
+`--control-plane-machines` adds machines and the kubeadm bootstrap provider,
+which takes them as far as bootstrap data; a Machine reaching Ready needs the
+control plane provider too, and that is not wired yet (the conversion plan's
 P2). Nor does it serve webhooks: those are single-workspace by construction
 until the webhook dispatch layer (G4) lands, so every object the demo creates
 is fully specified rather than defaulted.
