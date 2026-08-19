@@ -63,7 +63,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:unit` | Unit tests |
 | `test:integration` | Integration tests against a real kcp server |
 | `test:integration:kcp` | The subset needing only a kcp server, no container runtime |
-| `test:integration:docker` | The subset also needing a container runtime |
+| `test:integration:container-runtime` | The subset also needing a container runtime |
 | `test:sweep` | Measure per-workspace resource usage against a real kcp server |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
 | `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
@@ -104,8 +104,9 @@ done-condition. `task check` is the sub-minute subset for the inner loop.
 Taskfile.yaml     the named operations
 AGENTS.md         the rules, for people and agents alike
 DRIFT.md          what we carry against upstream, and why
-cmd/              binaries: core-manager, kubeadm-bootstrap-manager, demo,
-                  verify, drift
+cmd/              binaries: one manager per Cluster API provider
+                  (core, kubeadm-bootstrap, kubeadm-control-plane,
+                  dev-infrastructure), plus demo, verify, drift
 internal/         implementation packages
 test/integration/ integration tests against a real kcp server
 docs/             ADRs, design notes and the documentation site

@@ -16,15 +16,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package coremanager_test is the Phase 1 exit-criteria test from
-// kcp/docs/conversion-plan.md: prove that core/cmd/core-manager's wiring
-// (kcp/internal/coremanager) makes a real Cluster->Machine reconcile loop
-// work end to end inside a KCP workspace, using entirely unmodified upstream
-// reconciler/webhook code, including an admission webhook and the
-// conversion webhook, and that a reconciler write lands in the specific
-// engaged workspace rather than a wildcard/no-op (D4's flagged open
-// question - see ADR-0001).
-package coremanager_test
+// Package dockerbackend_test exercises the dev infrastructure provider's
+// *docker* backend - real containers through a real container runtime - which
+// is why it is the one suite that cannot run everywhere and has a task target
+// of its own.
+//
+// It began as the Phase 1 exit-criteria test from docs/conversion-plan.md, and
+// still asserts what that criterion asked for: a Cluster->Machine reconcile
+// loop working end to end inside a KCP workspace through entirely unmodified
+// upstream reconciler and webhook code, including an admission webhook and the
+// conversion webhook, with each reconciler write landing in the engaged
+// workspace rather than a wildcard (D4's flagged open question - see
+// ADR-0001).
+//
+// It wires the core and dev infrastructure providers onto one fleet, in one
+// process. No deployment does that any more - they are separate deployments
+// with separate APIExports - so read this as the reconcile loop under test
+// rather than as the shape anything runs. What makes them co-located here is
+// that this suite predates the split and proves something orthogonal to it.
+package dockerbackend_test
 
 import (
 	"context"
@@ -302,7 +312,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 
 	// The dev infrastructure provider's backend binds a fixed port, so it is
 	// created once per process and shared - see coremanager.DevInfrastructure.
-	dev, err := coremanager.NewDevInfrastructure(mgrCtx)
+	dev, err := coremanager.NewDevInfrastructure(mgrCtx, "127.0.0.1")
 	if err != nil {
 		t.Fatalf("failed to set up the dev infrastructure provider backend: %v", err)
 	}

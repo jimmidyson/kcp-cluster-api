@@ -29,7 +29,7 @@ marked *needs container runtime* — a working container runtime.
 | `test:unit` | Unit tests only | no | ≤ 10 s warm |
 | `test:integration` | Integration tests against a real kcp server: the composition of the two below | yes | — |
 | `test:integration:kcp` | The subset needing only a real kcp server | no | — |
-| `test:integration:docker` | The subset also needing a container runtime | yes | — |
+| `test:integration:container-runtime` | The subset also needing a container runtime | yes | — |
 | `lint` | Static analysis | no | — |
 | `tools` | Install pinned tooling into `bin/` | no | — |
 | `drift` | Report the fork's divergence from its base and compare against `DRIFT.md` | no | — |

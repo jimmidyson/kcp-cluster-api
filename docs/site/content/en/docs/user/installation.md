@@ -17,14 +17,14 @@ one workspace or none — see [Design & architecture](../design/_index.md).
 - Go — the version in the repository's root `go.mod`
 - [task](https://taskfile.dev/), the entry point for every named operation:
   `go install github.com/go-task/task/v3/cmd/task@latest`
-- A running [kcp](https://github.com/kcp-dev/kcp) instance, with an
-  `APIExport` publishing the Cluster API types, an `APIExportEndpointSlice`
-  for that export, and an `APIBinding` to it in each workspace you want
-  reconciled
-- If you run the bootstrap provider: that export must also **claim** `secrets`
-  and `configmaps`, and each workspace's `APIBinding` must accept those claims.
-  Without them the provider starts cleanly and every write it makes is refused
-  — see [The bootstrap provider](../design/bootstrap-provider.md)
+- A running [kcp](https://github.com/kcp-dev/kcp) instance, with **one
+  `APIExport` per provider** you intend to run, an `APIExportEndpointSlice` for
+  each, and an `APIBinding` to each in every workspace you want reconciled
+- Each binding must **accept that export's permission claims**. They are what
+  lets a provider reach the Secrets it writes and the types another provider
+  publishes; without them a manager starts cleanly and its writes are refused.
+  `internal/capiexports` is the topology, and `task demo` publishes it — see
+  [One APIExport per provider](../design/provider-exports.md)
 - A container runtime — only for the integration tests, which start a real
   kcp server
 
@@ -57,12 +57,13 @@ One flag is required:
 ```sh
 bin/core-manager \
   --kubeconfig ~/.kube/kcp.kubeconfig \
-  --endpoint-slice-name <apiexportendpointslice-name>
+  --endpoint-slice-name cluster-api-core
 ```
 
 - `--endpoint-slice-name` names the `APIExportEndpointSlice` **in the
   workspace your kubeconfig points at**. Its virtual workspace URLs are what
-  the manager uses to discover and cache bound workspaces.
+  the manager uses to discover and cache bound workspaces. It defaults to
+  `cluster-api-core`, this provider's own export.
 - Cluster access follows the usual controller-runtime resolution:
   `--kubeconfig`, otherwise in-cluster configuration.
 
@@ -70,21 +71,30 @@ No workspace is named anywhere. Every workspace whose `APIBinding` to the
 export becomes ready is reconciled from that moment, and stops being
 reconciled when it unbinds.
 
-### The bootstrap provider
+### The other providers
 
-The kubeadm bootstrap provider is a second binary, deployed the way Cluster API
-deploys providers — one process each, both pointed at the same endpoint slice:
+Each provider is its own deployment, consuming its own export — the way Cluster
+API deploys providers:
 
 ```sh
 go build -o bin/kubeadm-bootstrap-manager ./cmd/kubeadm-bootstrap-manager
+go build -o bin/kubeadm-control-plane-manager ./cmd/kubeadm-control-plane-manager
+go build -o bin/dev-infrastructure-manager ./cmd/dev-infrastructure-manager
 
-bin/kubeadm-bootstrap-manager \
-  --kubeconfig ~/.kube/kcp.kubeconfig \
-  --endpoint-slice-name <apiexportendpointslice-name>
+bin/kubeadm-bootstrap-manager       --kubeconfig ~/.kube/kcp.kubeconfig
+bin/kubeadm-control-plane-manager   --kubeconfig ~/.kube/kcp.kubeconfig
+bin/dev-infrastructure-manager      --kubeconfig ~/.kube/kcp.kubeconfig
 ```
 
-It serves no webhooks, and it needs the permission claims listed under
-Prerequisites. `--bootstrap-token-ttl` is the one knob of its own.
+`--endpoint-slice-name` defaults to each provider's own export, so in the
+standard topology it can be left off entirely. The bootstrap provider adds
+`--bootstrap-token-ttl`; the control plane provider adds `--etcd-dial-timeout`,
+`--etcd-call-timeout` and `--remote-conditions-grace-period` (which must be at
+least two minutes, so the ClusterCache drops a connection before the provider
+concludes a control plane is unreachable); the infrastructure provider needs a
+container runtime, serves its own admission webhooks for one workspace on the
+same terms as core, and takes `POD_IP` from the environment as the address its
+in-memory workload clusters advertise.
 
 ### Serving webhooks
 
@@ -128,11 +138,10 @@ need.
 
 ### What gets wired
 
-Per workspace: the core `Cluster` and `Machine` reconcilers, plus the docker
-development infrastructure provider's `DevCluster` and `DevMachine`
-reconcilers — the scope decision recorded in
-`docs/adr-0001-per-workspace-manager-pool.md`, not upstream's full reconciler
-set. Their admission and conversion webhooks are served only for the workspace
+The core `Cluster` and `Machine` reconcilers, and nothing else: the
+infrastructure and bootstrap providers are deployments of their own. It is
+still narrower than upstream's full core reconciler set, per the scope decision
+in `docs/adr-0001-per-workspace-manager-pool.md`. Their admission and conversion webhooks are served only for the workspace
 named by `--webhook-workspace-cluster-name`, if any.
 
 The manager also installs a kcp-aware contract-metadata resolver at startup,
@@ -143,7 +152,7 @@ manifests this build was compiled against rather than from any cluster.
 
 ## A worked example
 
-The integration test under `test/integration/coremanager` is the executable
+The integration test under `test/integration/dockerbackend` is the executable
 reference for the whole setup: it starts a real kcp server, publishes the
 `APIExport`, binds it into a workspace, waits for the endpoint slice to get
 an endpoint, and then runs the same wiring the manager does.

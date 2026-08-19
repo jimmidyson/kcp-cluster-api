@@ -30,8 +30,10 @@ It is only true of an export that claims nothing.
 
 kcp's mechanism is a **permission claim**: an `APIExport` declares a claim on a
 resource it does not publish, and a workspace that binds the export accepts it.
-This project's export claims `secrets` and `configmaps`, and
-`kcpfixtures.BindExport` accepts both on each binding — which is
+Every provider's export in this project claims `secrets`, and core's and the
+bootstrap provider's claim `configmaps` too (see `internal/capiexports` and
+[One APIExport per provider](provider-exports.md)); `kcpfixtures.BindExport`
+accepts them on each binding — which is
 [ADR-0001][adr]'s decision 3 in the form this project can currently express it;
 a deployment automates acceptance through a `WorkspaceType`'s `Maintain`
 lifecycle instead.

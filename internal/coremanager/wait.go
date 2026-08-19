@@ -57,3 +57,13 @@ func WaitForManager(ctx context.Context, mg ManagerGetter, clusterName multiclus
 	}
 	return result, nil
 }
+
+// Defaults for waiting on the workspace whose webhooks a process serves.
+//
+// They are here rather than in each binary's flags because every provider
+// binary waits the same way for the same reason, and a default that differed
+// between them would be a difference nobody chose.
+const (
+	DefaultEngagePollInterval = time.Second
+	DefaultEngageTimeout      = 5 * time.Minute
+)

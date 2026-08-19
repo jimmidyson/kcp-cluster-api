@@ -55,7 +55,6 @@ func TestFleetClientWritesClaimedResources(t *testing.T) {
 	result, err := demo.Run(ctx, demo.Options{
 		BaseConfig:      server.BaseConfig(t),
 		WorkspacePrefix: "claims-fleet",
-		ExportName:      "cluster-api-fleet-claims",
 		Workspaces:      1,
 		Backend:         demo.BackendInMemory,
 		RunManager:      true,
@@ -65,6 +64,8 @@ func TestFleetClientWritesClaimedResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("demo run failed: %v", err)
 	}
+	// The core provider's manager, which is the one whose reconcilers write
+	// the Secrets and ConfigMaps this is about.
 	if result.Manager == nil {
 		t.Fatal("demo did not return a manager")
 	}

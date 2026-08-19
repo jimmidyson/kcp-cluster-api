@@ -22,8 +22,10 @@ import (
 	"text/tabwriter"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/utils/ptr"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
@@ -142,6 +144,89 @@ type MachineStatus struct {
 
 	// Detail says what the machine is waiting on when it has no data secret.
 	Detail string
+}
+
+// ControlPlaneStatus is what the demo reports about one cluster's control
+// plane.
+type ControlPlaneStatus struct {
+	Workspace      string
+	LogicalCluster string
+	ControlPlane   string
+
+	// Initialized reports status.initialization.controlPlaneInitialized: the
+	// control plane can accept requests. It is the demo's done-condition
+	// because it is the point at which there is a cluster to talk to.
+	Initialized bool
+
+	// Ready and Desired are the replica counts, reported alongside: a control
+	// plane is initialized by its first machine and complete some time later.
+	Ready   int32
+	Desired int32
+
+	Detail string
+}
+
+// SummariseControlPlane reads one control plane's demo status.
+func SummariseControlPlane(workspace, logicalCluster string, kcp *controlplanev1.KubeadmControlPlane) ControlPlaneStatus {
+	status := ControlPlaneStatus{
+		Workspace:      workspace,
+		LogicalCluster: logicalCluster,
+		ControlPlane:   kcp.Name,
+		Ready:          ptr.Deref(kcp.Status.ReadyReplicas, 0),
+		Desired:        ptr.Deref(kcp.Spec.Replicas, 0),
+	}
+
+	if ptr.Deref(kcp.Status.Initialization.ControlPlaneInitialized, false) {
+		status.Initialized = true
+		status.Detail = "control plane initialized"
+		return status
+	}
+
+	if cond := meta.FindStatusCondition(kcp.Status.Conditions, controlplanev1.KubeadmControlPlaneAvailableCondition); cond != nil && cond.Reason != "" {
+		status.Detail = cond.Reason
+		if cond.Message != "" {
+			status.Detail = fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
+		}
+		return status
+	}
+	status.Detail = "waiting for the control plane provider"
+	return status
+}
+
+// AllInitialized reports whether every control plane can accept requests. An
+// empty snapshot is vacuously true: a run that asked for no control plane is
+// not waiting for one.
+func AllInitialized(statuses []ControlPlaneStatus) bool {
+	for _, s := range statuses {
+		if !s.Initialized {
+			return false
+		}
+	}
+	return true
+}
+
+// RenderControlPlaneTable writes the control plane snapshot as an aligned
+// table, and nothing at all when there are none.
+func RenderControlPlaneTable(w io.Writer, statuses []ControlPlaneStatus) error {
+	if len(statuses) == 0 {
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tCONTROL PLANE\tINITIALIZED\tREADY\tDETAIL"); err != nil {
+		return err
+	}
+	for _, s := range statuses {
+		initialized := "no"
+		if s.Initialized {
+			initialized = "yes"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d/%d\t%s\n",
+			s.Workspace, s.ControlPlane, initialized, s.Ready, s.Desired, s.Detail); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 // SummariseMachine reads one machine's demo status.

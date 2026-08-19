@@ -27,7 +27,7 @@ import (
 )
 
 func provisionedCluster() *clusterv1.Cluster {
-	cluster := NewCluster(ClusterName(0), BackendInMemory)
+	cluster := NewCluster(ClusterName(0), BackendInMemory, false)
 	cluster.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 	return cluster
 }
@@ -45,7 +45,7 @@ func TestSummariseProvisioned(t *testing.T) {
 // What a cluster is waiting on is the whole value of the table while a demo
 // is still running, so the condition's reason has to reach the row.
 func TestSummariseReportsWhatItIsWaitingOn(t *testing.T) {
-	cluster := NewCluster(ClusterName(0), BackendInMemory)
+	cluster := NewCluster(ClusterName(0), BackendInMemory, false)
 	cluster.Status.Conditions = []metav1.Condition{{
 		Type:    string(clusterv1.ClusterInfrastructureReadyCondition),
 		Status:  metav1.ConditionFalse,
@@ -63,7 +63,7 @@ func TestSummariseReportsWhatItIsWaitingOn(t *testing.T) {
 }
 
 func TestSummariseMissingDevCluster(t *testing.T) {
-	got := Summarise("root:demo-1", "abcdef", NewCluster(ClusterName(0), BackendInMemory), nil)
+	got := Summarise("root:demo-1", "abcdef", NewCluster(ClusterName(0), BackendInMemory, false), nil)
 	if got.Provisioned {
 		t.Error("Summarise(...).Provisioned = true with no DevCluster")
 	}

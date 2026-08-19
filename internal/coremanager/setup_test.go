@@ -38,6 +38,7 @@ func TestSetupWebhooksRefusesASecondWorkspace(t *testing.T) {
 	webhookWorkspace.Lock()
 	webhookWorkspace.name = "tenant-a"
 	webhookWorkspace.set = true
+	webhookWorkspace.wired = map[string]bool{"core": true, "dev-infrastructure": true}
 	webhookWorkspace.Unlock()
 
 	err := SetupWebhooks("tenant-b", nil)

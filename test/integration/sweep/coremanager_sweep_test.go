@@ -191,7 +191,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// workspace consumes via APIBinding. See ADR-0001's "Known gaps".
 			coremanager.SetupProcessGlobals()
 
-			dev, err := coremanager.NewDevInfrastructure(ctx)
+			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1")
 			must(t, err)
 
 			// Kept for the diagnostic below, which needs to ask the two caches

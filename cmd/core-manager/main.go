@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command core-manager runs unmodified upstream Cluster API core and
-// docker/dev-infrastructure reconcilers against every KCP workspace bound to
-// this project's APIExport, discovered and cached via
+// Command core-manager runs the unmodified upstream Cluster API core
+// reconcilers against every KCP workspace bound to the core APIExport,
+// discovered and cached via
 // github.com/kcp-dev/multicluster-provider + sigs.k8s.io/multicluster-runtime.
 // See docs/conversion-plan.md and docs/adr-0001-per-workspace-manager-pool.md.
 //
@@ -24,9 +24,10 @@ limitations under the License.
 // torn down as it unbinds, by internal/providerwiring. Two things remain
 // narrower than upstream's own core/main.go, both deliberately:
 //
-//   - Only the Cluster/Machine reconcilers and the docker/dev infrastructure
-//     provider's DevCluster/DevMachine reconcilers are wired, per ADR-0001's
-//     D3 scope decision, rather than the full reconciler set.
+//   - Only the Cluster and Machine reconcilers are wired, rather than the full
+//     core reconciler set. The other providers are deployments of their own,
+//     each consuming its own APIExport - see internal/capiexports and
+//     cmd/kubeadm-bootstrap-manager, cmd/dev-infrastructure-manager.
 //   - Webhooks are served for at most one workspace, named by
 //     --webhook-workspace-cluster-name, because routing an admission request
 //     to its own workspace is the conversion plan's G4 and is unbuilt. Left
@@ -59,6 +60,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
@@ -104,7 +106,7 @@ func init() {
 func initFlags(fs *pflag.FlagSet) {
 	logsv1.AddFlags(logOptions, fs)
 
-	fs.StringVar(&endpointSliceName, "endpoint-slice-name", "",
+	fs.StringVar(&endpointSliceName, "endpoint-slice-name", capiexports.CoreExport,
 		"Name of the APIExportEndpointSlice (in the workspace targeted by --kubeconfig/in-cluster config) "+
 			"whose virtual workspace URLs are used to discover and cache bound workspaces.")
 
@@ -141,7 +143,7 @@ func initFlags(fs *pflag.FlagSet) {
 	// reconcile - not just the types this walking skeleton's SetupReconcilers
 	// actually reconciles. Any such type has to be bound in the workspace's
 	// APIExport too, or that watch's cache sync stalls the whole controller
-	// (see kcp/test/integration/coremanager's crdPaths comment). Exposing
+	// (see test/integration/dockerbackend's crdPaths comment). Exposing
 	// these flags lets an operator disable a gate instead of also having to
 	// publish and bind that type's CRD.
 	feature.MutableGates.AddFlag(fs)
@@ -218,16 +220,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The docker/dev infrastructure provider's backend binds a fixed port, so
-	// it is created once and shared by every workspace. See
-	// coremanager.DevInfrastructure for what that sharing does and does not
-	// imply.
-	dev, err := coremanager.NewDevInfrastructure(ctx)
-	if err != nil {
-		setupLog.Error(err, "Unable to set up the dev infrastructure provider backend")
-		os.Exit(1)
-	}
-
 	// Wired before Start, and that ordering is load-bearing: the controllers
 	// register their watches with the multi-cluster manager, and
 	// multicluster-runtime hands each engagement to the components registered
@@ -239,14 +231,20 @@ func main() {
 	// the context of the reconcile it is running, so there is no per-workspace
 	// setup left to run and nothing to re-run as workspaces come and go.
 	setupLog.Info("Wiring fleet-wide reconcilers")
-	if err := coremanager.SetupFleetControllers(ctx, mgr, wildcardRegistry, dev, coremanager.SetupOptions{
+	fleet, err := coremanager.NewFleet(ctx, mgr, wildcardRegistry, coremanager.SetupOptions{
 		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
 
 		// The shard, deliberately, and not the manager's config: kubeconfig
 		// Secrets live in the workspaces on the shard, and the virtual
-		// workspace above does not serve core types at all.
+		// workspace above serves only what the core export publishes and
+		// claims.
 		ShardConfig: cfg,
-	}); err != nil {
+	})
+	if err != nil {
+		setupLog.Error(err, "Unable to build the fleet")
+		os.Exit(1)
+	}
+	if err := coremanager.SetupCoreControllers(ctx, mgr, fleet, nil); err != nil {
 		setupLog.Error(err, "Unable to wire fleet-wide reconcilers")
 		os.Exit(1)
 	}
@@ -294,7 +292,7 @@ func main() {
 			setupLog.Error(err, "Webhook workspace never became available")
 			os.Exit(1)
 		}
-		if err := coremanager.SetupWebhooks(workspace, wsMgr); err != nil {
+		if err := coremanager.SetupCoreWebhooks(workspace, wsMgr); err != nil {
 			setupLog.Error(err, "Unable to set up webhooks")
 			os.Exit(1)
 		}

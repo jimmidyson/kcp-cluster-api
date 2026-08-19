@@ -45,36 +45,29 @@ changes is *where* those objects live and how the controllers reach them:
 ## What a workspace costs
 
 One process serves many workspaces, so the practical question when sizing a
-deployment is what each one adds. Measured against a real kcp server, with the
-reconciler set this manager actually wires:
+deployment is what each one adds.
 
-| Per active workspace | Cost |
-|---|---|
-| Goroutines | ~140 |
-| Watch connections to the shard | 0 |
-| Discovery requests | 5–11 at engagement (rises with workspaces served) |
-| Ongoing requests on kcp | reconcile traffic for that workspace's own objects |
+The measured figure for a fleet-wide manager is **2.0 goroutines per active
+workspace**, flat from two workspaces to a hundred, with **no watch connections
+to the shard** — reads for every workspace come from one shared wildcard cache,
+so the shard sees the same streams whether the process serves one workspace or
+twenty. A departing workspace gives all of it back.
 
-Zero watches is not a rounding error: reads for every workspace come from one
-shared wildcard cache, so the shard sees the same eight streams whether the
-process serves one workspace or twenty. Adding a workspace costs goroutines and
-memory in the manager, not connections or watch load on kcp.
+Two things that figure does *not* account for, both stated rather than
+estimated:
 
-The goroutine cost is exactly linear, so it is the figure to size against: a
-replica serving a hundred workspaces of this shape holds on the order of 14,000
-goroutines. Engagement does not get slower as workspaces accumulate — the
-hundredth takes as long as the first.
+- **It was measured on one process wiring core and the dev infrastructure
+  provider together.** Providers are now separate deployments, and a workspace
+  is engaged by each of them, so a real installation pays that cost once per
+  deployment it runs. The multiple is known; the number has not been
+  re-measured. See [One APIExport per provider](../design/provider-exports.md).
+- **Engagement costs a handful of discovery requests per workspace per
+  process**, paid once when the workspace binds.
 
-One thing to know when workspaces come and go frequently: about 30 goroutines
-per departed workspace are retained until the process stops serving workspaces
-entirely. That accumulates with churn rather than with the number of workspaces
-currently bound.
-
-These figures come from `task test:sweep`, which measures them on your own
-machine and needs no container runtime. See
+`task test:sweep` is the instrument, and it needs no container runtime. See
 [Workspace resource usage](../design/workspace-resource-usage.md) for the
-method, both workload shapes, the full results, and the conditions they hold
-under.
+method and the full results, and read its figures as describing the wiring they
+were taken against.
 
 ## Not supported yet
 

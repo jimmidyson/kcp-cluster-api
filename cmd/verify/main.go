@@ -67,9 +67,9 @@ func main() {
 				Run:  taskTarget("test:sweep"),
 			},
 			verify.Step{
-				Name:  "test:integration:docker",
+				Name:  "test:integration:container-runtime",
 				Needs: []verify.Capability{verify.ContainerRuntime()},
-				Run:   taskTarget("test:integration:docker"),
+				Run:   taskTarget("test:integration:container-runtime"),
 			},
 		)
 	}
