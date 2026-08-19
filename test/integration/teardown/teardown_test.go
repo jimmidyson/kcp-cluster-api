@@ -84,9 +84,11 @@ func TestUnbindingAWorkspaceThatStillHoldsClusters(t *testing.T) {
 		ControlPlaneMachines: controlPlaneMachines,
 		Backend:              demo.BackendInMemory,
 		RunManager:           true,
-		Timeout:              5 * time.Minute,
-		PollInterval:         pollInterval,
-		Log:                  ctrl.Log.WithName("demo"),
+		// Ten minutes, for the reason bootstrap's budget is ten - the wait is
+		// for ready now, and CI shares two cores across six such packages.
+		Timeout:      10 * time.Minute,
+		PollInterval: pollInterval,
+		Log:          ctrl.Log.WithName("demo"),
 	})
 	if err != nil {
 		var sb strings.Builder
@@ -94,8 +96,8 @@ func TestUnbindingAWorkspaceThatStillHoldsClusters(t *testing.T) {
 		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
 		t.Fatalf("bringing the cluster up failed: %v\n%s", err, sb.String())
 	}
-	if !result.Provisioned() {
-		t.Fatalf("the run did not reach a running control plane, so what follows would not be testing a teardown")
+	if !result.Ready() {
+		t.Fatalf("the run did not reach a ready control plane, so what follows would not be testing a teardown")
 	}
 
 	for _, ws := range result.Workspaces {

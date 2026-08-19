@@ -62,9 +62,13 @@ func TestDemoProvisionsEveryWorkspace(t *testing.T) {
 		// no images. The docker backend is the same reconcilers over a real
 		// container runtime, and is exercised by
 		// test/integration/dockerbackend.
-		Backend:      demo.BackendInMemory,
-		RunManager:   true,
-		Timeout:      4 * time.Minute,
+		Backend:    demo.BackendInMemory,
+		RunManager: true,
+		// Ten minutes, matching the other packages that wait for ready: CI
+		// shares two cores across six integration packages, and a budget that
+		// only holds on an idle machine fails on a busy one rather than on a
+		// defect.
+		Timeout:      10 * time.Minute,
 		PollInterval: 2 * time.Second,
 		Log:          ctrl.Log.WithName("demo"),
 	})
@@ -75,10 +79,12 @@ func TestDemoProvisionsEveryWorkspace(t *testing.T) {
 	if got := len(result.Workspaces); got != workspaces {
 		t.Fatalf("demo created %d workspaces, want %d", got, workspaces)
 	}
-	if !result.Provisioned() {
+	if !result.Ready() {
 		var sb strings.Builder
 		_ = demo.RenderTable(&sb, result.Statuses)
-		t.Fatalf("not every cluster was provisioned:\n%s", sb.String())
+		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
+		_ = demo.RenderMachineTable(&sb, result.Machines)
+		t.Fatalf("not every cluster was ready:\n%s", sb.String())
 	}
 
 	assertWorkspacesAreIsolated(t, result)

@@ -68,9 +68,17 @@ func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 		WorkerMachines:       workerMachines,
 		Backend:              demo.BackendInMemory,
 		RunManager:           true,
-		Timeout:              5 * time.Minute,
-		PollInterval:         2 * time.Second,
-		Log:                  ctrl.Log.WithName("demo"),
+		// Ten minutes for a run that takes about two on an unloaded machine.
+		//
+		// The budget was five while demo.Run stopped at provisioned; waiting
+		// for ready is a longer wait by construction, and CI runs six
+		// integration packages against six kcp servers on a two-core runner.
+		// A budget that only holds when this package has the machine to itself
+		// fails on a busy runner rather than on a defect, which teaches nobody
+		// anything and trains everyone to press re-run.
+		Timeout:      10 * time.Minute,
+		PollInterval: 2 * time.Second,
+		Log:          ctrl.Log.WithName("demo"),
 	})
 	if err != nil {
 		var sb strings.Builder
