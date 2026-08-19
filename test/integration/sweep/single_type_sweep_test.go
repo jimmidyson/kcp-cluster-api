@@ -103,6 +103,10 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 		defaultWorkspaces: 4,
 		defaultObjects:    5,
 
+		// The one shape that still wires a controller per workspace, and the
+		// only one that may retain anything on departure.
+		wiresPerWorkspaceControllers: true,
+
 		watchedTypes:  1,
 		eventHandlers: 1,
 		facts: map[string]string{

@@ -195,7 +195,7 @@ initialized control plane on the in-memory backend.
 |---|--:|--:|
 | Goroutines | 8 | **45** |
 | Watch streams | 0 | **0** |
-| Retained after departure | 0 | **24** |
+| Retained after departure | 0 | **0** |
 | Discovery requests | 17 | **7** |
 | Reconcile requests | ~103 | **~236** |
 
@@ -208,7 +208,8 @@ shape's discovery per workspace is 7 where the four deployments together pay
 that stands one up. Each workspace's cluster gets an in-memory API server
 serving it, a `ClusterCache` accessor connected to it, and the informers that
 accessor runs; a goroutine profile taken across a departure finds exactly that
-machinery (see below). It is a per-*cluster* cost rather than a per-workspace
+machinery (see below, where it turned out to be a deadlock rather than a
+cost). It is a per-*cluster* cost rather than a per-workspace
 one — the cost of the clusters a tenant asked for rather than of serving the
 tenant.
 
@@ -264,8 +265,9 @@ where that showed up.
 
 ## What a workspace does not give back
 
-Every provider deployment gives back everything: **zero goroutines retained per
-departed workspace**, in all four, measured over twenty departures each.
+Every shape gives back everything: **zero goroutines retained per departed
+workspace**, in all four deployments over twenty departures each, and in the
+fleet.
 
 That is new, and it follows from the same change as the two-goroutine figure.
 The cost that used to be retained was **two goroutines per event-handler
@@ -286,22 +288,35 @@ single-type shape still retains 2 per departure, because it still wires a
 controller per workspace: the leak is a property of that seam, not of the
 provider. Both numbers are asserted, so neither can grow unnoticed.
 
-The fleet shape retains **24 goroutines per departed workspace**, and that is a
-different thing again. Subtracting the goroutine profile taken at one active
-workspace from the one taken with one workspace left says what they are: three
-client-go informers still running — reflector, resync, `processLoop`,
-`sharedProcessor` and the controller-runtime `Informers.Start` and `MergeChans`
-goroutines that go with them — plus a `clustercache.sendEventsToClusterSources`
-goroutine. That is a **`ClusterCache` accessor for the workload cluster**, still
-connected after the workspace that owned it has gone, and it is why this shape
-retains and the deployment shape does not: the deployment shape never stands a
-workload cluster up.
+The fleet shape retained **24 goroutines per departed workspace** until a
+goroutine profile said what they were, and what they were was not a leak but a
+**deadlock**.
 
-It is not the registration leak — this shape wires no per-workspace controllers
-either — and it is a per-*cluster* residue, so it accumulates with cluster
-churn rather than with workspace count. Chasing it means looking at when
-`ClusterCache` disconnects an accessor whose `Cluster` is gone, not at this
-project's wiring.
+Subtracting the profile taken at one active workspace from the one with one
+workspace left showed three client-go informers still running — reflector,
+resync, `processLoop`, `sharedProcessor`, and the controller-runtime
+`Informers.Start` and `MergeChans` goroutines that go with them — which is a
+`ClusterCache` accessor for a workload cluster, still connected after the
+workspace that owned it had gone. Alongside them sat the cause: one
+`clustercache.sendEventsToClusterSources` goroutine blocked acquiring
+`clusterSourcesLock`, and another blocked *inside* the send while holding it.
+
+`sendEventsToClusterSources` took the lock and then sent each event on an
+unbuffered channel without releasing it. The send waits for the source's
+consumer to take the event, and `clusterSources` is append-only with nothing to
+tell the cache when a consumer's goroutine has ended — so a source whose
+consumer had stopped reading blocked the sender forever, and with it every
+connect, disconnect and `GetClusterSource` for every cluster in the fleet. The
+accessors were not retained because nothing removed them; they were retained
+because the reconcile that removes them could no longer run.
+
+The fork now decides what to send under the lock and sends outside it, and
+bounds each send so it cannot wait for a receive that is not coming. **Every
+shape now retains zero goroutines per departed workspace**, the fleet included,
+and each asserts it: a shape whose controllers are fleet-wide is allowed no
+retention at all, and only the single-type shape — the one that still wires a
+controller per workspace — carries a budget for the handler registrations
+controller-runtime's `Kind` source never removes.
 
 The remaining fixed cost is released when the wildcard cache itself stops: kcp
 empties the `APIExportEndpointSlice` when the last `APIBinding` goes, the

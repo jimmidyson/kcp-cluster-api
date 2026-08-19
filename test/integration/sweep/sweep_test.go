@@ -144,6 +144,18 @@ type sweepConfig struct {
 	// — the assertion is what catches a shape whose wiring has changed
 	// underneath the number.
 	eventHandlers int
+	// wiresPerWorkspaceControllers says this shape builds a controller per
+	// workspace rather than fleet-wide ones, which decides what a departure is
+	// allowed to leave behind.
+	//
+	// A per-workspace controller registers its event handlers on the shared
+	// wildcard cache each time a workspace engages, and controller-runtime's
+	// Kind source has no path that removes them — so it retains, and the
+	// budget is what those registrations account for. Fleet-wide controllers
+	// register once for the process, so a departure has no registration to
+	// leak and the budget is zero.
+	wiresPerWorkspaceControllers bool
+
 	// facts describing this shape, recorded with the numbers.
 	facts map[string]string
 
@@ -582,10 +594,15 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		// The assertion is that this does not get worse. The target is zero;
 		// see the workspace resource usage design page for what reaching it
 		// would take.
-		if budget := float64(retainedGoroutinesPerEventHandler * cfg.eventHandlers); perDeparture > budget {
-			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f already known to be retained "+
-				"(%d event-handler registration(s) × %d): this shape is now keeping more per workspace than its handlers on the shared informers account for",
-				perDeparture, budget, cfg.eventHandlers, retainedGoroutinesPerEventHandler)
+		budget, why := 0.0, "its controllers are fleet-wide, so a workspace's departure has no handler registration to leave behind"
+		if cfg.wiresPerWorkspaceControllers {
+			budget = float64(retainedGoroutinesPerEventHandler * cfg.eventHandlers)
+			why = fmt.Sprintf("%d event-handler registration(s) × %d, which is what a per-workspace controller's handlers on the shared informers account for",
+				cfg.eventHandlers, retainedGoroutinesPerEventHandler)
+		}
+		if perDeparture > budget {
+			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f this shape may retain (%s)",
+				perDeparture, budget, why)
 		}
 	}
 
