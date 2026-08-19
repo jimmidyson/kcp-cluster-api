@@ -195,17 +195,17 @@ type sweepConfig struct {
 	// workspace is clear of it. Optional: a shape whose objects can be dropped
 	// by the APIBinding's own teardown leaves both nil and is unbound directly.
 	//
-	// A shape that owns a deletion *order* cannot. Deleting an APIBinding makes
-	// kcp delete every object of every bound type at once, and Cluster API's
-	// teardown is a sequence — a Cluster deletes its control plane, which
-	// deletes its Machines, which delete their InfraMachines. Removed out of
-	// order it deadlocks: the dev provider's DevMachine reconciler returns
-	// without requeueing when the DevCluster it needs is already gone
-	// (reconcilers/devmachine_reconciler.go), so the DevMachine keeps its
-	// finalizer, kcp keeps the APIBinding, and the workspace never disengages.
-	// Deleting the Cluster first and waiting is what a tenant winding a
-	// workspace down would do anyway, and it is the only sequence that reaches
-	// the departure this phase is here to measure.
+	// A shape that runs clusters wants one. Deleting an APIBinding makes kcp
+	// delete every object of every bound type at once, so a departure sample
+	// taken without this measures a whole cluster teardown in flight rather
+	// than a workspace leaving.
+	//
+	// It used to be load-bearing rather than hygiene: removed out of order,
+	// Cluster API's teardown deadlocked and the workspace never disengaged.
+	// That is fixed in the fork and asserted from the outside by
+	// test/integration/teardown, so this is now a choice about what the
+	// departure phase measures — and it is what a tenant winding a workspace
+	// down would do anyway.
 	deactivate  func(t *testing.T, ctx context.Context, tn *tenant, objects int)
 	deactivated func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool
 }
