@@ -22,7 +22,6 @@ package coremanager
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -113,6 +112,21 @@ type SetupOptions struct {
 	// cheap — also raise every workspace's private pool, which is not.
 	FleetMaxConcurrentReconciles int
 
+	// SkipControllerNameValidation allows a process to build more than one
+	// Fleet.
+	//
+	// controller-runtime records controller names in a process-global set and
+	// rejects a duplicate, because two controllers reporting one metric is a
+	// reporting fault. Each provider's fleet builds its own ClusterCache, and
+	// that controller is called "clustercache" in all of them - so a process
+	// running two providers is rejected on the second.
+	//
+	// A deployment runs one provider per process and must leave this alone.
+	// What sets it is the demo and the tests, which run several providers
+	// together on purpose, and the cost there is exactly what the check is
+	// for: reconcile metrics aggregate across the co-located providers.
+	SkipControllerNameValidation bool
+
 	// ShardConfig addresses the kcp shard the workspaces live on, as opposed to
 	// the APIExport virtual workspace the multi-cluster manager is built
 	// against.
@@ -169,13 +183,20 @@ type DevInfrastructure struct {
 // in-memory workload-cluster backend. Call it once, before any workspace is
 // set up, and pass the result to every SetupReconcilers call.
 //
+// The host is what the in-memory backend advertises its workload clusters at,
+// and it is a parameter rather than upstream's os.Getenv("POD_IP") because an
+// empty one does not fail: the backend assigns an endpoint like ":20000", the
+// DevCluster reports it, and the control plane provider then waits forever for
+// a Cluster that "does not yet have a ControlPlaneEndpoint defined". A
+// deployment passes its pod IP; a process serving itself passes 127.0.0.1.
+//
 // The options are upstream's, and the one that matters is the ports. The mux
 // binds a fixed debug port and allocates workload-cluster listeners from a
 // fixed range, so two of these in one machine collide - which for a deployment
 // is the constraint documented on DevInfrastructure, and for a test suite is
 // two packages that happen to run at the same time failing with "address
 // already in use". A caller that may not be alone passes its own ports.
-func NewDevInfrastructure(ctx context.Context, opts ...inmemoryserver.WorkloadClustersMuxOption) (*DevInfrastructure, error) {
+func NewDevInfrastructure(ctx context.Context, host string, opts ...inmemoryserver.WorkloadClustersMuxOption) (*DevInfrastructure, error) {
 	runtimeClient, err := container.NewDockerClient()
 	if err != nil {
 		return nil, fmt.Errorf("establishing container runtime connection: %w", err)
@@ -186,7 +207,7 @@ func NewDevInfrastructure(ctx context.Context, opts ...inmemoryserver.WorkloadCl
 		return nil, fmt.Errorf("starting in-memory manager: %w", err)
 	}
 
-	apiServerMux, err := inmemoryserver.NewWorkloadClustersMux(inMemoryManager, os.Getenv("POD_IP"), opts...)
+	apiServerMux, err := inmemoryserver.NewWorkloadClustersMux(inMemoryManager, host, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating workload clusters mux: %w", err)
 	}
@@ -204,6 +225,12 @@ var webhookWorkspace struct {
 	sync.Mutex
 	name multicluster.ClusterName
 	set  bool
+
+	// wired records which providers' webhooks are already registered, so that
+	// a process serving two providers wires both - and so that wiring one
+	// twice stays the no-op it was, rather than asking controller-runtime to
+	// register a path it already has.
+	wired map[string]bool
 }
 
 // SetupWebhooks wires the core Cluster/Machine admission webhooks and the
@@ -223,31 +250,72 @@ var webhookWorkspace struct {
 // admission request to its own workspace is the conversion plan's G4, which is
 // unbuilt and carries a required human review checkpoint.
 func SetupWebhooks(workspace multicluster.ClusterName, mgr ctrl.Manager) error {
+	if err := SetupCoreWebhooks(workspace, mgr); err != nil {
+		return err
+	}
+	return SetupDevInfrastructureWebhooks(workspace, mgr)
+}
+
+// SetupCoreWebhooks wires the core Cluster and Machine admission webhooks onto
+// one workspace's manager. It is what the core provider's deployment serves.
+func SetupCoreWebhooks(workspace multicluster.ClusterName, mgr ctrl.Manager) error {
+	return setupWebhooks("core", workspace, func() error {
+		if err := (&coreadmission.Cluster{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
+			return fmt.Errorf("creating Cluster webhook: %w", err)
+		}
+		if err := (&coreadmission.Machine{}).SetupWebhookWithManager(mgr); err != nil {
+			return fmt.Errorf("creating Machine webhook: %w", err)
+		}
+		return nil
+	})
+}
+
+// SetupDevInfrastructureWebhooks wires the docker/dev infrastructure
+// provider's DevCluster and DevMachine admission webhooks. It is what that
+// provider's deployment serves, and a process that runs both providers serves
+// both - for the same one workspace, which is the constraint below.
+func SetupDevInfrastructureWebhooks(workspace multicluster.ClusterName, mgr ctrl.Manager) error {
+	return setupWebhooks("dev-infrastructure", workspace, func() error {
+		if err := (&infrawebhooks.DevCluster{}).SetupWebhookWithManager(mgr); err != nil {
+			return fmt.Errorf("creating DevCluster webhook: %w", err)
+		}
+		if err := (&infrawebhooks.DevMachine{}).SetupWebhookWithManager(mgr); err != nil {
+			return fmt.Errorf("creating DevMachine webhook: %w", err)
+		}
+		return nil
+	})
+}
+
+// setupWebhooks records which workspace this process serves webhooks for, and
+// refuses a second one.
+//
+// The record is per process rather than per provider on purpose: the webhook
+// server is process-wide, and the reason a second workspace is refused - that
+// controller-runtime skips an already-registered path, leaving the first
+// workspace's client answering for everyone - does not care which provider
+// registered it.
+func setupWebhooks(provider string, workspace multicluster.ClusterName, wire func() error) error {
 	webhookWorkspace.Lock()
 	defer webhookWorkspace.Unlock()
-	if webhookWorkspace.set {
-		if webhookWorkspace.name != workspace {
-			return fmt.Errorf("cannot wire webhooks for workspace %s, already wired for %s: %w",
-				workspace, webhookWorkspace.name, providerwiring.ErrWebhooksAlreadyWired)
-		}
-		// Same workspace, already done. Repeating it would be a no-op anyway,
-		// since controller-runtime skips a path it has already registered.
+	if webhookWorkspace.set && webhookWorkspace.name != workspace {
+		return fmt.Errorf("cannot wire webhooks for workspace %s, already wired for %s: %w",
+			workspace, webhookWorkspace.name, providerwiring.ErrWebhooksAlreadyWired)
+	}
+	if webhookWorkspace.wired[provider] {
+		// Same workspace, same provider, already done. Repeating it would be a
+		// no-op anyway, since controller-runtime skips a path it has already
+		// registered.
 		return nil
 	}
 
-	if err := (&coreadmission.Cluster{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
-		return fmt.Errorf("creating Cluster webhook: %w", err)
-	}
-	if err := (&coreadmission.Machine{}).SetupWebhookWithManager(mgr); err != nil {
-		return fmt.Errorf("creating Machine webhook: %w", err)
-	}
-	if err := (&infrawebhooks.DevCluster{}).SetupWebhookWithManager(mgr); err != nil {
-		return fmt.Errorf("creating DevCluster webhook: %w", err)
-	}
-	if err := (&infrawebhooks.DevMachine{}).SetupWebhookWithManager(mgr); err != nil {
-		return fmt.Errorf("creating DevMachine webhook: %w", err)
+	if err := wire(); err != nil {
+		return err
 	}
 
+	if webhookWorkspace.wired == nil {
+		webhookWorkspace.wired = map[string]bool{}
+	}
+	webhookWorkspace.wired[provider] = true
 	webhookWorkspace.name = workspace
 	webhookWorkspace.set = true
 	return nil
@@ -261,6 +329,7 @@ func ResetWebhookWorkspaceForTest() {
 	defer webhookWorkspace.Unlock()
 	webhookWorkspace.name = ""
 	webhookWorkspace.set = false
+	webhookWorkspace.wired = nil
 }
 
 // controllerOptions is the per-controller configuration every reconciler in a

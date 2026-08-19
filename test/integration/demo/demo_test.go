@@ -61,7 +61,7 @@ func TestDemoProvisionsEveryWorkspace(t *testing.T) {
 		// The in-memory backend, so this needs no container runtime and pulls
 		// no images. The docker backend is the same reconcilers over a real
 		// container runtime, and is exercised by
-		// test/integration/coremanager.
+		// test/integration/dockerbackend.
 		Backend:      demo.BackendInMemory,
 		RunManager:   true,
 		Timeout:      4 * time.Minute,

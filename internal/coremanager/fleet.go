@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
@@ -205,6 +206,9 @@ func NewFleet(ctx context.Context, mgr mcmanager.Manager, registry *capicontroll
 	options := controller.TypedOptions[mcreconcile.Request]{
 		MaxConcurrentReconciles: opts.fleetMaxConcurrentReconciles(),
 	}
+	if opts.SkipControllerNameValidation {
+		options.SkipNameValidation = ptr.To(true)
+	}
 
 	// Every watch is one registration per shard rather than one per workspace.
 	//
@@ -342,9 +346,14 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 	return SetupCoreControllers(ctx, mgr, fleet, dev)
 }
 
-// SetupCoreControllers wires the core and dev-infrastructure reconcilers onto
-// an already-built Fleet, for a process that wires more than one provider and
-// so has to share it.
+// SetupCoreControllers wires the core reconcilers - Cluster and Machine - onto
+// an already-built Fleet.
+//
+// The infrastructure provider's reconcilers are no longer wired here: they are
+// a provider of their own, with their own APIExport and their own deployment,
+// and SetupDevInfrastructureControllers is how a process wires them. Passing a
+// DevInfrastructure here wires them too, which is what a co-located process
+// (the demo, the sweep) wants and what a deployment does not.
 func SetupCoreControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fleet, dev *DevInfrastructure) error {
 	if fleet == nil {
 		return errors.New("a fleet is required")
@@ -377,6 +386,26 @@ func SetupCoreControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fle
 	if dev == nil {
 		return nil
 	}
+	return SetupDevInfrastructureControllers(ctx, mgr, fleet, dev)
+}
+
+// SetupDevInfrastructureControllers wires the docker/dev infrastructure
+// provider's reconcilers onto an already-built Fleet, as one controller each
+// for every workspace the manager's provider engages.
+//
+// It MUST be called before mgr.Start, and exactly once.
+func SetupDevInfrastructureControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fleet, dev *DevInfrastructure) error {
+	if fleet == nil {
+		return errors.New("a fleet is required")
+	}
+	if dev == nil {
+		return errors.New("a dev infrastructure backend is required")
+	}
+
+	clusterAwareClient := fleet.Client
+	clusterCache := fleet.ClusterCache
+	options := fleet.Options
+	builderOpts := fleet.BuilderOptions()
 
 	if err := (&reconcilers.DevCluster{
 		Client:           clusterAwareClient,

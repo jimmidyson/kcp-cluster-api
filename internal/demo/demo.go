@@ -66,10 +66,13 @@ import (
 	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/bootstrapmanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
+	"github.com/jimmidyson/kcp-cluster-api/internal/controlplanemanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/feature"
@@ -83,7 +86,6 @@ import (
 // fleet.
 const (
 	DefaultParent          = "root"
-	DefaultExportName      = "cluster-api"
 	DefaultWorkspacePrefix = "capi-demo"
 	DefaultWorkspaces      = 2
 	DefaultClusters        = 1
@@ -144,10 +146,6 @@ type Options struct {
 	// workspaces are created under. Empty means DefaultParent.
 	Parent string
 
-	// ExportName names the APIExport and its APIExportEndpointSlice. Empty
-	// means DefaultExportName.
-	ExportName string
-
 	// WorkspacePrefix prefixes each created workspace's name. Empty means
 	// DefaultWorkspacePrefix.
 	WorkspacePrefix string
@@ -206,9 +204,6 @@ func (o *Options) applyDefaults() {
 	if o.Parent == "" {
 		o.Parent = DefaultParent
 	}
-	if o.ExportName == "" {
-		o.ExportName = DefaultExportName
-	}
 	if o.WorkspacePrefix == "" {
 		o.WorkspacePrefix = DefaultWorkspacePrefix
 	}
@@ -233,6 +228,20 @@ func (o *Options) applyDefaults() {
 	if o.Out == nil {
 		o.Out = io.Discard
 	}
+}
+
+// providers is the set of provider exports this run publishes and wires.
+//
+// The bootstrap and control plane providers are included only when the run asks
+// for machines: their exports would publish types nothing uses, and their
+// managers would engage every workspace to reconcile nothing. Core and the
+// infrastructure provider are always there, because a cluster is made of both.
+func (o Options) providers() []capiexports.Provider {
+	providers := []capiexports.Provider{capiexports.Core(), capiexports.Infrastructure()}
+	if o.ControlPlaneMachines > 0 {
+		providers = append(providers, capiexports.Bootstrap(), capiexports.ControlPlane())
+	}
+	return providers
 }
 
 func (o Options) validate() error {
@@ -266,8 +275,12 @@ type Result struct {
 	Workspaces []Workspace
 	Statuses   []ClusterStatus
 
-	// Machines is empty unless the run asked for control plane machines.
+	// Machines is every Machine the workspaces hold - created by the control
+	// plane provider, not by the demo.
 	Machines []MachineStatus
+
+	// ControlPlanes is empty unless the run asked for control plane machines.
+	ControlPlanes []ControlPlaneStatus
 
 	// Manager is the running multi-cluster manager, or nil when the run was
 	// told not to start one. It is exposed so a test can ask the fleet's own
@@ -277,10 +290,14 @@ type Result struct {
 	Manager mcmanager.Manager
 }
 
-// Provisioned reports whether every cluster reached provisioned, and every
-// machine the run asked for has its bootstrap data.
+// Provisioned reports whether every cluster reached provisioned and every
+// control plane the run asked for can accept requests.
+//
+// The control plane, rather than the machines: a machine with bootstrap data
+// is a machine on its way, and what a person waits for is a cluster they can
+// talk to.
 func (r Result) Provisioned() bool {
-	return AllProvisioned(r.Statuses) && AllBootstrapped(r.Machines)
+	return AllProvisioned(r.Statuses) && AllInitialized(r.ControlPlanes)
 }
 
 func fixtureScheme() (*runtime.Scheme, error) {
@@ -310,6 +327,7 @@ func ManagerScheme() (*runtime.Scheme, error) {
 		clusterv1beta1.AddToScheme,
 		clusterv1.AddToScheme,
 		bootstrapv1.AddToScheme,
+		controlplanev1.AddToScheme,
 		infrav1beta1.AddToScheme,
 		infrav1.AddToScheme,
 	} {
@@ -346,22 +364,13 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("building a client for %s: %w", opts.Parent, err)
 	}
 
-	// 1. Publish the Cluster API types out of the parent workspace.
-	crdPaths, err := manifestPaths()
+	// 1. Publish one APIExport per provider, and resolve the claims that let
+	// each provider's controllers reach the types another one publishes.
+	providers := opts.providers()
+	log.Info("Publishing the APIExports", "workspace", opts.Parent, "exports", exportNames(providers))
+	identities, err := capiexports.Publish(ctx, parentClient, providers, 2*time.Minute)
 	if err != nil {
 		return Result{}, err
-	}
-	log.Info("Publishing the APIExport", "workspace", opts.Parent, "export", opts.ExportName, "types", len(crdPaths))
-	if err := kcpfixtures.PublishAPIExport(ctx, parentClient, kcpfixtures.PublishAPIExportOptions{
-		ExportName:       opts.ExportName,
-		SchemaPrefix:     "v1",
-		CRDPaths:         crdPaths,
-		PermissionClaims: PermissionClaims,
-		// No webhook server, so no conversion strategy, so one version per
-		// type. See the package comment.
-		CRDTransform: kcpfixtures.KeepStorageVersion,
-	}); err != nil {
-		return Result{}, fmt.Errorf("publishing the APIExport: %w", err)
 	}
 
 	// 2. Create the workspaces and bind each to the export. The endpoint
@@ -382,14 +391,20 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, fmt.Errorf("building a client for workspace %s: %w", wsPath, err)
 		}
 
-		if err := kcpfixtures.BindExport(ctx, wsClient, kcpfixtures.BindExportOptions{
-			BindingName:      opts.ExportName,
-			ExportPath:       opts.Parent,
-			ExportName:       opts.ExportName,
-			PermissionClaims: PermissionClaims,
-			ReadyTimeout:     time.Minute,
-		}); err != nil {
-			return Result{}, fmt.Errorf("binding the APIExport into %s: %w", wsPath, err)
+		// One binding per export, each accepting that export's claims. A
+		// deployment automates this through a WorkspaceType's
+		// defaultAPIBindings; a tenant is not meant to hand-accept a claim per
+		// provider.
+		for _, provider := range providers {
+			if err := kcpfixtures.BindExport(ctx, wsClient, kcpfixtures.BindExportOptions{
+				BindingName:      provider.Export,
+				ExportPath:       opts.Parent,
+				ExportName:       provider.Export,
+				PermissionClaims: provider.Claims(identities),
+				ReadyTimeout:     time.Minute,
+			}); err != nil {
+				return Result{}, fmt.Errorf("binding %s into %s: %w", provider.Export, wsPath, err)
+			}
 		}
 
 		log.Info("Workspace bound", "workspace", wsPath.String(), "logicalCluster", clusterName)
@@ -400,25 +415,35 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		})
 	}
 
-	if err := kcpfixtures.WaitForAPIExportEndpointSlice(ctx, parentClient, opts.ExportName, time.Minute); err != nil {
-		return Result{}, fmt.Errorf("waiting for the APIExportEndpointSlice to get an endpoint: %w", err)
+	for _, provider := range providers {
+		if err := kcpfixtures.WaitForAPIExportEndpointSlice(ctx, parentClient, provider.Export, time.Minute); err != nil {
+			return Result{}, fmt.Errorf("waiting for %s's APIExportEndpointSlice to get an endpoint: %w", provider.Export, err)
+		}
 	}
 
 	// 3. The manager: the same wiring cmd/core-manager runs, serving every
 	// workspace bound to the export from one set of controllers.
 	var manager mcmanager.Manager
 	if opts.RunManager {
-		mgr, err := startManager(ctx, opts, parentCfg, parentClient, scheme, log)
+		managers, err := startManagers(ctx, opts, providers, parentCfg, parentClient, scheme, log)
 		if err != nil {
 			return Result{}, err
 		}
-		manager = mgr
+		manager = managers[capiexports.CoreExport]
+
+		// Every provider's manager has to have engaged the workspace before
+		// its objects are created, for the reason the wiring contract gives:
+		// an engagement is handed to the components registered at that moment
+		// and never replayed. Waiting on one of them would leave the others
+		// racing the first object.
 		for _, ws := range workspaces {
-			if _, err := coremanager.WaitForManager(ctx, mgr,
-				multicluster.ClusterName(ws.LogicalCluster), time.Second, 2*time.Minute); err != nil {
-				return Result{}, fmt.Errorf("workspace %s was never engaged: %w", ws.Path, err)
+			for _, provider := range providers {
+				if _, err := coremanager.WaitForManager(ctx, managers[provider.Export],
+					multicluster.ClusterName(ws.LogicalCluster), time.Second, 2*time.Minute); err != nil {
+					return Result{}, fmt.Errorf("workspace %s was never engaged by %s: %w", ws.Path, provider.Export, err)
+				}
 			}
-			log.Info("Workspace engaged by the manager", "workspace", ws.Path)
+			log.Info("Workspace engaged by every provider", "workspace", ws.Path)
 		}
 	}
 
@@ -433,26 +458,22 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			if err := create(ctx, ws.Client, NewDevCluster(name, opts.Backend)); err != nil {
 				return Result{}, fmt.Errorf("creating DevCluster %s in %s: %w", name, ws.Path, err)
 			}
-			if err := create(ctx, ws.Client, NewCluster(name, opts.Backend)); err != nil {
-				return Result{}, fmt.Errorf("creating Cluster %s in %s: %w", name, ws.Path, err)
+			// The control plane and the template it stamps Machines from,
+			// before the Cluster that refers to them: the Cluster reconciler
+			// resolves spec.controlPlaneRef and takes ownership of what it
+			// finds, and that ownership is what starts the control plane
+			// provider working.
+			if opts.ControlPlaneMachines > 0 {
+				if err := create(ctx, ws.Client, NewDevMachineTemplate(name, opts.Backend)); err != nil {
+					return Result{}, fmt.Errorf("creating DevMachineTemplate for %s in %s: %w", name, ws.Path, err)
+				}
+				if err := create(ctx, ws.Client, NewKubeadmControlPlane(name, opts.ControlPlaneMachines, opts.KubernetesVersion)); err != nil {
+					return Result{}, fmt.Errorf("creating KubeadmControlPlane for %s in %s: %w", name, ws.Path, err)
+				}
 			}
 
-			for m := range opts.ControlPlaneMachines {
-				machine := MachineName(name, m)
-				// Infrastructure and bootstrap configuration before the
-				// Machine, for the same reason the DevCluster comes before the
-				// Cluster: the Machine reconciler resolves both references and
-				// takes ownership of what it finds, and that ownership is what
-				// starts the other two controllers working.
-				if err := create(ctx, ws.Client, NewDevMachine(name, machine, opts.Backend)); err != nil {
-					return Result{}, fmt.Errorf("creating DevMachine %s in %s: %w", machine, ws.Path, err)
-				}
-				if err := create(ctx, ws.Client, NewKubeadmConfig(name, machine)); err != nil {
-					return Result{}, fmt.Errorf("creating KubeadmConfig %s in %s: %w", machine, ws.Path, err)
-				}
-				if err := create(ctx, ws.Client, NewControlPlaneMachine(name, machine, opts.KubernetesVersion)); err != nil {
-					return Result{}, fmt.Errorf("creating Machine %s in %s: %w", machine, ws.Path, err)
-				}
+			if err := create(ctx, ws.Client, NewCluster(name, opts.Backend, opts.ControlPlaneMachines > 0)); err != nil {
+				return Result{}, fmt.Errorf("creating Cluster %s in %s: %w", name, ws.Path, err)
 			}
 		}
 		log.Info("Clusters created", "workspace", ws.Path,
@@ -484,39 +505,113 @@ func manifestPaths() ([]string, error) {
 	return append(core, dev...), nil
 }
 
-// startManager wires and starts the fleet-wide controllers, exactly as
-// cmd/core-manager does. Anything this did differently would make the demo a
-// demonstration of something nobody deploys.
-func startManager(
+// startManagers starts one manager per provider, each addressed at its own
+// APIExport's virtual workspace - which is what a deployment does, one process
+// each. The demo runs them together so that one command shows the whole
+// system; nothing else about them differs.
+//
+// Each manager gets its own provider, its own wildcard cache and its own
+// fleet. They cannot share: a fleet is built against one export's virtual
+// workspace, and an export serves what it publishes and what it claims.
+func startManagers(
 	ctx context.Context,
 	opts Options,
+	providers []capiexports.Provider,
 	parentCfg *rest.Config,
 	parentClient client.Client,
 	scheme *runtime.Scheme,
 	log logr.Logger,
-) (mcmanager.Manager, error) {
+) (map[string]mcmanager.Manager, error) {
 	// MachinePool is on by default upstream and watched as an event source by
-	// the core reconcilers; it is outside ADR-0001's D3 publishing scope, so
-	// leaving it on stalls their cache sync against a workspace that cannot
-	// serve it.
+	// the core reconcilers; it is outside what these exports publish, so
+	// leaving it on stalls their cache sync.
 	if err := feature.MutableGates.Set("MachinePool=false"); err != nil {
 		return nil, fmt.Errorf("disabling the MachinePool feature gate: %w", err)
 	}
 	coremanager.SetupProcessGlobals()
 
+	managers := make(map[string]mcmanager.Manager, len(providers))
+	for _, provider := range providers {
+		mgr, fleet, err := newFleetFor(ctx, opts, provider.Export, parentCfg, parentClient, scheme)
+		if err != nil {
+			return nil, err
+		}
+
+		switch provider.Export {
+		case capiexports.CoreExport:
+			if err := coremanager.SetupCoreControllers(ctx, mgr, fleet, nil); err != nil {
+				return nil, fmt.Errorf("wiring the core reconcilers: %w", err)
+			}
+		case capiexports.BootstrapExport:
+			if err := bootstrapmanager.SetupFleetControllers(ctx, mgr, fleet, bootstrapmanager.Options{}); err != nil {
+				return nil, fmt.Errorf("wiring the bootstrap reconcilers: %w", err)
+			}
+		case capiexports.ControlPlaneExport:
+			if err := controlplanemanager.SetupFleetControllers(ctx, mgr, fleet, controlplanemanager.Options{}); err != nil {
+				return nil, fmt.Errorf("wiring the control plane reconcilers: %w", err)
+			}
+		case capiexports.InfraExport:
+			// Ports of its own, rather than upstream's fixed ones. A demo is
+			// something somebody runs next to whatever else they are running -
+			// another demo, an integration test, a manager they left going -
+			// and the failure when those collide arrives as "address already
+			// in use" from a component the reader has no reason to have heard
+			// of.
+			debugPort, minPort, maxPort, err := devInfrastructurePorts()
+			if err != nil {
+				return nil, err
+			}
+			// Loopback, because the workload clusters this stands up are
+			// served by this process and reached from it. An empty host is
+			// what upstream's POD_IP gives outside a pod, and it produces
+			// endpoints like ":20000" that no client can connect to.
+			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1",
+				inmemoryserver.CustomPorts{MinPort: minPort, MaxPort: maxPort, DebugPort: debugPort})
+			if err != nil {
+				return nil, fmt.Errorf("setting up the dev infrastructure provider backend: %w", err)
+			}
+			if err := coremanager.SetupDevInfrastructureControllers(ctx, mgr, fleet, dev); err != nil {
+				return nil, fmt.Errorf("wiring the dev infrastructure reconcilers: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("no wiring for APIExport %s", provider.Export)
+		}
+
+		go func(export string, mgr mcmanager.Manager) {
+			if err := mgr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error(err, "Manager exited", "export", export)
+			}
+		}(provider.Export, mgr)
+
+		managers[provider.Export] = mgr
+	}
+
+	return managers, nil
+}
+
+// newFleetFor builds the manager and fleet for one provider, against that
+// provider's own export.
+func newFleetFor(
+	ctx context.Context,
+	opts Options,
+	export string,
+	parentCfg *rest.Config,
+	parentClient client.Client,
+	scheme *runtime.Scheme,
+) (mcmanager.Manager, *coremanager.Fleet, error) {
 	registry := &capicontrollerutil.WildcardRegistry{}
-	provider, err := providerwiring.NewAPIExportProvider(parentCfg, opts.ExportName, scheme, registry)
+	provider, err := providerwiring.NewAPIExportProvider(parentCfg, export, scheme, registry)
 	if err != nil {
-		return nil, fmt.Errorf("constructing the kcp APIExport provider: %w", err)
+		return nil, nil, fmt.Errorf("constructing the kcp APIExport provider for %s: %w", export, err)
 	}
 
 	// The manager is addressed at the export's virtual workspace, not at the
 	// workspace holding the export: its RESTMapper has to describe the API
-	// surface the engaged workspaces share, which the exporting workspace
-	// does not bind.
-	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, parentClient, opts.ExportName, opts.BaseConfig, time.Minute)
+	// surface the engaged workspaces share, which the exporting workspace does
+	// not bind.
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, parentClient, export, opts.BaseConfig, time.Minute)
 	if err != nil {
-		return nil, fmt.Errorf("resolving the APIExport's virtual workspace: %w", err)
+		return nil, nil, fmt.Errorf("resolving %s's virtual workspace: %w", export, err)
 	}
 
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
@@ -525,55 +620,29 @@ func startManager(
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("setting up the multicluster manager: %w", err)
+		return nil, nil, fmt.Errorf("setting up the multicluster manager for %s: %w", export, err)
 	}
 
-	// Ports of its own, rather than upstream's fixed ones. A demo is something
-	// somebody runs next to whatever else they are running - another demo, an
-	// integration test, a manager they left going - and the failure when those
-	// collide arrives as "address already in use" from a component the reader
-	// has no reason to have heard of.
-	debugPort, minPort, maxPort, err := devInfrastructurePorts()
-	if err != nil {
-		return nil, err
-	}
-	dev, err := coremanager.NewDevInfrastructure(ctx,
-		inmemoryserver.CustomPorts{MinPort: minPort, MaxPort: maxPort, DebugPort: debugPort})
-	if err != nil {
-		return nil, fmt.Errorf("setting up the dev infrastructure provider backend: %w", err)
-	}
-
-	// Before Start, and that ordering is load-bearing: multicluster-runtime
-	// hands each engagement to the components registered at that moment and
-	// never replays earlier ones.
-	//
-	// The fleet is built once and handed to each provider. Two providers each
-	// building their own would each build a ClusterCache, and the second is
-	// rejected rather than duplicated - see coremanager.Fleet.
 	fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{
 		// The shard, not the manager's config: the ClusterCache reads
 		// kubeconfig Secrets, which live in the workspaces themselves.
 		ShardConfig: opts.BaseConfig,
+		// This process runs every provider, which a deployment does not. See
+		// the field's comment for what it costs.
+		SkipControllerNameValidation: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("building the fleet: %w", err)
+		return nil, nil, fmt.Errorf("building the fleet for %s: %w", export, err)
 	}
-	if err := coremanager.SetupCoreControllers(ctx, mgr, fleet, dev); err != nil {
-		return nil, fmt.Errorf("wiring the fleet-wide reconcilers: %w", err)
-	}
-	if opts.ControlPlaneMachines > 0 {
-		if err := bootstrapmanager.SetupFleetControllers(ctx, mgr, fleet, bootstrapmanager.Options{}); err != nil {
-			return nil, fmt.Errorf("wiring the fleet-wide bootstrap reconcilers: %w", err)
-		}
-	}
+	return mgr, fleet, nil
+}
 
-	go func() {
-		if err := mgr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Error(err, "Manager exited")
-		}
-	}()
-
-	return mgr, nil
+func exportNames(providers []capiexports.Provider) []string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Export)
+	}
+	return names
 }
 
 // waitForProvisioned polls every workspace directly - not through the
@@ -589,13 +658,20 @@ func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspac
 		if err != nil {
 			return Result{Workspaces: workspaces}, err
 		}
-		machines, err := SnapshotMachines(ctx, workspaces, opts.ClustersPerWorkspace, opts.ControlPlaneMachines)
+		machines, err := SnapshotMachines(ctx, workspaces)
 		if err != nil {
 			return Result{Workspaces: workspaces, Statuses: statuses}, err
 		}
-		result := Result{Workspaces: workspaces, Statuses: statuses, Machines: machines}
+		controlPlanes, err := SnapshotControlPlanes(ctx, workspaces, opts.ClustersPerWorkspace, opts.ControlPlaneMachines)
+		if err != nil {
+			return Result{Workspaces: workspaces, Statuses: statuses, Machines: machines}, err
+		}
+		result := Result{Workspaces: workspaces, Statuses: statuses, Machines: machines, ControlPlanes: controlPlanes}
 
 		if err := RenderTable(opts.Out, statuses); err != nil {
+			return result, err
+		}
+		if err := RenderControlPlaneTable(opts.Out, controlPlanes); err != nil {
 			return result, err
 		}
 		if err := RenderMachineTable(opts.Out, machines); err != nil {
@@ -606,8 +682,8 @@ func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspac
 			return result, nil
 		}
 		if time.Now().After(deadline) {
-			return result, fmt.Errorf("timed out after %s with %d of %d clusters provisioned and %d of %d machines bootstrapped",
-				opts.Timeout, provisionedCount(statuses), len(statuses), bootstrappedCount(machines), len(machines))
+			return result, fmt.Errorf("timed out after %s with %d of %d clusters provisioned and %d of %d control planes initialized",
+				opts.Timeout, provisionedCount(statuses), len(statuses), initializedCount(controlPlanes), len(controlPlanes))
 		}
 
 		select {
@@ -628,45 +704,78 @@ func provisionedCount(statuses []ClusterStatus) int {
 	return n
 }
 
-// SnapshotMachines reads every workspace's control plane machines, and the
+// SnapshotMachines lists the Machines each workspace holds, and the
 // KubeadmConfig each one's bootstrap data comes from.
-func SnapshotMachines(ctx context.Context, workspaces []Workspace, clustersPerWorkspace, machinesPerCluster int) ([]MachineStatus, error) {
+//
+// They are listed rather than looked up by name: the control plane provider
+// names the Machines it creates, so the demo does not know their names - which
+// is the point of having a control plane provider.
+func SnapshotMachines(ctx context.Context, workspaces []Workspace) ([]MachineStatus, error) {
+	var statuses []MachineStatus
+	for _, ws := range workspaces {
+		machines := &clusterv1.MachineList{}
+		if err := ws.Client.List(ctx, machines, client.InNamespace(Namespace)); err != nil {
+			return nil, fmt.Errorf("listing Machines in %s: %w", ws.Path, err)
+		}
+
+		for i := range machines.Items {
+			machine := &machines.Items[i]
+
+			config := &bootstrapv1.KubeadmConfig{}
+			key := client.ObjectKey{Namespace: machine.Namespace, Name: machine.Spec.Bootstrap.ConfigRef.Name}
+			if key.Name == "" {
+				config = nil
+			} else if err := ws.Client.Get(ctx, key, config); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return nil, fmt.Errorf("reading KubeadmConfig %s in %s: %w", key.Name, ws.Path, err)
+				}
+				config = nil
+			}
+
+			statuses = append(statuses, SummariseMachine(ws.Path, ws.LogicalCluster, machine, config))
+		}
+	}
+	return statuses, nil
+}
+
+// SnapshotControlPlanes reads every cluster's control plane.
+func SnapshotControlPlanes(ctx context.Context, workspaces []Workspace, clustersPerWorkspace, machinesPerCluster int) ([]ControlPlaneStatus, error) {
 	if machinesPerCluster == 0 {
 		return nil, nil
 	}
 
-	statuses := make([]MachineStatus, 0, len(workspaces)*clustersPerWorkspace*machinesPerCluster)
+	statuses := make([]ControlPlaneStatus, 0, len(workspaces)*clustersPerWorkspace)
 	for _, ws := range workspaces {
 		for n := range clustersPerWorkspace {
-			for m := range machinesPerCluster {
-				name := MachineName(ClusterName(n), m)
-				key := client.ObjectKey{Namespace: Namespace, Name: name}
+			cluster := ClusterName(n)
+			key := client.ObjectKey{Namespace: Namespace, Name: ControlPlaneName(cluster)}
 
-				machine := &clusterv1.Machine{}
-				if err := ws.Client.Get(ctx, key, machine); err != nil {
-					if apierrors.IsNotFound(err) {
-						statuses = append(statuses, MachineStatus{
-							Workspace: ws.Path, LogicalCluster: ws.LogicalCluster,
-							Machine: name, Detail: "not created yet",
-						})
-						continue
-					}
-					return nil, fmt.Errorf("reading Machine %s in %s: %w", name, ws.Path, err)
+			kcp := &controlplanev1.KubeadmControlPlane{}
+			if err := ws.Client.Get(ctx, key, kcp); err != nil {
+				if apierrors.IsNotFound(err) {
+					statuses = append(statuses, ControlPlaneStatus{
+						Workspace: ws.Path, LogicalCluster: ws.LogicalCluster,
+						ControlPlane: key.Name, Detail: "not created yet",
+					})
+					continue
 				}
-
-				config := &bootstrapv1.KubeadmConfig{}
-				if err := ws.Client.Get(ctx, key, config); err != nil {
-					if !apierrors.IsNotFound(err) {
-						return nil, fmt.Errorf("reading KubeadmConfig %s in %s: %w", name, ws.Path, err)
-					}
-					config = nil
-				}
-
-				statuses = append(statuses, SummariseMachine(ws.Path, ws.LogicalCluster, machine, config))
+				return nil, fmt.Errorf("reading KubeadmControlPlane %s in %s: %w", key.Name, ws.Path, err)
 			}
+
+			statuses = append(statuses, SummariseControlPlane(ws.Path, ws.LogicalCluster, kcp))
 		}
 	}
 	return statuses, nil
+}
+
+func initializedCount(statuses []ControlPlaneStatus) int {
+	n := 0
+	for _, s := range statuses {
+		if s.Initialized {
+			n++
+		}
+	}
+	return n
 }
 
 func bootstrappedCount(statuses []MachineStatus) int {

@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/core/webhooks/conversion"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -50,6 +51,13 @@ var devInfraContractLabels = map[string]string{
 // construction: a provider that moved to a new contract would change one and
 // not the other, and a shared variable would move both.
 var bootstrapContractLabels = map[string]string{
+	"cluster.x-k8s.io/v1beta1": "v1beta1",
+	"cluster.x-k8s.io/v1beta2": "v1beta2",
+}
+
+// controlPlaneContractLabels is the same for the kubeadm control plane
+// provider's CRDs (controlplane/kubeadm/config/crd/kustomization.yaml).
+var controlPlaneContractLabels = map[string]string{
 	"cluster.x-k8s.io/v1beta1": "v1beta1",
 	"cluster.x-k8s.io/v1beta2": "v1beta2",
 }
@@ -95,6 +103,11 @@ func SetupProcessGlobals() {
 	// is a statement about what a Machine may refer to, not about what runs.
 	for _, kind := range []string{"KubeadmConfig", "KubeadmConfigTemplate"} {
 		reg.Add(schema.GroupKind{Group: bootstrapv1.GroupVersion.Group, Kind: kind}, bootstrapContractLabels)
+	}
+	// Likewise for the control plane provider's types, which the core Cluster
+	// reconciler resolves through spec.controlPlaneRef.
+	for _, kind := range []string{"KubeadmControlPlane", "KubeadmControlPlaneTemplate"} {
+		reg.Add(schema.GroupKind{Group: controlplanev1.GroupVersion.Group, Kind: kind}, controlPlaneContractLabels)
 	}
 	external.SetGKMetadataGetter(reg.GetGKMetadata)
 

@@ -16,10 +16,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package bootstrap_test is the conversion plan's P1 exit criterion: the
-// kubeadm bootstrap provider, unmodified, producing bootstrap data for a
-// control plane machine in every workspace bound to the export, from one
-// manager.
+// Package bootstrap_test is the conversion plan's P1 and P2 exit criterion:
+// the kubeadm bootstrap and control plane providers, unmodified, bringing up a
+// control plane in every workspace bound to their exports.
 //
 // It is a separate package from test/integration/demo because it asserts
 // something that package deliberately does not: what the bootstrap provider
@@ -42,6 +41,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 const workspaces = 2
@@ -66,10 +66,22 @@ func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 	if err != nil {
 		var sb strings.Builder
 		_ = demo.RenderTable(&sb, result.Statuses)
+		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
 		_ = demo.RenderMachineTable(&sb, result.Machines)
 		t.Fatalf("run failed: %v\n%s", err, sb.String())
 	}
 
+	if got := len(result.ControlPlanes); got != workspaces {
+		t.Fatalf("run produced %d control planes, want %d", got, workspaces)
+	}
+	for _, cp := range result.ControlPlanes {
+		if !cp.Initialized {
+			t.Errorf("control plane %s in %s is not initialized: %s", cp.ControlPlane, cp.Workspace, cp.Detail)
+		}
+	}
+
+	// The Machines are the control plane provider's, not the demo's: it names
+	// and creates them, which is why they are counted rather than looked up.
 	if got := len(result.Machines); got != workspaces {
 		t.Fatalf("run produced %d machines, want %d", got, workspaces)
 	}
@@ -98,15 +110,22 @@ func assertSecretsAreWorkspaceLocal(t *testing.T, result demo.Result) {
 	seenCA := map[string]string{}
 
 	for _, ws := range result.Workspaces {
-		machine := demo.MachineName(demo.ClusterName(0), 0)
+		machines := &clusterv1.MachineList{}
+		if err := ws.Client.List(ctx, machines, client.InNamespace(demo.Namespace)); err != nil {
+			t.Fatalf("listing Machines in %s: %v", ws.Path, err)
+		}
+		if len(machines.Items) != 1 {
+			t.Fatalf("workspace %s holds %d Machines, want its own one", ws.Path, len(machines.Items))
+		}
+		machine := machines.Items[0]
 
 		config := &bootstrapv1.KubeadmConfig{}
-		key := client.ObjectKey{Namespace: demo.Namespace, Name: machine}
+		key := client.ObjectKey{Namespace: machine.Namespace, Name: machine.Spec.Bootstrap.ConfigRef.Name}
 		if err := ws.Client.Get(ctx, key, config); err != nil {
-			t.Fatalf("reading KubeadmConfig %s in %s: %v", machine, ws.Path, err)
+			t.Fatalf("reading KubeadmConfig %s in %s: %v", key.Name, ws.Path, err)
 		}
 		if config.Status.DataSecretName == "" {
-			t.Fatalf("KubeadmConfig %s in %s has no data secret", machine, ws.Path)
+			t.Fatalf("KubeadmConfig %s in %s has no data secret", key.Name, ws.Path)
 		}
 
 		data := &corev1.Secret{}
@@ -123,10 +142,9 @@ func assertSecretsAreWorkspaceLocal(t *testing.T, result demo.Result) {
 		}
 		seenBootstrapData[value] = ws.Path
 
-		// The certificate authority the bootstrap provider generated for this
-		// cluster, because there is no control plane provider to do it. Two
-		// workspaces sharing one CA would be the same class of fault as
-		// sharing bootstrap data, and a worse one.
+		// The certificate authority the control plane provider generated for
+		// this cluster. Two workspaces sharing one CA would be the same class
+		// of fault as sharing bootstrap data, and a worse one.
 		ca := &corev1.Secret{}
 		caKey := client.ObjectKey{Namespace: demo.Namespace, Name: demo.ClusterName(0) + "-ca"}
 		if err := ws.Client.Get(ctx, caKey, ca); err != nil {

@@ -54,7 +54,6 @@ type options struct {
 	machines        int
 	backend         demo.Backend
 	parent          string
-	exportName      string
 	workspacePrefix string
 	timeout         time.Duration
 	pollInterval    time.Duration
@@ -75,10 +74,9 @@ func main() {
 		kcpArgs         = flag.String("kcp-args", "", "Extra space-separated flags for a demo-started kcp server, e.g. \"--v=5\".")
 		workspaces      = flag.Int("workspaces", demo.DefaultWorkspaces, "How many workspaces to create, bind and provision a cluster in.")
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
-		machines        = flag.Int("control-plane-machines", 0, "Control plane machines per cluster. Each is a Machine, a KubeadmConfig and a DevMachine, and asking for any wires the kubeadm bootstrap provider.")
+		machines        = flag.Int("control-plane-machines", 0, "Control plane replicas per cluster. Asking for any creates a KubeadmControlPlane and wires the kubeadm bootstrap and control plane providers, which create the Machines themselves.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
-		exportName      = flag.String("export-name", demo.DefaultExportName, "Name of the APIExport and its APIExportEndpointSlice.")
 		workspacePrefix = flag.String("workspace-prefix", demo.DefaultWorkspacePrefix, "Prefix for the created workspace names.")
 		timeout         = flag.Duration("timeout", demo.DefaultTimeout, "How long to wait for every cluster to be provisioned.")
 		pollInterval    = flag.Duration("poll-interval", demo.DefaultPollInterval, "How often to refresh the status table.")
@@ -106,7 +104,6 @@ func main() {
 		machines:        *machines,
 		backend:         demo.Backend(*backend),
 		parent:          *parent,
-		exportName:      *exportName,
 		workspacePrefix: *workspacePrefix,
 		timeout:         *timeout,
 		pollInterval:    *pollInterval,
@@ -156,7 +153,6 @@ func run(ctx context.Context, opts options) error {
 	result, runErr := demo.Run(ctx, demo.Options{
 		BaseConfig:           baseConfig,
 		Parent:               opts.parent,
-		ExportName:           opts.exportName,
 		WorkspacePrefix:      opts.workspacePrefix,
 		Workspaces:           opts.workspaces,
 		ClustersPerWorkspace: opts.clusters,
@@ -172,6 +168,12 @@ func run(ctx context.Context, opts options) error {
 	fmt.Println()
 	if err := demo.RenderTable(os.Stdout, result.Statuses); err != nil {
 		return err
+	}
+	if len(result.ControlPlanes) > 0 {
+		fmt.Println()
+		if err := demo.RenderControlPlaneTable(os.Stdout, result.ControlPlanes); err != nil {
+			return err
+		}
 	}
 	if len(result.Machines) > 0 {
 		fmt.Println()
@@ -215,7 +217,7 @@ func connect(ctx context.Context, opts options) (cfg *rest.Config, kubeconfigPat
 }
 
 func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath string) {
-	fmt.Println("One manager, one shard, every workspace above served by the same controllers.")
+	fmt.Println("One shard, one manager per provider, every workspace above served by all of them.")
 	fmt.Println()
 	fmt.Println("Look around, one workspace at a time:")
 	host := strings.TrimSuffix(baseConfig.Host, "/")

@@ -63,7 +63,7 @@ tasks:
     # starts its own kcp server.
     cmds:
       - task: test:integration:kcp
-      - task: test:integration:docker
+      - task: test:integration:container-runtime
 
   test:integration:kcp:
     desc: Integration tests needing only a real kcp server, no container runtime
@@ -113,11 +113,15 @@ tasks:
       # A quantifying run is `SWEEP_WORKSPACES=100 task test:sweep`.
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=90m -count=1 -v ./test/integration/sweep/...
 
-  test:integration:docker:
+  test:integration:container-runtime:
     desc: Integration tests needing a real kcp server and a container runtime
     deps: [tools]
+    # Named for the capability rather than for what the suite exercises: the
+    # capability is why it is a step of its own, and it is the word
+    # verify-result.json reports when the environment lacks one. The suite
+    # itself is the dev infrastructure provider's docker backend.
     cmds:
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/coremanager/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration/dockerbackend/...
 
   test:scale:
     desc: Measure this environment's workspace ceiling and reconcile throughput — evidence, not a gate

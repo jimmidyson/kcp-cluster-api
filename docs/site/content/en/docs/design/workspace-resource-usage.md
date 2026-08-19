@@ -4,6 +4,18 @@ description: What one manager process costs per active workspace, measured rathe
 weight: 27
 ---
 
+{{% pageinfo color="warning" %}}
+**These figures describe an earlier wiring.** They were taken against
+per-workspace controllers wired by `coremanager.SetupReconcilers`, in a process
+running the core and dev infrastructure providers together. Both halves of that
+have since changed: controllers are fleet-wide (a workspace was then measured at
+**2.0 goroutines**, flat to a hundred and fully reclaimed on departure), and
+each provider is a deployment of its own consuming its own `APIExport`, so a
+workspace is engaged once per deployment. The method below is current and the
+instrument still runs; the numbers are a record of what the wiring cost when it
+was that wiring. See [One APIExport per provider](provider-exports.md).
+{{% /pageinfo %}}
+
 One `core-manager` process serves many workspaces. Whether that scales is a
 question about a curve: what does one more active workspace add, and what does
 a departing one give back?

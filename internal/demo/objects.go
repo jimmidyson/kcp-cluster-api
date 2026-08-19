@@ -20,8 +20,9 @@ import (
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
-	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
@@ -83,8 +84,8 @@ func NewDevCluster(name string, backend Backend) *infrav1.DevCluster {
 // project's kcp-aware contract-metadata resolver: a workspace that consumes
 // a type through an APIBinding has no CustomResourceDefinition object for
 // upstream's own resolver to read.
-func NewCluster(name string, backend Backend) *clusterv1.Cluster {
-	return &clusterv1.Cluster{
+func NewCluster(name string, backend Backend, controlPlane bool) *clusterv1.Cluster {
+	cluster := &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: Namespace,
@@ -98,6 +99,20 @@ func NewCluster(name string, backend Backend) *clusterv1.Cluster {
 			},
 		},
 	}
+
+	// The control plane reference is what makes the control plane provider
+	// take the cluster on - and what makes the bootstrap provider stop
+	// generating certificates itself, because the control plane provider owns
+	// them once there is one.
+	if controlPlane {
+		cluster.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{
+			APIGroup: controlplanev1.GroupVersion.Group,
+			Kind:     "KubeadmControlPlane",
+			Name:     ControlPlaneName(name),
+		}
+	}
+
+	return cluster
 }
 
 // DemoLabel marks every object the demo creates, so a workspace it ran
@@ -113,74 +128,17 @@ func ClusterName(n int) string {
 	return fmt.Sprintf("demo-%02d", n)
 }
 
-// MachineName names the nth control plane machine of a cluster. Like
-// ClusterName, it repeats across workspaces on purpose.
-func MachineName(cluster string, n int) string {
-	return fmt.Sprintf("%s-cp-%d", cluster, n)
-}
+// ControlPlaneName names a cluster's KubeadmControlPlane. The control plane
+// provider names the Machines it creates after it.
+func ControlPlaneName(cluster string) string { return cluster + "-cp" }
 
-// NewKubeadmConfig builds the bootstrap configuration for a control plane
-// machine.
-//
-// The spec is left at its zero value deliberately: for the first control plane
-// machine the provider fills in what kubeadm needs, and a demo that spelled
-// out an init configuration would be demonstrating the spelling rather than
-// the provider. What makes this the *init* path is the owning Machine being a
-// control plane machine of a Cluster whose control plane is not yet
-// initialized - see the bootstrap provider's handleClusterNotInitialized.
-func NewKubeadmConfig(cluster, name string) *bootstrapv1.KubeadmConfig {
-	return &bootstrapv1.KubeadmConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: Namespace,
-			Labels: map[string]string{
-				DemoLabel:                  cluster,
-				clusterv1.ClusterNameLabel: cluster,
-			},
-		},
-	}
-}
+// MachineTemplateName names the infrastructure template the control plane
+// builds its Machines from.
+func MachineTemplateName(cluster string) string { return cluster + "-cp" }
 
-// NewControlPlaneMachine builds a control plane Machine referring to the
-// KubeadmConfig and DevMachine of the same name.
-//
-// It is a standalone control plane machine: the Cluster has no
-// controlPlaneRef, which is what makes the bootstrap provider generate the
-// cluster's certificates itself rather than waiting for a control plane
-// provider to do it. That is the conversion plan's P2, and until it lands this
-// is how a Machine gets bootstrap data at all.
-func NewControlPlaneMachine(cluster, name, version string) *clusterv1.Machine {
-	return &clusterv1.Machine{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: Namespace,
-			Labels: map[string]string{
-				DemoLabel:                          cluster,
-				clusterv1.ClusterNameLabel:         cluster,
-				clusterv1.MachineControlPlaneLabel: "",
-			},
-		},
-		Spec: clusterv1.MachineSpec{
-			ClusterName: cluster,
-			Version:     version,
-			Bootstrap: clusterv1.Bootstrap{
-				ConfigRef: clusterv1.ContractVersionedObjectReference{
-					APIGroup: bootstrapv1.GroupVersion.Group,
-					Kind:     "KubeadmConfig",
-					Name:     name,
-				},
-			},
-			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
-				APIGroup: infrav1.GroupVersion.Group,
-				Kind:     "DevMachine",
-				Name:     name,
-			},
-		},
-	}
-}
-
-// NewDevMachine builds the infrastructure object for one machine.
-func NewDevMachine(cluster, name string, backend Backend) *infrav1.DevMachine {
+// NewDevMachineTemplate builds the infrastructure template a KubeadmControlPlane
+// stamps each of its Machines from.
+func NewDevMachineTemplate(cluster string, backend Backend) *infrav1.DevMachineTemplate {
 	spec := infrav1.DevMachineBackendSpec{}
 	switch backend {
 	case BackendDocker:
@@ -189,20 +147,56 @@ func NewDevMachine(cluster, name string, backend Backend) *infrav1.DevMachine {
 		spec.InMemory = &infrav1.InMemoryMachineBackendSpec{}
 	}
 
-	return &infrav1.DevMachine{
+	return &infrav1.DevMachineTemplate{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      MachineTemplateName(cluster),
 			Namespace: Namespace,
 			Labels: map[string]string{
 				DemoLabel:                  cluster,
 				clusterv1.ClusterNameLabel: cluster,
 			},
 		},
-		Spec: infrav1.DevMachineSpec{Backend: spec},
+		Spec: infrav1.DevMachineTemplateSpec{
+			Template: infrav1.DevMachineTemplateResource{
+				Spec: infrav1.DevMachineSpec{Backend: spec},
+			},
+		},
 	}
 }
 
-// DefaultKubernetesVersion is what demo machines ask for. The bootstrap
+// NewKubeadmControlPlane builds a cluster's control plane.
+//
+// The kubeadmConfigSpec is left at its zero value, as the KubeadmConfigs the
+// demo used to create by hand were: for the first control plane machine the
+// bootstrap provider fills in what kubeadm needs, and a demo that spelled out
+// an init configuration would be demonstrating the spelling.
+func NewKubeadmControlPlane(cluster string, replicas int, version string) *controlplanev1.KubeadmControlPlane {
+	return &controlplanev1.KubeadmControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ControlPlaneName(cluster),
+			Namespace: Namespace,
+			Labels: map[string]string{
+				DemoLabel:                  cluster,
+				clusterv1.ClusterNameLabel: cluster,
+			},
+		},
+		Spec: controlplanev1.KubeadmControlPlaneSpec{
+			Replicas: ptr.To(int32(replicas)), //nolint:gosec // a replica count from a flag, not arithmetic on untrusted input.
+			Version:  version,
+			MachineTemplate: controlplanev1.KubeadmControlPlaneMachineTemplate{
+				Spec: controlplanev1.KubeadmControlPlaneMachineTemplateSpec{
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: infrav1.GroupVersion.Group,
+						Kind:     "DevMachineTemplate",
+						Name:     MachineTemplateName(cluster),
+					},
+				},
+			},
+		},
+	}
+}
+
+// DefaultKubernetesVersion is what demo clusters ask for. The bootstrap
 // provider parses it to decide which kubeadm API version to marshal, so it has
 // to be a real version rather than a placeholder.
 const DefaultKubernetesVersion = "v1.34.0"

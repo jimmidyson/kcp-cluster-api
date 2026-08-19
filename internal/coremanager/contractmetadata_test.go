@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 
@@ -72,6 +73,44 @@ func TestBootstrapContractLabelsMatchKustomization(t *testing.T) {
 
 	if !maps.Equal(bootstrapContractLabels, want) {
 		t.Errorf("bootstrapContractLabels = %v, want %v (matching %s)", bootstrapContractLabels, want, path)
+	}
+}
+
+// TestControlPlaneContractLabelsMatchKustomization is the same guard for the
+// kubeadm control plane provider's CRDs.
+func TestControlPlaneContractLabelsMatchKustomization(t *testing.T) {
+	const rel = "controlplane/kubeadm/config/crd/kustomization.yaml"
+
+	path, err := kcpfixtures.ManifestPath(kcpfixtures.ModuleClusterAPI, rel)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", rel, err)
+	}
+
+	want, err := contractmetadata.LoadKustomizeLabels(path)
+	if err != nil {
+		t.Fatalf("LoadKustomizeLabels(%q) error = %v", path, err)
+	}
+
+	if !maps.Equal(controlPlaneContractLabels, want) {
+		t.Errorf("controlPlaneContractLabels = %v, want %v (matching %s)", controlPlaneContractLabels, want, path)
+	}
+}
+
+// The core Cluster reconciler resolves spec.controlPlaneRef through this
+// registry, so a Cluster naming a KubeadmControlPlane fails at reference
+// resolution unless the type is registered.
+func TestSetupProcessGlobalsRegistersControlPlaneTypes(t *testing.T) {
+	SetupProcessGlobals()
+
+	for _, kind := range []string{"KubeadmControlPlane", "KubeadmControlPlaneTemplate"} {
+		gk := schema.GroupKind{Group: controlplanev1.GroupVersion.Group, Kind: kind}
+		md, err := external.GetGKMetadata(t.Context(), nil, gk)
+		if err != nil {
+			t.Fatalf("GetGKMetadata(%v) error = %v", gk, err)
+		}
+		if got := md.GetLabels()["cluster.x-k8s.io/v1beta2"]; got != "v1beta2" {
+			t.Errorf("GetGKMetadata(%v) labels[cluster.x-k8s.io/v1beta2] = %q, want %q", gk, got, "v1beta2")
+		}
 	}
 }
 

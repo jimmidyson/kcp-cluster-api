@@ -8,10 +8,11 @@ weight: 5
 task demo
 ```
 
-That starts a single-shard kcp server, publishes the Cluster API types out of
-its `root` workspace, creates two workspaces bound to them, runs the same
-fleet-wide controllers `core-manager` runs, and provisions a cluster in each —
-then prints what every workspace's cluster is doing until they are all up:
+That starts a single-shard kcp server, publishes **one `APIExport` per
+provider** out of its `root` workspace, creates two workspaces bound to all of
+them, runs each provider's controllers — the same wiring each provider's own
+deployment runs — and provisions a cluster in each workspace, printing what
+they are doing until they are all up:
 
 ```
 WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  DETAIL
@@ -21,8 +22,12 @@ root:capi-demo-2  2hnz892clhia2ohv  demo-00  yes          infrastructure provisi
 
 Both clusters are called `demo-00`, in both workspaces, on purpose: identical
 names are what makes a cross-workspace confusion visible rather than plausible.
-One manager process, one set of controllers, one shard — and each workspace's
-objects stay its own.
+One shard, one manager per provider, every workspace served by all of them —
+and each workspace's objects stay its own.
+
+The demo runs those managers in a single process for convenience. A deployment
+runs one process each; see
+[One APIExport per provider](../design/provider-exports.md).
 
 It takes about a minute, needs no container runtime, and pulls no images.
 
@@ -82,25 +87,30 @@ task demo DEMO_FLAGS="--workspaces 10 --wait"
 task demo DEMO_FLAGS="--control-plane-machines 1"
 ```
 
-Each cluster gets a control plane `Machine`, a `KubeadmConfig` and a
-`DevMachine`, and the run wires the kubeadm bootstrap provider alongside the
-core one — still one manager, still serving every workspace. A second table
-appears:
+Each cluster gets a `KubeadmControlPlane` with that many replicas, and the run
+also publishes and wires the kubeadm bootstrap and control plane providers. The
+control plane provider creates the Machines, their `KubeadmConfig`s and their
+`DevMachine`s itself — the demo does not name them:
 
 ```
-WORKSPACE         MACHINE       BOOTSTRAPPED  DATA SECRET   PHASE         DETAIL
-root:capi-demo-1  demo-00-cp-0  yes           demo-00-cp-0  Provisioning  bootstrap data ready
-root:capi-demo-2  demo-00-cp-0  yes           demo-00-cp-0  Provisioning  bootstrap data ready
+WORKSPACE         CONTROL PLANE  INITIALIZED  READY  DETAIL
+root:capi-demo-1  demo-00-cp     yes          0/1    control plane initialized
+root:capi-demo-2  demo-00-cp     yes          0/1    control plane initialized
+
+WORKSPACE         MACHINE           BOOTSTRAPPED  DATA SECRET       PHASE        DETAIL
+root:capi-demo-1  demo-00-cp-ndnxq  yes           demo-00-cp-ndnxq  Provisioned  bootstrap data ready
+root:capi-demo-2  demo-00-cp-g5ccb  yes           demo-00-cp-g5ccb  Provisioned  bootstrap data ready
 ```
 
-Each workspace's bootstrap data and cluster certificate authority are its own —
-different bytes under identical names, which is what
+**Initialized** means the control plane can accept requests: there is a cluster
+there. Each workspace's bootstrap data and cluster certificate authority are its
+own — different bytes under identical names, which is what
 `test/integration/bootstrap` asserts.
 
-The machines stop at `Provisioning`. Bootstrap data is what the bootstrap
-provider produces; turning it into a node needs the control plane provider,
-which is not wired yet. See
-[The bootstrap provider](../design/bootstrap-provider.md).
+`READY 0/1` alongside `INITIALIZED yes` is not a contradiction: a control plane
+is initialized by its first machine and reports a replica ready once that
+machine passes every health check the provider makes against the workload
+cluster.
 
 ## Against your own kcp
 
@@ -121,10 +131,8 @@ that was told about none of them — each workspace is engaged because its
 `APIBinding` became ready, and nothing names a workspace in configuration.
 
 By default it stops at cluster infrastructure — `DevCluster`.
-`--control-plane-machines` adds machines and the kubeadm bootstrap provider,
-which takes them as far as bootstrap data; a Machine reaching Ready needs the
-control plane provider too, and that is not wired yet (the conversion plan's
-P2). Nor does it serve webhooks: those are single-workspace by construction
+`--control-plane-machines` adds a control plane, and with it the kubeadm
+bootstrap and control plane providers. It does not serve webhooks: those are single-workspace by construction
 until the webhook dispatch layer (G4) lands, so every object the demo creates
 is fully specified rather than defaulted.
 
