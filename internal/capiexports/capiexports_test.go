@@ -147,6 +147,10 @@ func TestClaimGraphMatchesTheWiring(t *testing.T) {
 		// The bootstrap provider reads the control plane a Machine belongs to,
 		// to resolve its version.
 		{Bootstrap(), ControlPlaneExport, "kubeadmcontrolplanes"},
+		// Reconciling a worker's config walks the owner chain up from its
+		// Machine, so the links in it have to be readable.
+		{Bootstrap(), CoreExport, "machinesets"},
+		{Bootstrap(), CoreExport, "machinedeployments"},
 		// The control plane provider authors what it claims from these two:
 		// it creates the Machines its control plane is made of and the
 		// KubeadmConfigs that bootstrap them.

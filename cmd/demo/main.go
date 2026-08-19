@@ -52,6 +52,7 @@ type options struct {
 	workspaces      int
 	clusters        int
 	machines        int
+	workers         int
 	backend         demo.Backend
 	parent          string
 	workspacePrefix string
@@ -74,6 +75,7 @@ func main() {
 		kcpArgs         = flag.String("kcp-args", "", "Extra space-separated flags for a demo-started kcp server, e.g. \"--v=5\".")
 		workspaces      = flag.Int("workspaces", demo.DefaultWorkspaces, "How many workspaces to create, bind and provision a cluster in.")
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
+		workers         = flag.Int("worker-machines", 0, "Worker machines per cluster, as a MachineDeployment. Needs --control-plane-machines: a worker has no control plane to join otherwise.")
 		machines        = flag.Int("control-plane-machines", 0, "Control plane replicas per cluster. Asking for any creates a KubeadmControlPlane and wires the kubeadm bootstrap and control plane providers, which create the Machines themselves.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
@@ -102,6 +104,7 @@ func main() {
 		workspaces:      *workspaces,
 		clusters:        *clusters,
 		machines:        *machines,
+		workers:         *workers,
 		backend:         demo.Backend(*backend),
 		parent:          *parent,
 		workspacePrefix: *workspacePrefix,
@@ -157,6 +160,7 @@ func run(ctx context.Context, opts options) error {
 		Workspaces:           opts.workspaces,
 		ClustersPerWorkspace: opts.clusters,
 		ControlPlaneMachines: opts.machines,
+		WorkerMachines:       opts.workers,
 		Backend:              opts.backend,
 		RunManager:           opts.runManager,
 		Timeout:              opts.timeout,
@@ -222,7 +226,23 @@ func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath 
 	fmt.Println("Look around, one workspace at a time:")
 	host := strings.TrimSuffix(baseConfig.Host, "/")
 	for _, ws := range result.Workspaces {
-		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s get clusters,devclusters -A\n",
+		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s get clusters,machines -A\n",
 			kubeconfigPath, demo.BaseContext, host, ws.Path)
+	}
+
+	if len(result.ControlPlanes) == 0 {
+		return
+	}
+
+	// The workload clusters themselves. Their API servers are the dev
+	// provider's in-memory ones, served by this process - so they answer only
+	// while the demo is running, which is what --wait is for.
+	fmt.Println()
+	fmt.Println("Talk to a workload cluster (while this is running):")
+	for _, ws := range result.Workspaces {
+		cluster := demo.ClusterName(0)
+		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s -n %s get secret %s -o jsonpath='{.data.value}' | base64 -d > /tmp/%s.kubeconfig\n",
+			kubeconfigPath, demo.BaseContext, host, ws.Path, demo.Namespace, demo.KubeconfigSecretName(cluster), cluster)
+		fmt.Printf("  kubectl --kubeconfig /tmp/%s.kubeconfig get nodes   # %s\n", cluster, ws.Path)
 	}
 }

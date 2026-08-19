@@ -44,7 +44,15 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
-const workspaces = 2
+const (
+	workspaces = 2
+
+	// One control plane machine and one worker, per workspace: the smallest
+	// shape that exercises both providers that create Machines.
+	controlPlaneMachines = 1
+	workerMachines       = 1
+	machinesPerWorkspace = controlPlaneMachines + workerMachines
+)
 
 func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 	ctrl.SetLogger(testr.New(t))
@@ -56,7 +64,8 @@ func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 		BaseConfig:           server.BaseConfig(t),
 		WorkspacePrefix:      "capi-bootstrap",
 		Workspaces:           workspaces,
-		ControlPlaneMachines: 1,
+		ControlPlaneMachines: controlPlaneMachines,
+		WorkerMachines:       workerMachines,
 		Backend:              demo.BackendInMemory,
 		RunManager:           true,
 		Timeout:              5 * time.Minute,
@@ -82,8 +91,8 @@ func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 
 	// The Machines are the control plane provider's, not the demo's: it names
 	// and creates them, which is why they are counted rather than looked up.
-	if got := len(result.Machines); got != workspaces {
-		t.Fatalf("run produced %d machines, want %d", got, workspaces)
+	if got, want := len(result.Machines), workspaces*machinesPerWorkspace; got != want {
+		t.Fatalf("run produced %d machines, want %d", got, want)
 	}
 	for _, machine := range result.Machines {
 		if !machine.Bootstrapped {
@@ -108,16 +117,29 @@ func assertSecretsAreWorkspaceLocal(t *testing.T, result demo.Result) {
 
 	seenBootstrapData := map[string]string{} // data digest -> workspace
 	seenCA := map[string]string{}
+	seenKubeconfig := map[string]string{}
 
 	for _, ws := range result.Workspaces {
 		machines := &clusterv1.MachineList{}
 		if err := ws.Client.List(ctx, machines, client.InNamespace(demo.Namespace)); err != nil {
 			t.Fatalf("listing Machines in %s: %v", ws.Path, err)
 		}
-		if len(machines.Items) != 1 {
-			t.Fatalf("workspace %s holds %d Machines, want its own one", ws.Path, len(machines.Items))
+		if len(machines.Items) != machinesPerWorkspace {
+			t.Fatalf("workspace %s holds %d Machines, want its own %d", ws.Path, len(machines.Items), machinesPerWorkspace)
 		}
-		machine := machines.Items[0]
+		// The control plane machine specifically: its KubeadmConfig carries
+		// the data the first machine of a cluster boots from, and a list does
+		// not promise an order.
+		var machine *clusterv1.Machine
+		for i := range machines.Items {
+			if _, isControlPlane := machines.Items[i].Labels[clusterv1.MachineControlPlaneLabel]; isControlPlane {
+				machine = &machines.Items[i]
+				break
+			}
+		}
+		if machine == nil {
+			t.Fatalf("workspace %s holds no control plane Machine", ws.Path)
+		}
 
 		config := &bootstrapv1.KubeadmConfig{}
 		key := client.ObjectKey{Namespace: machine.Namespace, Name: machine.Spec.Bootstrap.ConfigRef.Name}
@@ -150,6 +172,23 @@ func assertSecretsAreWorkspaceLocal(t *testing.T, result demo.Result) {
 		if err := ws.Client.Get(ctx, caKey, ca); err != nil {
 			t.Fatalf("reading the cluster CA Secret %s in %s: %v", caKey.Name, ws.Path, err)
 		}
+		// The kubeconfig the control plane provider wrote for this cluster.
+		// It names that cluster's API server and embeds that cluster's CA, so
+		// two workspaces holding the same bytes would mean one of them is
+		// being handed the other's cluster.
+		kubeconfig := &corev1.Secret{}
+		kubeconfigKey := client.ObjectKey{Namespace: demo.Namespace, Name: demo.KubeconfigSecretName(demo.ClusterName(0))}
+		if err := ws.Client.Get(ctx, kubeconfigKey, kubeconfig); err != nil {
+			t.Fatalf("reading the workload cluster kubeconfig %s in %s: %v", kubeconfigKey.Name, ws.Path, err)
+		}
+		if len(kubeconfig.Data["value"]) == 0 {
+			t.Errorf("kubeconfig Secret %s in %s is empty", kubeconfigKey.Name, ws.Path)
+		}
+		if other, ok := seenKubeconfig[string(kubeconfig.Data["value"])]; ok {
+			t.Errorf("workspaces %s and %s hold the same workload cluster kubeconfig", other, ws.Path)
+		}
+		seenKubeconfig[string(kubeconfig.Data["value"])] = ws.Path
+
 		caValue := string(ca.Data["tls.crt"])
 		if caValue == "" {
 			t.Errorf("cluster CA Secret %s in %s has no certificate", caKey.Name, ws.Path)

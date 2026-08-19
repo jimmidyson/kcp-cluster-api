@@ -37,6 +37,8 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
+	"sigs.k8s.io/cluster-api/core/reconcilers/machinedeployment"
+	"sigs.k8s.io/cluster-api/core/reconcilers/machineset"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 	capimulticluster "sigs.k8s.io/cluster-api/util/multicluster"
@@ -346,8 +348,14 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 	return SetupCoreControllers(ctx, mgr, fleet, dev)
 }
 
-// SetupCoreControllers wires the core reconcilers - Cluster and Machine - onto
-// an already-built Fleet.
+// SetupCoreControllers wires the core reconcilers - Cluster, Machine,
+// MachineSet and MachineDeployment - onto an already-built Fleet.
+//
+// MachineSet and MachineDeployment are what make a worker pool possible: a
+// MachineDeployment owns MachineSets, which own Machines, and without them a
+// cluster can have only the Machines somebody wrote by hand. They are still
+// short of upstream's full core set - ClusterClass, topology, MachineHealthCheck
+// and the rest are not wired.
 //
 // The infrastructure provider's reconcilers are no longer wired here: they are
 // a provider of their own, with their own APIExport and their own deployment,
@@ -381,6 +389,23 @@ func SetupCoreControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fle
 		RemoteConditionsGracePeriod: defaultRemoteConditionsGracePeriod,
 	}).SetupWithMulticlusterManager(ctx, mgr, options, fleet.ClusterSource, builderOpts...); err != nil {
 		return fmt.Errorf("creating fleet-wide Machine controller: %w", err)
+	}
+
+	if err := (&machineset.Reconciler{
+		Client:       clusterAwareClient,
+		APIReader:    clusterAwareReader,
+		ClusterCache: clusterCache,
+	}).SetupWithMulticlusterManager(ctx, mgr, options, fleet.ClusterSource, builderOpts...); err != nil {
+		return fmt.Errorf("creating fleet-wide MachineSet controller: %w", err)
+	}
+
+	// No cluster source: this is the one core reconciler that watches nothing
+	// on the workload clusters.
+	if err := (&machinedeployment.Reconciler{
+		Client:    clusterAwareClient,
+		APIReader: clusterAwareReader,
+	}).SetupWithMulticlusterManager(ctx, mgr, options, builderOpts...); err != nil {
+		return fmt.Errorf("creating fleet-wide MachineDeployment controller: %w", err)
 	}
 
 	if dev == nil {

@@ -168,6 +168,11 @@ type Options struct {
 	// not wired.
 	ControlPlaneMachines int
 
+	// WorkerMachines is how many worker machines each cluster gets, as a
+	// MachineDeployment. Workers need a control plane to join, so asking for
+	// them without ControlPlaneMachines is rejected.
+	WorkerMachines int
+
 	// KubernetesVersion is what those machines ask for. Empty means
 	// DefaultKubernetesVersion.
 	KubernetesVersion string
@@ -254,6 +259,9 @@ func (o Options) validate() error {
 	if o.ClustersPerWorkspace < 1 {
 		return fmt.Errorf("ClustersPerWorkspace = %d, want at least 1", o.ClustersPerWorkspace)
 	}
+	if o.WorkerMachines > 0 && o.ControlPlaneMachines == 0 {
+		return errors.New("WorkerMachines without ControlPlaneMachines: a worker has no control plane to join")
+	}
 	return o.Backend.Validate()
 }
 
@@ -282,6 +290,10 @@ type Result struct {
 	// ControlPlanes is empty unless the run asked for control plane machines.
 	ControlPlanes []ControlPlaneStatus
 
+	// ExpectedMachines is how many Machines the run asked for across every
+	// workspace, control plane and worker together.
+	ExpectedMachines int
+
 	// Manager is the running multi-cluster manager, or nil when the run was
 	// told not to start one. It is exposed so a test can ask the fleet's own
 	// clients what they can see and do, which is a different question from
@@ -290,14 +302,19 @@ type Result struct {
 	Manager mcmanager.Manager
 }
 
-// Provisioned reports whether every cluster reached provisioned and every
-// control plane the run asked for can accept requests.
+// Provisioned reports whether every cluster reached provisioned, every control
+// plane the run asked for can accept requests, and every machine it asked for
+// exists with its bootstrap data.
 //
-// The control plane, rather than the machines: a machine with bootstrap data
-// is a machine on its way, and what a person waits for is a cluster they can
-// talk to.
+// The control plane leads because it is what a person waits for: a cluster
+// they can talk to. The machine count is checked as well as their state, since
+// a worker pool that created no Machines at all would otherwise satisfy
+// "every machine is bootstrapped" vacuously.
 func (r Result) Provisioned() bool {
-	return AllProvisioned(r.Statuses) && AllInitialized(r.ControlPlanes)
+	return AllProvisioned(r.Statuses) &&
+		AllInitialized(r.ControlPlanes) &&
+		len(r.Machines) >= r.ExpectedMachines &&
+		AllBootstrapped(r.Machines)
 }
 
 func fixtureScheme() (*runtime.Scheme, error) {
@@ -475,9 +492,23 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			if err := create(ctx, ws.Client, NewCluster(name, opts.Backend, opts.ControlPlaneMachines > 0)); err != nil {
 				return Result{}, fmt.Errorf("creating Cluster %s in %s: %w", name, ws.Path, err)
 			}
+
+			// The worker pool last: its Machines cannot join a control plane
+			// that does not exist yet, and the MachineDeployment is what
+			// creates them.
+			if opts.WorkerMachines > 0 {
+				if err := create(ctx, ws.Client, NewKubeadmConfigTemplate(name)); err != nil {
+					return Result{}, fmt.Errorf("creating KubeadmConfigTemplate for %s in %s: %w", name, ws.Path, err)
+				}
+				if err := create(ctx, ws.Client, NewMachineDeployment(name, opts.WorkerMachines, opts.KubernetesVersion)); err != nil {
+					return Result{}, fmt.Errorf("creating MachineDeployment for %s in %s: %w", name, ws.Path, err)
+				}
+			}
 		}
 		log.Info("Clusters created", "workspace", ws.Path,
-			"clusters", opts.ClustersPerWorkspace, "controlPlaneMachines", opts.ClustersPerWorkspace*opts.ControlPlaneMachines)
+			"clusters", opts.ClustersPerWorkspace,
+			"controlPlaneMachines", opts.ClustersPerWorkspace*opts.ControlPlaneMachines,
+			"workerMachines", opts.ClustersPerWorkspace*opts.WorkerMachines)
 	}
 
 	// 5. Watch them come up.
@@ -666,7 +697,13 @@ func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspac
 		if err != nil {
 			return Result{Workspaces: workspaces, Statuses: statuses, Machines: machines}, err
 		}
-		result := Result{Workspaces: workspaces, Statuses: statuses, Machines: machines, ControlPlanes: controlPlanes}
+		result := Result{
+			Workspaces:       workspaces,
+			Statuses:         statuses,
+			Machines:         machines,
+			ControlPlanes:    controlPlanes,
+			ExpectedMachines: expectedMachines(opts),
+		}
 
 		if err := RenderTable(opts.Out, statuses); err != nil {
 			return result, err
@@ -682,8 +719,10 @@ func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspac
 			return result, nil
 		}
 		if time.Now().After(deadline) {
-			return result, fmt.Errorf("timed out after %s with %d of %d clusters provisioned and %d of %d control planes initialized",
-				opts.Timeout, provisionedCount(statuses), len(statuses), initializedCount(controlPlanes), len(controlPlanes))
+			return result, fmt.Errorf("timed out after %s with %d of %d clusters provisioned, %d of %d control planes initialized and %d of %d machines bootstrapped",
+				opts.Timeout, provisionedCount(statuses), len(statuses),
+				initializedCount(controlPlanes), len(controlPlanes),
+				bootstrappedCount(machines), result.ExpectedMachines)
 		}
 
 		select {
@@ -766,6 +805,13 @@ func SnapshotControlPlanes(ctx context.Context, workspaces []Workspace, clusters
 		}
 	}
 	return statuses, nil
+}
+
+// expectedMachines is how many Machines the run asked for, which is not how
+// many it created: the control plane and the MachineDeployment create them.
+func expectedMachines(opts Options) int {
+	perCluster := opts.ControlPlaneMachines + opts.WorkerMachines
+	return opts.Workspaces * opts.ClustersPerWorkspace * perCluster
 }
 
 func initializedCount(statuses []ControlPlaneStatus) int {
