@@ -110,6 +110,38 @@ type Provider struct {
 	ProviderClaims map[string][]Resource
 }
 
+// Verb sets, named for what they let a controller do. Every claim carries
+// one, because v1alpha2 requires at least one verb and because "whatever it
+// turns out to need" is how a claim ends up granting delete on a type its
+// holder only ever reads.
+//
+// # Where these come from
+//
+// Not from reading reconcilers, which is how this nearly went wrong: the
+// obvious guess is that a provider only reads another's *templates*, and it is
+// wrong — Cluster API patches owner references onto templates so they are
+// garbage-collected with the cluster. The source is upstream's own
+// `+kubebuilder:rbac` markers, which are the authoritative statement of what
+// each controller does with each type, and which the fork carries unchanged.
+// Each claim below cites the marker it came from.
+var (
+	// read is what watching and dereferencing needs.
+	read = []string{"get", "list", "watch"}
+	// own is read plus the whole write path: create, take ownership of,
+	// update the status of, and delete.
+	own = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+	// core's Secret marker, which grants everything except delete: it writes
+	// kubeconfigs and reads them back, and the objects it writes are deleted
+	// with their owners rather than by it.
+	writeNoDelete = []string{"get", "list", "watch", "create", "update", "patch"}
+	// the dev provider's Secret marker: it reads kubeconfigs and patches them,
+	// and creates none.
+	readPatch = []string{"get", "list", "watch", "patch"}
+	// the dev provider's Machine markers, unioned: it deletes a Machine whose
+	// backend has gone and patches the ones it provisions, but creates none.
+	adoptDelete = []string{"get", "list", "watch", "update", "patch", "delete"}
+)
+
 // Core types every provider needs. Secrets because bootstrap data, cluster
 // certificates and workload-cluster kubeconfigs are all Secrets; ConfigMaps
 // because the control plane init lock is one.
@@ -133,6 +165,13 @@ var (
 	devMachineTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachinetemplates"}
 )
 
+// to returns r claimed for the given verbs. It reads at the call site as
+// "devclusters, to own" — which is the sentence a claim is.
+func to(r Resource, verbs []string) Resource {
+	r.Verbs = verbs
+	return r
+}
+
 // Core is the core provider's export.
 //
 // Its claims are the references its reconcilers resolve. The Cluster
@@ -151,11 +190,20 @@ func Core() Provider {
 			"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
 			"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
 		},
-		CoreClaims: []Resource{secrets, configMaps},
+		// Secrets without delete, and ConfigMaps read-only: core's markers
+		// grant `get;list;watch;create;patch;update` on Secrets and say
+		// nothing at all about ConfigMaps.
+		CoreClaims: []Resource{to(secrets, writeNoDelete), to(configMaps, read)},
 		ProviderClaims: map[string][]Resource{
-			BootstrapExport:    {kubeadmConfigs, kubeadmConfigTemplates},
-			ControlPlaneExport: {kubeadmControlPlanes, kubeadmControlPlaneTemplates},
-			InfraExport:        {devClusters, devMachines, devMachineTemplates},
+			// Everything, on all three groups. Core's marker is
+			// `resources=*, verbs=get;list;watch;create;update;patch;delete`
+			// across infrastructure, bootstrap and controlplane, and it earns
+			// it: the Cluster reconciler deletes the control plane and the
+			// infrastructure cluster, and the Machine reconciler deletes the
+			// bootstrap config and the infrastructure machine.
+			BootstrapExport:    {to(kubeadmConfigs, own), to(kubeadmConfigTemplates, own)},
+			ControlPlaneExport: {to(kubeadmControlPlanes, own), to(kubeadmControlPlaneTemplates, own)},
+			InfraExport:        {to(devClusters, own), to(devMachines, own), to(devMachineTemplates, own)},
 		},
 	}
 }
@@ -176,14 +224,22 @@ func ControlPlane() Provider {
 			"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanes.yaml",
 			"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanetemplates.yaml",
 		},
-		CoreClaims: []Resource{secrets, configMaps},
+		// Secrets in full - it writes the cluster's certificate authorities
+		// and the admin kubeconfig - and ConfigMaps read-only, which is more
+		// than its markers ask for: they name no ConfigMaps at all.
+		CoreClaims: []Resource{to(secrets, own), to(configMaps, read)},
 		ProviderClaims: map[string][]Resource{
-			CoreExport:      {clusters, machines},
-			BootstrapExport: {kubeadmConfigs, kubeadmConfigTemplates},
+			// Clusters read-only (`clusters;clusters/status, get;list;watch`),
+			// Machines in full: it creates and deletes the Machines its
+			// control plane is made of.
+			CoreExport: {to(clusters, read), to(machines, own)},
+			// It authors the KubeadmConfig for each Machine it creates, and
+			// its marker grants the bootstrap group in full.
+			BootstrapExport: {to(kubeadmConfigs, own), to(kubeadmConfigTemplates, own)},
 			// It reads the infrastructure template its machineTemplate names
 			// and *creates* a DevMachine per control plane Machine from it, so
 			// this claim is a write as much as a read.
-			InfraExport: {devMachines, devMachineTemplates},
+			InfraExport: {to(devMachines, own), to(devMachineTemplates, own)},
 		},
 	}
 }
@@ -201,16 +257,25 @@ func Bootstrap() Provider {
 			"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigs.yaml",
 			"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml",
 		},
-		CoreClaims: []Resource{secrets, configMaps},
+		// Both in full: its marker is
+		// `secrets;configmaps, get;list;watch;create;update;patch;delete`.
+		// The data secret is its output and the init lock is a ConfigMap it
+		// takes and releases.
+		CoreClaims: []Resource{to(secrets, own), to(configMaps, own)},
 		ProviderClaims: map[string][]Resource{
+			// All read-only, which is its marker exactly:
+			// `clusters;clusters/status;machinesets;machines;machines/status,
+			// get;list;watch`. This provider writes nothing of core's.
+			//
 			// MachineSets and MachineDeployments as well as the types it
 			// watches: reconciling a worker's config walks the owner chain
 			// from its Machine up, and a link it cannot read fails the
 			// reconcile rather than shortening the log line.
-			CoreExport: {clusters, machines, machineSets, machineDeployments},
+			CoreExport: {to(clusters, read), to(machines, read), to(machineSets, read), to(machineDeployments, read)},
 			// It reads the KubeadmControlPlane a Machine belongs to, to
 			// resolve the control plane's version when preparing a config.
-			ControlPlaneExport: {kubeadmControlPlanes},
+			// Read-only, and its marker says so.
+			ControlPlaneExport: {to(kubeadmControlPlanes, read)},
 		},
 	}
 }
@@ -230,9 +295,16 @@ func Infrastructure() Provider {
 			// machineTemplate refers to one; nothing reconciles it.
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
 		},
-		CoreClaims: []Resource{secrets},
+		// Read and patch, no create: its markers are
+		// `secrets, get;list;watch` and `secrets, get;list;watch;patch`. It
+		// reads a workload cluster's kubeconfig; it does not write one.
+		CoreClaims: []Resource{to(secrets, readPatch)},
 		ProviderClaims: map[string][]Resource{
-			CoreExport: {clusters, machines},
+			// Clusters read-only; Machines read, patch and delete, which is
+			// the union of its two Machine markers - it deletes a Machine
+			// whose backend has gone and patches the ones it provisions,
+			// and creates none.
+			CoreExport: {to(clusters, read), to(machines, adoptDelete)},
 		},
 	}
 }
