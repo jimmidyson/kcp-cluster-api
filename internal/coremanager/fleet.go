@@ -320,6 +320,22 @@ func NewFleet(ctx context.Context, mgr mcmanager.Manager, registry *capicontroll
 		Client: clustercache.ClientOptions{
 			UserAgent: remote.DefaultClusterAPIUserAgent(controllerName),
 		},
+		Cache: clustercache.CacheOptions{
+			// The index the Machine reconciler reads through. It looks its
+			// Machine's Node up by provider ID, in the workload cluster's
+			// cache, to set the Machine's nodeRef - and a controller-runtime
+			// cache errors on a field selector it has no index for rather than
+			// falling back to a scan. Without it every Machine reconcile ends
+			// in "Index with name field:spec.providerID does not exist", no
+			// Machine ever gets a nodeRef, and nothing downstream of that
+			// reaches Ready: not the Machine, not the control plane, not the
+			// Cluster.
+			//
+			// Upstream registers it where it builds the ClusterCache
+			// (core/setup.ClusterCacheCacheOptions). This is the fleet-wide
+			// construction of the same cache and needs the same index.
+			Indexes: []clustercache.CacheOptionsIndex{clustercache.NodeProviderIDIndex},
+		},
 	}, options, wildcard, recorderFor)
 	if err != nil {
 		return nil, fmt.Errorf("creating fleet-wide ClusterCache: %w", err)
