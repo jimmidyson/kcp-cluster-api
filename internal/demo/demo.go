@@ -122,16 +122,21 @@ var (
 	}
 )
 
-// PermissionClaims are what the export claims beyond the types it publishes.
+// PermissionClaims are the core-type claims a single-export fixture needs:
+// Secrets, because the bootstrap and control plane providers are made of them
+// — the data secret, the cluster certificates, the admin kubeconfig — and
+// ConfigMaps, because the control plane init lock is one.
 //
-// Secrets because the bootstrap provider is made of them - the data secret it
-// produces and the cluster certificates it generates - and ConfigMaps because
-// the control plane init lock is one. A claim is only a declaration; each
-// workspace's APIBinding accepts it, which is what BindExport does here.
+// A demo run does not use this: it publishes one export per provider and each
+// carries the claims that provider's own RBAC markers justify
+// (capiexports.Provider.Claims). What uses it is the sweeps, which publish
+// everything through one export because the shape under measurement is the
+// controllers rather than the export topology.
 //
-// They are claimed whether or not a run wires the bootstrap provider: a demo
-// that changed the export's shape depending on its flags would make two runs
-// against one server disagree about what the export is.
+// Deliberately not narrowed by verb. A sweep that failed because its fixture
+// claimed too little would fail for a reason that has nothing to do with what
+// it measures, and the per-provider claims are where least privilege is
+// expressed and tested.
 var PermissionClaims = []apisv1alpha2.PermissionClaim{
 	{GroupResource: apisv1alpha2.GroupResource{Resource: "secrets"}, Verbs: []string{"*"}},
 	{GroupResource: apisv1alpha2.GroupResource{Resource: "configmaps"}, Verbs: []string{"*"}},
@@ -295,7 +300,18 @@ type Result struct {
 	// workspace, control plane and worker together.
 	ExpectedMachines int
 
-	// Manager is the running multi-cluster manager, or nil when the run was
+	// Managers is every provider's running manager, keyed by its APIExport
+	// name, or nil when the run was told not to start one.
+	//
+	// Keyed, because since the export split the answer to "can a fleet client
+	// write this?" depends on which provider is asking: each claims only what
+	// its own controllers do, so the ConfigMap the bootstrap provider takes as
+	// an init lock is not writable through core's client and is not meant to
+	// be.
+	Managers map[string]mcmanager.Manager
+
+	// Manager is the core provider's manager - the one a caller that does not
+	// care which provider it is asking should use. Nil when the run was
 	// told not to start one. It is exposed so a test can ask the fleet's own
 	// clients what they can see and do, which is a different question from
 	// what kcp serves: the two differ, and where they differ is where a
@@ -443,12 +459,14 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// 3. The manager: the same wiring cmd/core-manager runs, serving every
 	// workspace bound to the export from one set of controllers.
 	var manager mcmanager.Manager
+	var byExport map[string]mcmanager.Manager
 	if opts.RunManager {
 		managers, err := startManagers(ctx, opts, providers, parentCfg, parentClient, scheme, log)
 		if err != nil {
 			return Result{}, err
 		}
 		manager = managers[capiexports.CoreExport]
+		byExport = managers
 
 		// Every provider's manager has to have engaged the workspace before
 		// its objects are created, for the reason the wiring contract gives:
@@ -516,6 +534,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// 5. Watch them come up.
 	result, err := waitForProvisioned(ctx, opts, workspaces)
 	result.Manager = manager
+	result.Managers = byExport
 	return result, err
 }
 
