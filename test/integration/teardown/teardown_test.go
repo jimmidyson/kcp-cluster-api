@@ -84,9 +84,19 @@ func TestUnbindingAWorkspaceThatStillHoldsClusters(t *testing.T) {
 		ControlPlaneMachines: controlPlaneMachines,
 		Backend:              demo.BackendInMemory,
 		RunManager:           true,
-		Timeout:              5 * time.Minute,
-		PollInterval:         pollInterval,
-		Log:                  ctrl.Log.WithName("demo"),
+		// Ten minutes for a run that takes about ninety seconds when it works.
+		//
+		// The budget was five while demo.Run stopped at provisioned, and
+		// waiting for ready is a longer wait by construction. But this number
+		// is headroom, not a diagnosis: CI has twice shown a run reaching
+		// "1 of 2 clusters ready" and staying there, in the same job where
+		// another package did the identical work in 87 seconds. That is a
+		// stall, not slowness, and it is recorded in docs/conversion-plan.md
+		// rather than fixed by this number. Raise nothing further here - if
+		// this budget is hit again, the stall is what needs looking at.
+		Timeout:      10 * time.Minute,
+		PollInterval: pollInterval,
+		Log:          ctrl.Log.WithName("demo"),
 	})
 	if err != nil {
 		var sb strings.Builder
@@ -94,8 +104,8 @@ func TestUnbindingAWorkspaceThatStillHoldsClusters(t *testing.T) {
 		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
 		t.Fatalf("bringing the cluster up failed: %v\n%s", err, sb.String())
 	}
-	if !result.Provisioned() {
-		t.Fatalf("the run did not reach a running control plane, so what follows would not be testing a teardown")
+	if !result.Ready() {
+		t.Fatalf("the run did not reach a ready control plane, so what follows would not be testing a teardown")
 	}
 
 	for _, ws := range result.Workspaces {

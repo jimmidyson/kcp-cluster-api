@@ -22,6 +22,7 @@ import (
 	"text/tabwriter"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
@@ -47,8 +48,14 @@ type ClusterStatus struct {
 	// the infrastructure provider has done its work for this cluster.
 	Provisioned bool
 
-	// Detail says what the cluster is waiting on when it is not provisioned,
-	// taken from the InfrastructureReady condition.
+	// Ready reports the Cluster's Available condition, which is the demo's
+	// done-condition: Cluster API sets it once the remote connection probe,
+	// the infrastructure, the control plane and the workers are all good, so
+	// it is the single answer to "is this a cluster somebody can use?".
+	Ready bool
+
+	// Detail says what the cluster is waiting on, taken from whichever
+	// condition is the one still outstanding.
 	Detail string
 }
 
@@ -64,17 +71,29 @@ func Summarise(workspace, logicalCluster string, cluster *clusterv1.Cluster, dev
 		Cluster:        cluster.Name,
 	}
 
-	if p := cluster.Status.Initialization.InfrastructureProvisioned; p != nil && *p {
-		status.Provisioned = true
+	status.Provisioned = ptr.Deref(cluster.Status.Initialization.InfrastructureProvisioned, false)
+
+	if available := meta.FindStatusCondition(cluster.Status.Conditions, clusterv1.ClusterAvailableCondition); available != nil {
+		if available.Status == metav1.ConditionTrue {
+			status.Ready = true
+			status.Detail = "cluster ready"
+			return status
+		}
+		// The Available condition summarises the others, so its message
+		// already names whichever of them is outstanding. Reporting it rather
+		// than picking a condition ourselves is what keeps this honest as the
+		// cluster moves through its states.
+		status.Detail = conditionDetail(available)
+		return status
+	}
+
+	if status.Provisioned {
 		status.Detail = "infrastructure provisioned"
 		return status
 	}
 
 	if cond := meta.FindStatusCondition(cluster.Status.Conditions, string(clusterv1.ClusterInfrastructureReadyCondition)); cond != nil {
-		status.Detail = cond.Reason
-		if cond.Message != "" {
-			status.Detail = fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
-		}
+		status.Detail = conditionDetail(cond)
 		return status
 	}
 
@@ -104,19 +123,31 @@ func AllProvisioned(statuses []ClusterStatus) bool {
 	return true
 }
 
+// AllClustersReady reports whether every cluster in the snapshot is Available.
+//
+// An empty snapshot is not ready, for the same reason it is not provisioned: a
+// run that created nothing has made nothing ready.
+func AllClustersReady(statuses []ClusterStatus) bool {
+	if len(statuses) == 0 {
+		return false
+	}
+	for _, s := range statuses {
+		if !s.Ready {
+			return false
+		}
+	}
+	return true
+}
+
 // RenderTable writes the snapshot as an aligned table.
 func RenderTable(w io.Writer, statuses []ClusterStatus) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "WORKSPACE\tLOGICAL CLUSTER\tCLUSTER\tPROVISIONED\tDETAIL"); err != nil {
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tLOGICAL CLUSTER\tCLUSTER\tPROVISIONED\tREADY\tDETAIL"); err != nil {
 		return err
 	}
 	for _, s := range statuses {
-		provisioned := "no"
-		if s.Provisioned {
-			provisioned = "yes"
-		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			s.Workspace, s.LogicalCluster, s.Cluster, provisioned, s.Detail); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			s.Workspace, s.LogicalCluster, s.Cluster, yesNo(s.Provisioned), yesNo(s.Ready), s.Detail); err != nil {
 			return err
 		}
 	}
@@ -137,9 +168,14 @@ type MachineStatus struct {
 	// DataSecret names the Secret holding that data, in this workspace.
 	DataSecret string
 
-	// Phase is the Machine's own phase, reported alongside rather than waited
-	// on: a Machine reaching Running needs a control plane provider, which is
-	// not wired.
+	// Ready reports the Machine's Ready condition: its bootstrap config and
+	// infrastructure are ready and its Node is healthy. It is what the demo
+	// waits for, because a control plane whose machines are not ready is not a
+	// cluster anybody can use.
+	Ready bool
+
+	// Phase is the Machine's own phase, reported alongside: it names where in
+	// provisioning a machine that is not ready has got to.
 	Phase string
 
 	// Detail says what the machine is waiting on when it has no data secret.
@@ -158,10 +194,17 @@ type ControlPlaneStatus struct {
 	// because it is the point at which there is a cluster to talk to.
 	Initialized bool
 
-	// Ready and Desired are the replica counts, reported alongside: a control
-	// plane is initialized by its first machine and complete some time later.
-	Ready   int32
-	Desired int32
+	// Ready reports that every replica the control plane was asked for is
+	// ready, which is the demo's done-condition for it: initialized says a
+	// machine came up, ready says the control plane it forms is usable.
+	Ready bool
+
+	// ReadyReplicas and DesiredReplicas are the counts behind Ready, reported
+	// alongside: a control plane is initialized by its first machine and
+	// complete some time later, and the counts are what show that gap
+	// closing.
+	ReadyReplicas   int32
+	DesiredReplicas int32
 
 	Detail string
 }
@@ -169,24 +212,29 @@ type ControlPlaneStatus struct {
 // SummariseControlPlane reads one control plane's demo status.
 func SummariseControlPlane(workspace, logicalCluster string, kcp *controlplanev1.KubeadmControlPlane) ControlPlaneStatus {
 	status := ControlPlaneStatus{
-		Workspace:      workspace,
-		LogicalCluster: logicalCluster,
-		ControlPlane:   kcp.Name,
-		Ready:          ptr.Deref(kcp.Status.ReadyReplicas, 0),
-		Desired:        ptr.Deref(kcp.Spec.Replicas, 0),
+		Workspace:       workspace,
+		LogicalCluster:  logicalCluster,
+		ControlPlane:    kcp.Name,
+		ReadyReplicas:   ptr.Deref(kcp.Status.ReadyReplicas, 0),
+		DesiredReplicas: ptr.Deref(kcp.Spec.Replicas, 0),
 	}
+	status.Initialized = ptr.Deref(kcp.Status.Initialization.ControlPlaneInitialized, false)
+	// Desired above zero is part of it: a control plane asked for no replicas
+	// has none outstanding, and calling that ready would report success for a
+	// cluster with no control plane at all.
+	status.Ready = status.DesiredReplicas > 0 && status.ReadyReplicas >= status.DesiredReplicas
 
-	if ptr.Deref(kcp.Status.Initialization.ControlPlaneInitialized, false) {
-		status.Initialized = true
-		status.Detail = "control plane initialized"
+	if status.Ready {
+		status.Detail = "control plane ready"
 		return status
 	}
 
 	if cond := meta.FindStatusCondition(kcp.Status.Conditions, controlplanev1.KubeadmControlPlaneAvailableCondition); cond != nil && cond.Reason != "" {
-		status.Detail = cond.Reason
-		if cond.Message != "" {
-			status.Detail = fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
-		}
+		status.Detail = conditionDetail(cond)
+		return status
+	}
+	if status.Initialized {
+		status.Detail = "control plane initialized"
 		return status
 	}
 	status.Detail = "waiting for the control plane provider"
@@ -205,6 +253,17 @@ func AllInitialized(statuses []ControlPlaneStatus) bool {
 	return true
 }
 
+// AllControlPlanesReady reports whether every control plane has every replica
+// it was asked for. Empty is vacuously true, as for AllInitialized.
+func AllControlPlanesReady(statuses []ControlPlaneStatus) bool {
+	for _, s := range statuses {
+		if !s.Ready {
+			return false
+		}
+	}
+	return true
+}
+
 // RenderControlPlaneTable writes the control plane snapshot as an aligned
 // table, and nothing at all when there are none.
 func RenderControlPlaneTable(w io.Writer, statuses []ControlPlaneStatus) error {
@@ -217,12 +276,8 @@ func RenderControlPlaneTable(w io.Writer, statuses []ControlPlaneStatus) error {
 		return err
 	}
 	for _, s := range statuses {
-		initialized := "no"
-		if s.Initialized {
-			initialized = "yes"
-		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d/%d\t%s\n",
-			s.Workspace, s.ControlPlane, initialized, s.Ready, s.Desired, s.Detail); err != nil {
+			s.Workspace, s.ControlPlane, yesNo(s.Initialized), s.ReadyReplicas, s.DesiredReplicas, s.Detail); err != nil {
 			return err
 		}
 	}
@@ -236,12 +291,20 @@ func SummariseMachine(workspace, logicalCluster string, machine *clusterv1.Machi
 		LogicalCluster: logicalCluster,
 		Machine:        machine.Name,
 		Phase:          machine.Status.Phase,
+		Ready:          meta.IsStatusConditionTrue(machine.Status.Conditions, clusterv1.MachineReadyCondition),
 	}
 
 	if name := machine.Spec.Bootstrap.DataSecretName; name != nil && *name != "" {
 		status.Bootstrapped = true
 		status.DataSecret = *name
 		status.Detail = "bootstrap data ready"
+		if status.Ready {
+			status.Detail = "machine ready"
+		} else if cond := meta.FindStatusCondition(machine.Status.Conditions, clusterv1.MachineReadyCondition); cond != nil {
+			// Past bootstrap the interesting question is what readiness is
+			// waiting on, and the Ready condition summarises the rest.
+			status.Detail = conditionDetail(cond)
+		}
 		return status
 	}
 
@@ -283,6 +346,17 @@ func AllBootstrapped(statuses []MachineStatus) bool {
 	return true
 }
 
+// AllMachinesReady reports whether every machine is Ready. Empty is vacuously
+// true, as for AllBootstrapped.
+func AllMachinesReady(statuses []MachineStatus) bool {
+	for _, s := range statuses {
+		if !s.Ready {
+			return false
+		}
+	}
+	return true
+}
+
 // RenderMachineTable writes the machine snapshot as an aligned table, and
 // nothing at all when there are no machines.
 func RenderMachineTable(w io.Writer, statuses []MachineStatus) error {
@@ -291,16 +365,13 @@ func RenderMachineTable(w io.Writer, statuses []MachineStatus) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "WORKSPACE\tMACHINE\tBOOTSTRAPPED\tDATA SECRET\tPHASE\tDETAIL"); err != nil {
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tMACHINE\tBOOTSTRAPPED\tREADY\tDATA SECRET\tPHASE\tDETAIL"); err != nil {
 		return err
 	}
 	for _, s := range statuses {
-		bootstrapped := "no"
-		if s.Bootstrapped {
-			bootstrapped = "yes"
-		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			s.Workspace, s.Machine, bootstrapped, orDash(s.DataSecret), orDash(s.Phase), s.Detail); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			s.Workspace, s.Machine, yesNo(s.Bootstrapped), yesNo(s.Ready),
+			orDash(s.DataSecret), orDash(s.Phase), s.Detail); err != nil {
 			return err
 		}
 	}
@@ -312,4 +383,20 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// conditionDetail renders a condition as the reason, and the message after it
+// when there is one - which is where Cluster API says what is outstanding.
+func conditionDetail(cond *metav1.Condition) string {
+	if cond.Message == "" {
+		return cond.Reason
+	}
+	return fmt.Sprintf("%s: %s", cond.Reason, cond.Message)
 }
