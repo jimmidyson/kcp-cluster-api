@@ -25,8 +25,8 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-thirty-five deliberate entries below, fifteen are new files and twenty modify
-existing ones — and the twenty are the number that matters.
+forty-one deliberate entries below, eighteen are new files and twenty-three
+modify existing ones — and the twenty-three are the number that matters.
 
 ## Where the check runs, and why not on every pull request
 
@@ -55,7 +55,12 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.6`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.7`
+
+> The `api` module stays at `v1.15.0-kcp.6`, and that is not an oversight:
+> nothing since that tag touches `api/`, so re-tagging it would point a new
+> version at an unchanged tree. The root and `test` modules are at
+> `v1.15.0-kcp.7`.
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
@@ -86,7 +91,7 @@ cannot build without them. See the feature's research notes (R2).
 | `util/controller/builder_test.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 | `controllers/external/tracker.go` | **Modified.** `ObjectTracker` gains an optional `MultiClusterController`, registering runtime watches fleet-wide. A separate type was tried and does not work: the reconcilers hold the tracker as a concrete field and read `PredicateLogger` off it from the reconcile path. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_cache_workspace.go` | New file. `SetupWithMulticlusterManager`, `GetMulticlusterClusterSource` and the accessor key that carries the logical cluster. | None — carried deliberately, ADR-0003 |
-| `controllers/clustercache/cluster_cache.go` | **Modified.** Accessors and last-event times key on the logical cluster as well as the ObjectKey, resolved from the context. `clusterSource.ch` becomes a send function so one cache can feed both shapes of consumer. | None — carried deliberately, ADR-0003 |
+| `controllers/clustercache/cluster_cache.go` | **Modified.** Accessors and last-event times key on the logical cluster as well as the ObjectKey, resolved from the context. `clusterSource.ch` becomes a send function so one cache can feed both shapes of consumer. Separately, `sendEventsToClusterSources` decides what to send under `clusterSourcesLock` and sends outside it, with each send bounded: holding the lock across a blocking send meant one source whose consumer had stopped reading wedged every connect, disconnect and `GetClusterSource` for the whole fleet. | **Bug fix, upstreamable** — the same lock is held across the same blocking send upstream |
 | `controllers/clustercache/cluster_accessor.go` | **Modified.** Carries the logical cluster, for metric labels. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/metrics.go` | **Modified.** Adds a `logical_cluster` label; without it two workspaces' identically named Clusters share a time series. | None — carried deliberately, ADR-0003 |
 | `controllers/clustercache/cluster_cache_workspace_test.go` | New file. Covers the one behaviour a fleet-wide ClusterCache has that a per-workspace one cannot: a Cluster whose logical cluster has stopped being served is disconnected rather than polled forever. | None — carried deliberately, ADR-0003 |
@@ -95,7 +100,10 @@ cannot build without them. See the feature's research notes (R2).
 | `controllers/clustercache/cluster_accessor_test.go` | **Modified.** Same keying. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/devcluster_reconciler_workspace.go` | New file. `SetupWithMulticlusterManager` for DevCluster. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/devmachine_reconciler_workspace.go` | New file. `SetupWithMulticlusterManager` for DevMachine. | None — carried deliberately, ADR-0003 |
-| `test/infrastructure/docker/reconcilers/devmachine_reconciler.go` | **Modified.** The `controller` field narrows to the one method the reconcile path calls. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/devmachine_reconciler.go` | **Modified.** The `controller` field narrows to the one method the reconcile path calls. Separately, a deleted DevMachine whose Machine or Cluster has already gone releases its finalizer instead of retrying forever: there is no way to reach backend state keyed by a cluster that no longer exists, and holding on only stops everything that owns the object from finishing. | **Bug fix, upstreamable** — the deletion half applies to any out-of-order removal, not only to kcp |
+| `test/infrastructure/docker/reconcilers/devmachine_reconciler_test.go` | New file. All four exits from the deletion path, and that a DevMachine which is *not* being deleted keeps its finalizer while it waits for a DevCluster still on its way. | **Bug fix, upstreamable** — with the change it covers |
+| `test/infrastructure/docker/reconcilers/devcluster_reconciler.go` | **Modified.** A deleting DevCluster waits for its DevMachines before removing its own finalizer. It has to outlive them: the docker backend deletes only the load balancer here and leaves each machine's container to that machine's own reconcile, so a DevCluster that went first would leak every container in the cluster. Cluster API's own teardown keeps that order; deleting a kcp APIBinding removes every bound object at once and does not. | **Bug fix, upstreamable** — a hand-deleted DockerCluster leaks the same way |
+| `test/infrastructure/docker/reconcilers/devcluster_reconciler_test.go` | **Modified.** That the wait holds while a DevMachine remains, and releases once none do. | **Bug fix, upstreamable** — with the change it covers |
 | `test/infrastructure/docker/reconcilers/backends/docker/taskmanager.go` | **Modified.** Tasks key on the logical cluster; progress events carry it; `GetSource` gains a fleet-wide counterpart. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/backends/docker/dockermachine_backend.go` | **Modified.** Passes the context to the task manager calls that now need it. | None — carried deliberately, ADR-0003 |
 | `test/go.mod` | **Modified.** go directive raised to match the root. | None — carried deliberately, ADR-0003 |
@@ -104,6 +112,16 @@ cannot build without them. See the feature's research notes (R2).
 | `core/reconcilers/machine/machine_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Machine reconciler. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machine/machine_controller.go` | **Modified.** `watchClusterNodes` builds its watch through a `nodeWatcherFunc` each setup installs, because `clustercache.NewWatcher` is keyed on the controller's request type and the fleet-wide watch additionally needs the management cluster from the context. The `controller` field narrows to the one method the reconcile path calls. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machine/machine_controller_test.go` | **Modified.** One test reaches `watchClusterNodes` through a struct literal and has to install the watcher the seam expects. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machineset/machineset_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the MachineSet reconciler. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machineset/machineset_controller.go` | **Modified.** The `controller` field narrows to the two methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine and KubeadmControlPlane reconcilers carry, for the same reason. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machinedeployment/machinedeployment_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the MachineDeployment reconciler. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/machinedeployment/machinedeployment_controller.go` | **Modified.** As the MachineSet reconciler above: the `controller` field narrows to the two methods the reconcile path calls. | None — carried deliberately, ADR-0003 |
+| `bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmConfig reconciler. One substantive difference from its single-cluster twin: `KubeadmInitLock` defaults to a mutex over the reconciler's own cluster-aware client rather than the manager's, because the lock is a ConfigMap in the cluster being reconciled and the manager's client addresses no cluster in particular. | None — carried deliberately, ADR-0003 |
+| `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmControlPlane reconciler. One behavioural difference: the Machine client that returns the deleted object is built from the reconciler's cluster-aware client rather than from the manager's config, which addresses no cluster in particular here. The cost is the cache-consistency optimisation it enabled; both call sites already handle a nil result. | None — carried deliberately, ADR-0003 |
+| `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller.go` | **Modified.** The `controller` field narrows to the three methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine reconciler carries, for the same reason. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/backends/inmemory/workspace_keys.go` | New file. Names the in-memory backend's per-cluster state by management cluster as well as namespace and name. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorycluster_backend.go` | **Modified.** Uses that key. Two clusters called `default/demo-00` in different workspaces previously shared one resource group and one listener, so one tenant's control plane served the other's — a collision that worked rather than failed. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorymachine_backend.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 | `go.mod` | **Modified.** Adds `sigs.k8s.io/multicluster-runtime`. | None — carried deliberately, ADR-0003 |
 | `go.sum` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 

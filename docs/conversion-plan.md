@@ -16,6 +16,38 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **Providers are separate deployments with separate APIExports.** One export
+  per provider (`internal/capiexports`), one binary each, and the claims
+  between them resolved at run time because an identity hash is per kcp
+  instance. P3 landed with it. See
+  [One APIExport per provider](site/content/en/docs/design/provider-exports.md).
+- **The per-workspace cost is measured per deployment, and added up.** Every
+  deployment costs **2 goroutines per active workspace**, flat to twenty, with
+  no watch streams or LISTs added by a workspace and everything returned when
+  one departs; an installation of all four pays 8, plus 17 discovery requests
+  and 26 watch streams held on the shard. What is *not* uniform is reconciling:
+  the control plane provider costs 72 requests per workspace against core's 7,
+  which a single fleet-wide figure hid. `cmd/sweeptotals` does the addition and
+  refuses to print a total when a deployment's report is missing. See
+  [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md).
+- **P1 has landed: the kubeadm bootstrap provider serves the fleet.**
+  `cmd/kubeadm-bootstrap-manager`, plus `--control-plane-machines` in the demo,
+  and `test/integration/bootstrap` asserts per-workspace bootstrap data and
+  per-workspace cluster certificates. It needed D3's open item settled — see
+  below. The fork is tagged `v1.15.0-kcp.7` and `go.mod` pins that tag, so
+  `task drift` runs against a real ref again (see [`DRIFT.md`](../DRIFT.md)).
+- **P2 has landed: a control plane comes up in every workspace.**
+  `cmd/kubeadm-control-plane-manager` and its own export; `task demo
+  DEMO_FLAGS="--control-plane-machines 1"` brings a KubeadmControlPlane to
+  initialized in each workspace, and `test/integration/bootstrap` asserts it.
+  The remaining gap to a cluster a person can use is a kubeconfig and a worker
+  MachineDeployment, neither of which needs new wiring.
+- **There is a demo now: `task demo`.** One command provisions clusters across
+  several workspaces from one manager, starting its own single-shard kcp
+  server; `test/integration/demo` asserts the same run under `task verify`,
+  including the tenancy isolation P8 existed to prove. It stops at cluster
+  infrastructure, because Machines need P1 and P2. See
+  [The demo](site/content/en/docs/design/demo.md).
 - **G4, the webhook dispatch layer, is the gating item.** Phase 3's P4 waits
   on it, and until it lands webhook wiring serves one named workspace and
   refuses a second rather than silently serving it wrong. It keeps a human
@@ -123,15 +155,15 @@ cache/transport per workspace.
 
 > **Measured, and it holds.** Both halves of that paragraph are now
 > demonstrated rather than argued, against a real kcp server, by
-> `task test:sweep` (`test/integration/sweep`), in two shapes: one controller
-> on one type, and the whole reconciler set `cmd/core-manager` wires on the
-> dev provider's in-memory backend.
+> `task test:sweep` (`test/integration/sweep`), in six shapes: one controller on
+> one type, one per provider deployment, and all four providers co-located on
+> the dev provider's in-memory backend.
 >
 > A hundred active workspaces were served by the same three watch streams as
-> one, and the full reconciler set by the same eight; none in either sweep was
-> addressed to a tenant's logical cluster, and neither shape paid a
-> per-workspace LIST. Engaging the hundredth workspace took no longer than the
-> first. See
+> one, each provider deployment's twenty by the same six or seven it opened for
+> one, and the whole fleet's by the same twelve; none in any sweep was
+> addressed to a tenant's logical cluster, and no shape paid a per-workspace
+> LIST. Engaging the hundredth workspace took no longer than the first. See
 > [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
 > for the numbers, the method, and the one thing that does *not* come back
 > when a workspace leaves, and
@@ -175,20 +207,24 @@ rather than assumed:
   (workqueue, goroutines, rate limiter) once `SetupWithManager` runs
   against its `GetManager()` result — cheap relative to a duplicated
   cache, but not free; matters mainly at very high workspace counts.
-  **Now quantified**, exactly linear in W in both cases: 12 goroutines per
-  active workspace for one controller watching one type (measured to W=100),
-  and **140 goroutines** for the five controllers `SetupReconcilers` wires —
-  ClusterCache, Cluster, Machine, DevCluster, DevMachine — plus about six
-  discovery requests per workspace for the `RESTMapper` the provider builds
-  per engaged workspace. That is the number that decides how many workspaces
-  one replica should serve.
+  **Now quantified, and largely designed away.** Per-workspace controllers cost
+  12 goroutines per active workspace for one controller watching one type,
+  exactly linear to W=100. A provider deployment no longer wires them: its
+  controllers are fleet-wide, so every one of the four costs **2 goroutines per
+  active workspace**, exactly linear to W=20, for the engagement — plus the
+  `RESTMapper` the provider builds per engaged workspace, which is 3 discovery
+  requests for core and the dev provider, 4 for bootstrap and 7 for the control
+  plane. That is the number that decides how many workspaces one replica should
+  serve, measured for each deployment rather than for the four together.
 
-  The same sweeps found the one cost that is not reclaimed on disengagement:
-  **two goroutines per event-handler registration** — 2 for the single-type
-  shape, 30 for the production one — retained by a handler
-  controller-runtime's `Kind` source adds to the shared wildcard cache's
-  informer and never removes. It accumulates with workspace *churn* rather
-  than with W, and is released when the wildcard cache stops.
+  The same sweeps quantified the one cost that is not reclaimed on
+  disengagement, and showed that the same change removes it: **two goroutines
+  per event-handler registration**, retained by a handler controller-runtime's
+  `Kind` source adds to the shared wildcard cache's informer and never removes.
+  Fleet-wide controllers register once for the process rather than once per
+  workspace, so a deployment retains **zero** per departed workspace; the
+  per-workspace seam still retains 2, and accumulates with workspace *churn*
+  rather than with W.
 - **Library maturity.** `kcp-dev/multicluster-provider` is explicitly
   documented as experimental and pre-1.0 (currently v0.8.x). Pinning
   production multi-tenancy on it is an adoption risk to weigh
@@ -210,7 +246,7 @@ early and expensive to unwind later.
 |---|---|---|---|
 | D1 | Target kcp version + client libs to pin (`kcp-dev/kcp`, `kcp-dev/client-go`, `kcp-dev/multicluster-provider`, `sigs.k8s.io/multicluster-runtime`) | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md) | Record in an ADR under `kcp/docs/`, including the library-maturity check from D4/"Scalability" above. |
 | D2 | Go module layout for `kcp/` | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md); later superseded by the repository inversion (#22), which made `kcp/` the root module | AGENTS.md prefers a second module over editing root `go.mod`. Use `kcp/go.mod` with a `replace sigs.k8s.io/cluster-api => ../` so it can import `core/reconcilers/*` etc. without touching root `go.mod`. Confirm this doesn't break `go work`/CI tooling. |
-| D3 | APIExport/APIBinding schema strategy | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md); `Secret`/`ConfigMap` claim scope still open | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. Permission-claim mechanism for *provider* CRDs (the reciprocal problem — core reading/writing provider-owned objects) is decided in [ADR-0001](adr-0001-provider-api-permissions.md); still open here: the `Secret`/`ConfigMap` claim scope specifically. |
+| D3 | APIExport/APIBinding schema strategy | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md); `Secret`/`ConfigMap` claims settled by P1 (claimed `all: true`, accepted at bind; narrowing them is open) | Which CRDs get published (core v1beta1+v1beta2, addons, ipam, bootstrap, controlplane), how permission claims for `Secret`/`ConfigMap` (kubeconfigs, CRS resources) are requested/accepted. Permission-claim mechanism for *provider* CRDs (the reciprocal problem — core reading/writing provider-owned objects) is decided in [ADR-0001](adr-0001-provider-api-permissions.md). The `Secret`/`ConfigMap` half was settled by P1: both are claimed `all: true` and accepted when a workspace binds, which is what makes the bootstrap provider work at all. Narrowing those claims with kcp's resource selectors is open, and is the thing to do before a deployment holds real tenant credentials. |
 | D4 | Discovery + cache engine: adopt `kcp-dev/multicluster-provider`'s `Provider` + `multicluster-runtime`'s `mcmanager.Manager.GetManager()`, or hand-roll | done — adopted, confirmed empirically in Phase 1 ([ADR-0001](adr-0001-per-workspace-manager-pool.md)) | Default to adopting (see "Chosen model"/"Scalability" above). Confirm write-path routing, leader-election behavior, and library maturity in the Phase 1 spike before locking this in; hand-rolling a `WildcardCache`-alike layer is the documented fallback, not the default. |
 | D5 | Identity/RBAC model | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md) | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). **Decided:** single system identity via the virtual workspace — see [ADR-0001](adr-0001-provider-api-permissions.md). |
 | D6 | Partition topology for horizontal sharding: how many `Partition`/`APIExportEndpointSlice` pairs, how they map to replica-group deployments | deferred — one partition, one replica-group until an install runs multiple shards | Use kcp's own `PartitionSet`→`Partition`→`APIExportEndpointSlice` chain (see "Chosen model"/"Scalability" above) rather than app-level hashing. Only matters once a kcp install runs multiple shards — moot for single-shard dev/small deployments, so this can start as "one partition, one replica-group" and grow later. |
@@ -354,27 +390,62 @@ different binary/concern."
 
 | Track | Status | Scope | Depends on |
 |---|---|---|---|
-| P1 | not started | `kcp/cmd/kubeadm-bootstrap-manager`: port `bootstrap/kubeadm/main.go` wiring onto G2 | G2, G3 |
-| P2 | not started | `kcp/cmd/kubeadm-control-plane-manager`: port `controlplane/kubeadm/main.go` wiring onto G2 | G2, G3 |
-| P3 | not started | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
+| P1 | done — `cmd/kubeadm-bootstrap-manager`, fleet-wide rather than per workspace ([design](site/content/en/docs/design/bootstrap-provider.md)) | `kcp/cmd/kubeadm-bootstrap-manager`: port `bootstrap/kubeadm/main.go` wiring onto G2 | G2, G3 |
+| P2 | done — `cmd/kubeadm-control-plane-manager`, on its own APIExport ([design](site/content/en/docs/design/provider-exports.md)) | `kcp/cmd/kubeadm-control-plane-manager`: port `controlplane/kubeadm/main.go` wiring onto G2 | G2, G3 |
+| P3 | done — `cmd/dev-infrastructure-manager`, on its own APIExport ([design](site/content/en/docs/design/provider-exports.md)) | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
 | P4 | blocked on G4 | Webhook wiring for all 4 providers through G4 | G4, P1–P3 (can stub against G4's interface early) |
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
-| P6 | not started | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
+| P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
 | P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | partly — the two halves exist separately, never together (see note) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P8 | mostly — isolation is proven across workspaces reconciling concurrently; Machines wait on P1/P2 | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
-| P10 | in progress — user docs exist, last refreshed in #26 | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
+| P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
 P1–P3 are mechanically identical to Phase 1's core-provider port, so
 they're the safest to parallelize across multiple agents/contributors at
 once — same recipe, different source `main.go`.
 
-**P8** is further along than "not started" and less far than done:
-`TestEveryBoundWorkspaceIsWired` exercises many workspaces, and
-`TestCoreManagerClusterToMachine` exercises a full Cluster→Machine reconcile,
-but no test does both at once and nothing yet asserts that one workspace's
-reconciler cannot see another's objects — which is the property P8 exists to
-prove.
+**P2** is the first provider that talks to the clusters it creates, and the
+first that authors another provider's types: a KubeadmControlPlane creates
+Machines, KubeadmConfigs and DevMachines. Three of its claims are therefore
+writes, and each missing one was found by running the thing rather than by
+reading it — a claim that is absent fails at the first reconcile that needs it,
+in the provider that needs it.
+
+It also turned up a real cross-tenant fault in the dev infrastructure provider,
+now fixed in the fork: the in-memory backend named a cluster's resource group
+and listener by namespace and name, so two workspaces holding a `default/demo-00`
+shared one API server. Infrastructure provisioning did not notice; the second
+workspace's control plane could not initialise.
+
+**P3** is the split's first citizen: the dev infrastructure provider publishes
+its own export and runs as its own deployment, so an installation that will
+never run upstream's *test* infrastructure provider is not offered its types.
+What made it possible was P1's finding about claims, applied in the other
+direction — core claims the provider's types to resolve `infrastructureRef`,
+and the provider claims core's to watch `Cluster` and `Machine`.
+
+**P1** turned out not to be mechanical, and what it established is reusable by
+P2 and P3. The bootstrap provider's output is Secrets and its init lock is a
+ConfigMap, none of which an `APIExport` publishes — so it is the first provider
+that needed **permission claims**, and the first evidence that a claimed
+resource is readable *and writable* through the export's virtual workspace by
+the fleet's own client (`test/integration/claims`). It also needed the core
+Machine reconciler to resolve `spec.bootstrap.configRef`, which meant
+registering the bootstrap types in the contract-metadata registry whether or not
+this process wires that provider. See
+[The bootstrap provider](site/content/en/docs/design/bootstrap-provider.md).
+
+**P8**: `test/integration/demo` now does both at once. Two workspaces reconcile
+a Cluster→DevCluster to provisioned concurrently, under one manager, and the
+test asserts what nothing did before — each workspace sees exactly its own
+Cluster, and each DevCluster is owned by the Cluster in its own workspace. It
+runs in `task verify`, and `task demo` is the same code with a person watching.
+
+What is left of P8 is the Machine half: the demo stops at cluster
+infrastructure because a Machine reaching Ready needs a bootstrap provider and
+a control-plane provider (P1 and P2). Creating Machines that could only sit
+unprovisioned would not extend the proof.
 
 **Unsettled:** this table lists G3 as a dependency of P1–P3, while Phase 2
 records G3's trigger as P5 alone — i.e. that a ported provider binary needs
