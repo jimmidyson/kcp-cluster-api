@@ -281,21 +281,13 @@ func settle(t *testing.T, what string) {
 
 // keepStorageVersion trims a CRD to the single version kcp will store.
 //
-// A multi-version CRD needs a conversion strategy before kcp accepts it as an
-// APIResourceSchema, and a conversion strategy means a webhook server. These
-// sweeps deliberately serve no webhooks: webhook wiring is single-workspace by
-// construction (the specification's FR-008), so it has nothing to say about
-// how cost scales with workspace count, and standing a server up would add a
-// fixed cost to every measurement for no measured claim.
-func keepStorageVersion(crd *apiextensionsv1.CustomResourceDefinition) {
-	kept := crd.Spec.Versions[:0]
-	for _, v := range crd.Spec.Versions {
-		if v.Storage {
-			kept = append(kept, v)
-		}
-	}
-	crd.Spec.Versions = kept
-}
+// These sweeps deliberately serve no webhooks: webhook wiring is
+// single-workspace by construction (the specification's FR-008), so it has
+// nothing to say about how cost scales with workspace count, and standing a
+// server up would add a fixed cost to every measurement for no measured
+// claim. A published type therefore carries one version - see
+// kcpfixtures.KeepStorageVersion for why the two go together.
+var keepStorageVersion = kcpfixtures.KeepStorageVersion
 
 // runSweep engages workspaces one at a time, makes each one active, samples
 // the process after every step, then unbinds them one at a time and samples

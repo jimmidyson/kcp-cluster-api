@@ -77,7 +77,21 @@ tasks:
       # PATH is the right mechanism despite what the fixture's failure hint
       # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
       # fixture resolves the server as a bare "kcp" and relies on lookup.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/...
+
+  demo:
+    desc: Provision clusters across several kcp workspaces from one manager, and watch them come up
+    deps: [tools]
+    # Not part of `verify`: the demo is for a person to watch, and what it
+    # demonstrates is asserted by ./test/integration/demo, which verify does
+    # run. Both drive the same package, so a demo that breaks fails CI.
+    #
+    # It starts its own single-shard kcp server under .demo/ and stops it on
+    # the way out. Point it at one you already have with --kcp-kubeconfig.
+    vars:
+      DEMO_FLAGS: '{{.DEMO_FLAGS | default ""}}'
+    cmds:
+      - PATH="{{.BIN}}:$PATH" go run ./cmd/demo {{.DEMO_FLAGS}}
 
   test:sweep:
     desc: Measure per-workspace resource usage across a sweep of active workspaces

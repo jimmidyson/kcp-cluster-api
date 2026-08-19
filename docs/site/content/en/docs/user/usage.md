@@ -14,6 +14,12 @@ Webhooks are the exception: one workspace or none. See
 exception costs and why it is there.
 {{% /pageinfo %}}
 
+## Seeing it work
+
+[`task demo`](demo.md) provisions clusters across several workspaces from one
+manager in about a minute, starting its own kcp server. It is the fastest way
+to see what the rest of this page describes.
+
 ## What is different, and what is not
 
 The API surface is upstream's, unchanged: `Cluster`, `Machine` and the rest
@@ -26,9 +32,10 @@ changes is *where* those objects live and how the controllers reach them:
   `APIExport` publishing the Cluster API types, rather than in a single
   physical cluster.
 - The manager discovers and caches workspaces through that export's
-  `APIExportEndpointSlice`, and engages exactly one of them —
-  `--workspace-cluster-name`. Running against a second workspace means
-  running a second process.
+  `APIExportEndpointSlice`, and engages every one of them as its `APIBinding`
+  becomes ready. No workspace is named in configuration. Webhooks are the
+  exception — one workspace or none, named by
+  `--webhook-workspace-cluster-name`.
 - Cross-references between objects (`spec.infrastructureRef`,
   `spec.bootstrap.configRef`, `spec.controlPlaneRef`) resolve through a
   kcp-aware contract-metadata resolver, because a workspace consuming a type
