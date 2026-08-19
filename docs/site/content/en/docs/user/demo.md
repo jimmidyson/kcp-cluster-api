@@ -11,14 +11,31 @@ task demo
 That starts a single-shard kcp server, publishes **one `APIExport` per
 provider** out of its `root` workspace, creates two workspaces bound to all of
 them, runs each provider's controllers — the same wiring each provider's own
-deployment runs — and provisions a cluster in each workspace, printing what
-they are doing until they are all up:
+deployment runs — and builds a cluster in each workspace, printing what they
+are doing until they are all ready:
 
 ```
-WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  DETAIL
-root:capi-demo-1  1vxo3icpjf48qwvy  demo-00  yes          infrastructure provisioned
-root:capi-demo-2  2hnz892clhia2ohv  demo-00  yes          infrastructure provisioned
+WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
+root:capi-demo-1  an4y05w1fxdiy8wi  demo-00  yes          yes    cluster ready
+root:capi-demo-2  37tqgo784myry3pn  demo-00  yes          yes    cluster ready
+
+WORKSPACE         CONTROL PLANE  INITIALIZED  READY  DETAIL
+root:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
+root:capi-demo-2  demo-00-cp     yes          1/1    control plane ready
+
+WORKSPACE         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
+root:capi-demo-1  demo-00-cp-6gkn6        yes           yes    demo-00-cp-6gkn6        Running  machine ready
+root:capi-demo-1  demo-00-md-vm96z-dkxwb  yes           yes    demo-00-md-vm96z-dkxwb  Running  machine ready
+root:capi-demo-2  demo-00-cp-9msd2        yes           yes    demo-00-cp-9msd2        Running  machine ready
+root:capi-demo-2  demo-00-md-9zjvz-h6kpz  yes           yes    demo-00-md-9zjvz-h6kpz  Running  machine ready
 ```
+
+Each cluster gets a control plane machine and a worker by default, because a
+cluster is what the demo is for. **Ready** is the Cluster's `Available`
+condition and is what the run waits for; provisioned infrastructure is a
+milestone on the way there, reported alongside rather than mistaken for the
+destination. A control plane whose machines never go Ready is provisioned, and
+is not a cluster.
 
 Both clusters are called `demo-00`, in both workspaces, on purpose: identical
 names are what makes a cross-workspace confusion visible rather than plausible.
@@ -47,7 +64,7 @@ task demo DEMO_FLAGS="--wait"
 ```
 
 `--wait` leaves the server and the manager running after every cluster is
-provisioned. The demo prints a `kubectl` command per workspace as it finishes —
+ready. The demo prints a `kubectl` command per workspace as it finishes —
 each one is the same kubeconfig with a different `--server`, because a kcp
 workspace *is* a URL path:
 
@@ -68,12 +85,13 @@ list.
 |---|---|---|
 | `--workspaces` | 2 | How many workspaces to create, bind and provision in |
 | `--clusters` | 1 | Clusters per workspace |
-| `--control-plane-machines` | 0 | Control plane machines per cluster. Any number above zero also wires the kubeadm bootstrap provider |
+| `--control-plane-machines` | 1 | Control plane machines per cluster, as a `KubeadmControlPlane`. Zero stops the run at provisioned infrastructure |
+| `--worker-machines` | 1 | Worker machines per cluster, as a `MachineDeployment`. Needs `--control-plane-machines`: a worker has no control plane to join otherwise |
 | `--backend` | `inmemory` | `inmemory` needs nothing; `docker` provisions real containers and pulls `kindest` images |
-| `--wait` | false | Stay up after provisioning |
+| `--wait` | false | Stay up after every cluster is ready |
 | `--kcp-kubeconfig` | — | Run against a kcp server you already have, instead of starting one |
 | `--no-manager` | false | Create the workspaces and objects only, against a `core-manager` you started yourself |
-| `--timeout` | 5m | How long to wait for every cluster |
+| `--timeout` | 5m | How long to wait for every cluster to be ready |
 
 Ten workspaces is as easy as two, and is the more interesting run:
 
@@ -81,36 +99,42 @@ Ten workspaces is as easy as two, and is the more interesting run:
 task demo DEMO_FLAGS="--workspaces 10 --wait"
 ```
 
-## Machines, and the bootstrap provider
+## Machines, and the providers behind them
 
 ```sh
-task demo DEMO_FLAGS="--control-plane-machines 1"
+task demo DEMO_FLAGS="--control-plane-machines 3 --worker-machines 2"
 ```
 
-Each cluster gets a `KubeadmControlPlane` with that many replicas, and the run
-also publishes and wires the kubeadm bootstrap and control plane providers. The
-control plane provider creates the Machines, their `KubeadmConfig`s and their
-`DevMachine`s itself — the demo does not name them:
-
-```
-WORKSPACE         CONTROL PLANE  INITIALIZED  READY  DETAIL
-root:capi-demo-1  demo-00-cp     yes          0/1    control plane initialized
-root:capi-demo-2  demo-00-cp     yes          0/1    control plane initialized
-
-WORKSPACE         MACHINE           BOOTSTRAPPED  DATA SECRET       PHASE        DETAIL
-root:capi-demo-1  demo-00-cp-ndnxq  yes           demo-00-cp-ndnxq  Provisioned  bootstrap data ready
-root:capi-demo-2  demo-00-cp-g5ccb  yes           demo-00-cp-g5ccb  Provisioned  bootstrap data ready
-```
+Each cluster gets a `KubeadmControlPlane` with that many replicas and a
+`MachineDeployment` with that many workers, and the run publishes and wires the
+kubeadm bootstrap and control plane providers alongside core and the dev
+infrastructure provider. Those providers create the Machines, their
+`KubeadmConfig`s and their `DevMachine`s themselves — the demo does not name
+them, which is why the names in the first table are ones it never chose. The
+`-cp-` machines are the control plane's; the `-md-` ones are the
+`MachineDeployment`'s.
 
 **Initialized** means the control plane can accept requests: there is a cluster
-there. Each workspace's bootstrap data and cluster certificate authority are its
-own — different bytes under identical names, which is what
+there. **Ready** is stricter, and is what the run waits for — every replica the
+control plane was asked for has passed every health check the provider makes
+against the workload cluster, and every Machine's Node is healthy. A control
+plane sits at `INITIALIZED yes` with `READY 0/1` in between, which is a state
+worth watching rather than a contradiction.
+
+Each workspace's bootstrap data and cluster certificate authority are its own —
+different bytes under identical names, which is what
 `test/integration/bootstrap` asserts.
 
-`READY 0/1` alongside `INITIALIZED yes` is not a contradiction: a control plane
-is initialized by its first machine and reports a replica ready once that
-machine passes every health check the provider makes against the workload
-cluster.
+For the cheapest possible run — infrastructure only, no bootstrap or control
+plane provider — ask for no machines:
+
+```sh
+task demo DEMO_FLAGS="--control-plane-machines 0"
+```
+
+That stops at provisioned infrastructure rather than at ready, because a
+`Cluster` with no control plane has no readiness to reach: its `Available`
+condition summarises a remote connection and a control plane it does not have.
 
 ## Against your own kcp
 
