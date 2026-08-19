@@ -4,9 +4,9 @@ description: What the one-command demo demonstrates, what it deliberately leaves
 weight: 28
 ---
 
-`task demo` builds Cluster API clusters across several kcp workspaces from
-one manager, and waits for them to be ready. This page is why it exists in the shape it does. For how to run
-it, see [Demo](../user/demo.md).
+`task demo` builds Cluster API clusters across several kcp workspaces from one
+manager and waits for them to be ready. This page is why it exists in the shape
+it does. For how to run it, see [Demo](../user/demo.md).
 
 ## Why a demo is a deliverable
 
@@ -58,8 +58,19 @@ wired now (the conversion plan's P1 and P2), so the reason to stop early is
 gone — and stopping early was never free. Provisioned infrastructure, an
 initialized control plane and a bootstrap data secret are all true of a cluster
 whose machines never go Ready, which is the shape every bug in this wiring has
-had: a missing `spec.providerID` index meant no `Machine` ever got a `nodeRef`,
-and the demo reported that run as a success.
+had. Two were sitting there when the done-condition moved, and the demo had
+been reporting both as a success:
+
+- The fleet-wide `ClusterCache` never registered the Node-by-`providerID`
+  index the Machine reconciler lists through, so every Machine reconcile ended
+  in `Index with name field:spec.providerID does not exist` and no Machine ever
+  got a `nodeRef`.
+- In the fork, a source declared with `WatchesRawSource` on a wildcard-mode
+  controller was never started, because in that mode the multicluster builder
+  is not what builds the controller. Nothing read the source, so the
+  ClusterCache's Cluster-event sends to it blocked until they timed out, and no
+  failed connection probe reached the control plane provider that asked to hear
+  about one.
 
 So the done-condition is readiness, and the table reports the milestones
 alongside it rather than instead of it. A run that does not finish says which
