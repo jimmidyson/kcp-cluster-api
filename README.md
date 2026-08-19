@@ -39,23 +39,24 @@ binary into `bin/` first.
 go install github.com/go-task/task/v3/cmd/task@latest
 
 task --list      # what you can run
-task demo        # see it work: clusters in several workspaces, one manager
+task demo        # see it work: ready clusters in several workspaces, one manager
 task check       # the fast subset: build, lint, unit tests
 task verify      # everything, including integration tests
 ```
 
 `task demo` is the quickest answer to what this repository does. It starts its
-own single-shard kcp server, creates two workspaces bound to the Cluster API
-`APIExport`, runs the same controllers `core-manager` runs, and provisions a
-cluster in each — about a minute, no container runtime, no images pulled. See
-[the demo docs](docs/site/content/en/docs/user/demo.md).
+own single-shard kcp server, creates two workspaces bound to each provider's
+`APIExport`, runs the same controllers the four manager binaries run, and
+builds a cluster in each — a control plane machine and a worker apiece, waited
+on until every one of them is ready. About a minute, no container runtime, no
+images pulled. See [the demo docs](docs/site/content/en/docs/user/demo.md).
 
 Every operation is a named `task` target, and CI invokes those same targets
 and nothing else — so anything CI does is reproducible locally by name.
 
 | Target | What it does |
 |---|---|
-| `demo` | Provision clusters across several kcp workspaces from one manager, in one command |
+| `demo` | Build a ready cluster in each of several kcp workspaces from one manager, in one command |
 | `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |
 | `build` | Compile all binaries |

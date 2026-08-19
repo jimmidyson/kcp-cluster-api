@@ -77,9 +77,11 @@ func TestBootstrapDataIsProducedInEveryWorkspace(t *testing.T) {
 		// is headroom, not a diagnosis: CI has twice shown a run reaching
 		// "1 of 2 clusters ready" and staying there, in the same job where
 		// another package did the identical work in 87 seconds. That is a
-		// stall, not slowness, and it is recorded in docs/conversion-plan.md
-		// rather than fixed by this number. Raise nothing further here - if
-		// this budget is hit again, the stall is what needs looking at.
+		// stall, not slowness: the in-memory mux was handing the second
+		// workspace a port something else held, forever. That is fixed in the
+		// fork; see docs/conversion-plan.md. The budget stays because a loaded
+		// runner is still slow, but it is no longer covering for anything -
+		// so if it is hit again, that is a new fault, not this one.
 		Timeout:      10 * time.Minute,
 		PollInterval: 2 * time.Second,
 		Log:          ctrl.Log.WithName("demo"),
