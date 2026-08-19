@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
@@ -109,5 +110,142 @@ func TestRenderTable(t *testing.T) {
 	}
 	if lines := strings.Count(strings.TrimSpace(out), "\n"); lines != 2 {
 		t.Errorf("RenderTable wrote %d rows after the header, want 2:\n%s", lines, out)
+	}
+}
+
+// A cluster is ready when Cluster API says it is Available, and the demo's
+// whole done-condition rests on reading that one condition correctly.
+func TestSummariseReady(t *testing.T) {
+	cluster := provisionedCluster()
+	cluster.Status.Conditions = []metav1.Condition{{
+		Type:   clusterv1.ClusterAvailableCondition,
+		Status: metav1.ConditionTrue,
+		Reason: clusterv1.ClusterAvailableReason,
+	}}
+
+	got := Summarise("root:demo-1", "abcdef", cluster, NewDevCluster(ClusterName(0), BackendInMemory))
+	if !got.Ready {
+		t.Errorf("Summarise(...).Ready = false for an Available cluster, detail %q", got.Detail)
+	}
+}
+
+// Provisioned but not available is the state every bug in this wiring has
+// produced, so it must not read as ready - and the row has to say what is
+// outstanding rather than repeating "infrastructure provisioned".
+func TestSummariseProvisionedIsNotReady(t *testing.T) {
+	cluster := provisionedCluster()
+	cluster.Status.Conditions = []metav1.Condition{{
+		Type:    clusterv1.ClusterAvailableCondition,
+		Status:  metav1.ConditionFalse,
+		Reason:  "NotAvailable",
+		Message: "control plane is not available",
+	}}
+
+	got := Summarise("root:demo-1", "abcdef", cluster, NewDevCluster(ClusterName(0), BackendInMemory))
+	if got.Ready {
+		t.Error("Summarise(...).Ready = true for a cluster whose Available condition is false")
+	}
+	if !got.Provisioned {
+		t.Error("Summarise(...).Provisioned = false, want the milestone still reported")
+	}
+	if !strings.Contains(got.Detail, "control plane is not available") {
+		t.Errorf("Summarise(...).Detail = %q, want the Available condition's message", got.Detail)
+	}
+}
+
+func TestAllClustersReadyEmptyIsNotDone(t *testing.T) {
+	if AllClustersReady(nil) {
+		t.Error("AllClustersReady(nil) = true, want false")
+	}
+}
+
+func TestAllClustersReady(t *testing.T) {
+	if !AllClustersReady([]ClusterStatus{{Ready: true}, {Ready: true}}) {
+		t.Error("AllClustersReady(all ready) = false")
+	}
+	if AllClustersReady([]ClusterStatus{{Ready: true}, {Provisioned: true}}) {
+		t.Error("AllClustersReady(one provisioned but not ready) = true")
+	}
+}
+
+// A control plane is ready when it has every replica it was asked for, not
+// when it has its first one - which is what Initialized already says.
+func TestSummariseControlPlaneReadyNeedsEveryReplica(t *testing.T) {
+	kcp := &controlplanev1.KubeadmControlPlane{}
+	kcp.Name = "demo-00-cp"
+	kcp.Spec.Replicas = ptr.To(int32(3))
+	kcp.Status.Initialization.ControlPlaneInitialized = ptr.To(true)
+	kcp.Status.ReadyReplicas = ptr.To(int32(1))
+
+	got := SummariseControlPlane("root:demo-1", "abcdef", kcp)
+	if !got.Initialized {
+		t.Error("SummariseControlPlane(...).Initialized = false for an initialized control plane")
+	}
+	if got.Ready {
+		t.Error("SummariseControlPlane(...).Ready = true with 1 of 3 replicas ready")
+	}
+
+	kcp.Status.ReadyReplicas = ptr.To(int32(3))
+	if got := SummariseControlPlane("root:demo-1", "abcdef", kcp); !got.Ready {
+		t.Errorf("SummariseControlPlane(...).Ready = false with 3 of 3 replicas ready, detail %q", got.Detail)
+	}
+}
+
+// Zero desired replicas is not readiness. Without this a control plane that
+// never scaled up would satisfy "every replica is ready" with none.
+func TestSummariseControlPlaneWithNoReplicasIsNotReady(t *testing.T) {
+	kcp := &controlplanev1.KubeadmControlPlane{}
+	kcp.Name = "demo-00-cp"
+
+	if got := SummariseControlPlane("root:demo-1", "abcdef", kcp); got.Ready {
+		t.Error("SummariseControlPlane(...).Ready = true for a control plane asked for no replicas")
+	}
+}
+
+func TestAllControlPlanesReadyEmptyIsVacuouslyTrue(t *testing.T) {
+	if !AllControlPlanesReady(nil) {
+		t.Error("AllControlPlanesReady(nil) = false, but a run that asked for no control plane is not waiting for one")
+	}
+	if AllControlPlanesReady([]ControlPlaneStatus{{Ready: true}, {Initialized: true}}) {
+		t.Error("AllControlPlanesReady(one initialized but not ready) = true")
+	}
+}
+
+// Bootstrapped is not ready: the data secret exists long before the Node does.
+func TestSummariseMachineReady(t *testing.T) {
+	machine := &clusterv1.Machine{}
+	machine.Name = "demo-00-cp-abcde"
+	machine.Spec.Bootstrap.DataSecretName = ptr.To("demo-00-cp-abcde")
+	machine.Status.Phase = "Provisioned"
+	machine.Status.Conditions = []metav1.Condition{{
+		Type:    clusterv1.MachineReadyCondition,
+		Status:  metav1.ConditionFalse,
+		Reason:  "NotReady",
+		Message: "Node is not yet available",
+	}}
+
+	got := SummariseMachine("root:demo-1", "abcdef", machine, nil)
+	if !got.Bootstrapped {
+		t.Error("SummariseMachine(...).Bootstrapped = false for a machine with its data secret")
+	}
+	if got.Ready {
+		t.Error("SummariseMachine(...).Ready = true for a machine whose Ready condition is false")
+	}
+	if !strings.Contains(got.Detail, "Node is not yet available") {
+		t.Errorf("SummariseMachine(...).Detail = %q, want the Ready condition's message", got.Detail)
+	}
+
+	machine.Status.Conditions[0].Status = metav1.ConditionTrue
+	if got := SummariseMachine("root:demo-1", "abcdef", machine, nil); !got.Ready {
+		t.Errorf("SummariseMachine(...).Ready = false for a Ready machine, detail %q", got.Detail)
+	}
+}
+
+func TestAllMachinesReady(t *testing.T) {
+	if !AllMachinesReady(nil) {
+		t.Error("AllMachinesReady(nil) = false, but a run that asked for no machines is not waiting for any")
+	}
+	if AllMachinesReady([]MachineStatus{{Ready: true}, {Bootstrapped: true}}) {
+		t.Error("AllMachinesReady(one bootstrapped but not ready) = true")
 	}
 }
