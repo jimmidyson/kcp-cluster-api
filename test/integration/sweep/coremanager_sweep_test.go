@@ -29,9 +29,11 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"slices"
 	"strings"
 
 	"github.com/kcp-dev/logicalcluster/v3"
@@ -67,30 +69,43 @@ var (
 	coreReconcilerDevCRDs = []string{
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
+		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
+	}
+	coreReconcilerBootstrapCRDs = []string{
+		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigs.yaml",
+		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml",
+	}
+	coreReconcilerControlPlaneCRDs = []string{
+		"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanes.yaml",
+		"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanetemplates.yaml",
 	}
 )
 
-// What one workspace's worth of this reconciler set watches, measured from a
+// What one workspace's worth of the core deployment watches, measured from a
 // run's own stream inventory and handler accounting rather than counted off
 // the source by eye.
 //
-// The two numbers differ, and the difference is the point. Six published types
-// are watched — Cluster, Machine, MachineSet, MachineDeployment, DevCluster
-// and DevMachine; MachineHealthCheck is published because it must be bound for
-// the controllers to start, but nothing here watches it. Fifteen event-handler
-// registrations are made against those six informers, because five controllers
-// each register their own handlers, several of them on the same type. It is
-// the registrations, not the types, that decide what a departing workspace
-// fails to give back.
+// The two numbers differ, and the difference is the point. Four published
+// types are watched — Cluster, Machine, MachineSet and MachineDeployment;
+// MachineHealthCheck is published because it must be bound for the controllers
+// to start, but nothing here watches it. More handlers than types are
+// registered against those informers, because five controllers each register
+// their own and several watch the same type. It is the registrations, not the
+// types, that decide what a departing workspace fails to give back.
 const (
-	coreReconcilerWatchedTypes  = 6
-	coreReconcilerEventHandlers = 15
+	coreReconcilerWatchedTypes  = 4
+	coreReconcilerEventHandlers = 12
 )
 
-// TestCoreReconcilerWorkspaceSweep measures what a deployment actually pays:
-// the whole reconciler set cmd/core-manager wires — ClusterCache, the core
-// Cluster and Machine reconcilers, and the dev infrastructure provider's
-// DevCluster and DevMachine reconcilers.
+// TestCoreDeploymentWorkspaceSweep measures what one deployment pays per
+// workspace: the reconciler set cmd/core-manager wires, and only that —
+// ClusterCache, Cluster, Machine, MachineSet and MachineDeployment.
+//
+// One deployment, because that is the unit now. Each Cluster API provider runs
+// as its own process against its own APIExport, so a workspace is engaged once
+// per deployment and the fleet's cost is the sum. This measures the largest of
+// those terms; TestFleetWorkspaceSweep measures every provider's controllers
+// together, which bounds the sum from the other side.
 //
 // It differs from TestActiveWorkspaceSweep in the workload and nothing else:
 // same instrument, same settling, same assertions. The point of running both
@@ -122,7 +137,7 @@ const (
 // it does not contact a daemon — moby's client.New(FromEnv) is lazy — so this
 // sweep runs without a container runtime, and no object here selects the
 // docker backend.
-func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
+func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 	scheme := k8sruntime.NewScheme()
 	must(t, clientgoscheme.AddToScheme(scheme))
 	must(t, apiextensionsv1.AddToScheme(scheme))
@@ -131,8 +146,8 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 	must(t, infrav1.AddToScheme(scheme))
 
 	runSweep(t, sweepConfig{
-		title:      "Active workspace sweep (core-manager reconciler set, in-memory backend)",
-		reportName: "sweep-report-coremanager",
+		title:      "Active workspace sweep (the core provider's deployment)",
+		reportName: "sweep-report-core",
 		exportName: "cluster-api-sweep-core",
 
 		// Its own environment variables, and smaller defaults. Five
@@ -148,9 +163,10 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 		watchedTypes:  coreReconcilerWatchedTypes,
 		eventHandlers: coreReconcilerEventHandlers,
 		facts: map[string]string{
-			"shape":             "coremanager.SetupFleetControllers: ClusterCache, Cluster, Machine, DevCluster, DevMachine — one controller each for the whole shard",
-			"reconciledTypes":   "cluster.x-k8s.io/clusters + infrastructure.cluster.x-k8s.io/devclusters",
-			"devClusterBackend": "inMemory",
+			"shape":           "coremanager.SetupCoreControllers: ClusterCache, Cluster, Machine, MachineSet, MachineDeployment — one controller each for the whole shard",
+			"deploymentName":  "core-manager",
+			"deployment":      "core-manager, one of four provider deployments",
+			"reconciledTypes": "cluster.x-k8s.io/clusters",
 		},
 
 		scheme: scheme,
@@ -161,9 +177,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// against.
 			paths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreReconcilerCoreCRDs...)
 			must(t, err)
-			devPaths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPITest, coreReconcilerDevCRDs...)
-			must(t, err)
-			return append(paths, devPaths...)
+			return paths
 		},
 		crdTransform: keepStorageVersion,
 
@@ -191,9 +205,6 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// workspace consumes via APIBinding. See ADR-0001's "Known gaps".
 			coremanager.SetupProcessGlobals()
 
-			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1")
-			must(t, err)
-
 			// Kept for the diagnostic below, which needs to ask the two caches
 			// what they can see.
 			fleetManager = mgr
@@ -201,56 +212,53 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 			// The production wiring itself, unmodified — not a
 			// reimplementation of it. Anything this sweep measures that a
 			// deployment would not pay would make the numbers a fiction.
-			must(t, coremanager.SetupFleetControllers(ctx, mgr, registry, dev, coremanager.SetupOptions{
+			fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{
 				// The shard, not the manager's config: the ClusterCache reads
 				// kubeconfig Secrets, which live in the workspaces themselves
 				// and not in the virtual workspace the manager addresses.
 				ShardConfig: shardCfg,
-			}))
+
+				// Two shapes in one test binary means two ClusterCaches in one
+				// process, which controller-runtime's global controller-name
+				// registry rejects. A deployment builds one; only a co-located
+				// process like this one, or the demo, needs the exemption.
+				SkipControllerNameValidation: true,
+			})
+			must(t, err)
+			// Nil dev infrastructure: this is the core provider's deployment,
+			// and that provider is a deployment of its own now.
+			must(t, coremanager.SetupCoreControllers(ctx, mgr, fleet, nil))
 		},
 
 		activate: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {
 			t.Helper()
 			for n := range objects {
-				name := objectName(tn, n)
-
-				// The infrastructure object first: the Cluster reconciler
-				// resolves spec.infrastructureRef and sets an owner reference
-				// on what it finds, which is what starts the DevCluster
-				// reconciler working.
-				devCluster := &infrav1.DevCluster{
-					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-					Spec: infrav1.DevClusterSpec{
-						Backend: infrav1.DevClusterBackendSpec{
-							InMemory: &infrav1.InMemoryClusterBackendSpec{},
-						},
-					},
-				}
-				if err := tn.directClient.Create(ctx, devCluster); err != nil && !apierrors.IsAlreadyExists(err) {
-					t.Fatalf("creating DevCluster %s in workspace %s: %v", name, tn.name, err)
-				}
-
+				// A Cluster alone: the infrastructure provider is a separate
+				// deployment, so this process has nothing that would act on a
+				// DevCluster, and creating one would measure an object nobody
+				// reconciles.
+				//
+				// Paused is set explicitly, and not for its meaning: ClusterSpec
+				// is tagged omitzero, so an entirely zero spec is omitted from
+				// the serialised object and the server rejects it with
+				// "spec: Required value".
 				cluster := &clusterv1.Cluster{
-					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-					Spec: clusterv1.ClusterSpec{
-						InfrastructureRef: clusterv1.ContractVersionedObjectReference{
-							APIGroup: infrav1.GroupVersion.Group,
-							Kind:     "DevCluster",
-							Name:     name,
-						},
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: objectName(tn, n), Namespace: "default"},
+					Spec:       clusterv1.ClusterSpec{Paused: ptr.To(false)},
 				}
 				if err := tn.directClient.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
-					t.Fatalf("creating Cluster %s in workspace %s: %v", name, tn.name, err)
+					t.Fatalf("creating Cluster %s in workspace %s: %v", cluster.Name, tn.name, err)
 				}
 			}
 		},
 
-		// Active means provisioned, not merely created. Waiting for the
-		// infrastructure to come up is what proves the whole chain ran in this
-		// workspace — the Cluster reconciler resolved a contract-versioned
-		// reference, the DevCluster reconciler acted on it, and the status it
-		// wrote landed back in this workspace and not another.
+		// Active means the Cluster reconciler ran for this workspace and its
+		// write landed here: the finalizer is the first thing it adds to every
+		// Cluster, and it is this deployment's work rather than another's.
+		//
+		// Provisioned infrastructure is not available as a signal any more, and
+		// that is the split showing through: no single deployment takes a
+		// cluster from created to provisioned.
 		active: func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool {
 			t.Helper()
 			for n := range objects {
@@ -262,8 +270,7 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 					}
 					t.Fatalf("reading Cluster %s in workspace %s: %v", key.Name, tn.name, err)
 				}
-				provisioned := cluster.Status.Initialization.InfrastructureProvisioned
-				if provisioned == nil || !*provisioned {
+				if !slices.Contains(cluster.Finalizers, clusterv1.ClusterFinalizer) {
 					return false
 				}
 			}
@@ -315,13 +322,15 @@ func TestCoreReconcilerWorkspaceSweep(t *testing.T) {
 // plausible, and every tenancy assertion in this sweep rests on it.
 //
 // SWEEP_CORE_UNIQUE_NAMES=1 makes them unique instead, which is a diagnostic
-// rather than a mode. The dev provider's in-memory backend keys its
-// process-global workload-cluster listeners by namespace and name alone
-// (klog.KObj), so under the default naming every workspace shares one listener
-// on one port. That is a documented limitation of upstream's *test*
-// infrastructure provider — see coremanager.DevInfrastructure — and this knob
-// exists to tell it apart from a fault in the workspace-aware wiring: if a
-// failure survives unique names, the backend collision is not what caused it.
+// rather than a mode. The dev provider's in-memory backend used to key its
+// process-global workload-cluster listeners by namespace and name alone, so
+// every workspace's default/sweep-00 shared one listener on one port — one
+// tenant's control plane serving another's, which is a collision that works
+// rather than one that fails. The fork keys them by management cluster as well
+// (workloadClusterKey, carried in DRIFT.md), so that is fixed; this knob stays
+// because it is how a name collision is told apart from a fault in the
+// workspace-aware wiring. A failure that survives unique names is not a
+// collision.
 func objectName(tn *tenant, n int) string {
 	if os.Getenv("SWEEP_CORE_UNIQUE_NAMES") == "1" {
 		return fmt.Sprintf("sweep-%s-%02d", strings.ToLower(string(tn.name)), n)
