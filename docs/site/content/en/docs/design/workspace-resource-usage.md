@@ -317,24 +317,45 @@ runnables to a workspace's lifetime. That is a change to this project's own
 seam, not to upstream. It is not built, and with no deployment using the seam
 any more the trigger for building it has receded.
 
-## Unbinding is not a cancel button
+## Unbinding a workspace that still holds clusters
 
 Deleting an `APIBinding` makes kcp delete every object of every bound type, all
 at once. Cluster API's teardown is a sequence — a `Cluster` deletes its control
 plane, which deletes its `Machine`s, which delete the `DevMachine`s underneath
-them — and removed out of order it does not complete: the dev provider's
-`DevMachine` reconciler returns without requeueing when the `DevCluster` it
-needs is already gone, so the `DevMachine` keeps its finalizer, kcp keeps the
-`APIBinding`, and the workspace never disengages.
+them — and removed out of order it used not to complete at all. The
+`DevMachine` reconciler needs its `Machine`, its `Cluster` and its `DevCluster`,
+and when any of them had already gone it returned without requeueing or errored
+forever. Its finalizer stayed, which held the `Machine`, which held the control
+plane, which held the `Cluster`, which held the `APIBinding`. The workspace
+never disengaged and nothing in it could be cleaned up.
 
-This was found by measuring it: the fleet sweep timed out in its departure
-phase until it was changed to delete each workspace's `Cluster` and wait for
-the tree to go before unbinding. That is what a tenant winding a workspace down
-would do anyway, and it is the sequence the departure figures above were
-measured against.
+That was found by measuring it: the fleet sweep timed out in its departure
+phase, every time, until the shape was changed to wind each workspace down
+before unbinding.
 
-The operator-facing form: **unbinding does not cancel a workspace's clusters,
-and does not stop paying for them.** Delete the clusters, then unbind.
+**It is fixed in the fork**, and in two parts, because the obvious half is not
+enough on its own:
+
+- A deleting `DevCluster` now waits for its `DevMachine`s. It has to outlive
+  them — the docker backend deletes only the load balancer with the
+  `DevCluster` and leaves each machine's container to that machine's own
+  reconcile — so simply releasing the machines would have traded a deadlock for
+  a container leak. With the order enforced by the controller rather than by
+  its callers, deletion reaches each backend with everything it needs.
+- A deleted `DevMachine` whose `Machine` or `Cluster` has gone anyway releases
+  its finalizer. Backend state is keyed by the cluster, so once the `Cluster`
+  is gone there is nothing left to reach and holding on only blocks whatever
+  owns the object.
+
+`test/integration/teardown` is the check from the outside: a workspace with a
+running control plane, every `APIBinding` deleted without touching the cluster,
+and every binding required to finish deleting. It takes about two minutes,
+against a deadlock that never resolved.
+
+The sweeps still delete their clusters before unbinding. That is measurement
+hygiene rather than necessity now — a departure sample taken while a full
+cluster teardown is in flight measures the teardown — and it is also what a
+tenant winding a workspace down would do.
 
 ## Running it
 

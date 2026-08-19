@@ -78,10 +78,12 @@ against the 8 that serving the workspace costs across all four.
 [Workspace resource usage](../design/workspace-resource-usage.md) for the
 method and the full results.
 
-**Unbinding is not a cancel button.** Deleting an `APIBinding` while the
-workspace still holds clusters does not tear them down in the order Cluster API
-needs, and the binding will not finish deleting. Delete the clusters first,
-then unbind.
+**Unbinding tears the clusters down with it.** Deleting an `APIBinding` while
+the workspace still holds clusters removes every bound object at once, and the
+providers clean up as it goes: the binding finishes deleting once they have.
+Expect it to take a couple of minutes rather than to be instant, and treat it
+as destructive — there is no "stop using Cluster API but keep my clusters".
+Delete the clusters yourself first if you want to watch that happen separately.
 
 ## Not supported yet
 
