@@ -38,6 +38,7 @@ import (
 
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
@@ -142,6 +143,7 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 	must(t, clientgoscheme.AddToScheme(scheme))
 	must(t, apiextensionsv1.AddToScheme(scheme))
 	must(t, apisv1alpha1.AddToScheme(scheme))
+	must(t, apisv1alpha2.AddToScheme(scheme))
 	must(t, clusterv1.AddToScheme(scheme))
 	must(t, infrav1.AddToScheme(scheme))
 

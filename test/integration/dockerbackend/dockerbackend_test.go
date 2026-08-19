@@ -64,6 +64,7 @@ import (
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 	kcptestinghelpers "github.com/kcp-dev/sdk/testing/helpers"
 
@@ -193,6 +194,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	must(t, clientgoscheme.AddToScheme(fixtureScheme))
 	must(t, apiextensionsv1.AddToScheme(fixtureScheme))
 	must(t, apisv1alpha1.AddToScheme(fixtureScheme))
+	must(t, apisv1alpha2.AddToScheme(fixtureScheme))
 
 	rootCfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), logicalcluster.NewPath("root"))
 	rootClient, err := client.New(rootCfg, client.Options{Scheme: fixtureScheme})
@@ -264,6 +266,7 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	must(t, clientgoscheme.AddToScheme(mgrScheme))
 	must(t, apiextensionsv1.AddToScheme(mgrScheme))
 	must(t, apisv1alpha1.AddToScheme(mgrScheme))
+	must(t, apisv1alpha2.AddToScheme(mgrScheme))
 	must(t, clusterv1beta1.AddToScheme(mgrScheme))
 	must(t, clusterv1.AddToScheme(mgrScheme))
 	must(t, infrav1beta1.AddToScheme(mgrScheme))

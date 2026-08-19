@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
@@ -87,6 +88,7 @@ func TestActiveWorkspaceSweep(t *testing.T) {
 	must(t, clientgoscheme.AddToScheme(scheme))
 	must(t, apiextensionsv1.AddToScheme(scheme))
 	must(t, apisv1alpha1.AddToScheme(scheme))
+	must(t, apisv1alpha2.AddToScheme(scheme))
 	must(t, clusterv1.AddToScheme(scheme))
 
 	reconciled := newReconcileLog()

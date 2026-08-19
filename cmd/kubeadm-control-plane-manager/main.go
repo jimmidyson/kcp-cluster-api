@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
@@ -85,6 +86,7 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = apiextensionsv1.AddToScheme(scheme)
 	_ = apisv1alpha1.AddToScheme(scheme)
+	_ = apisv1alpha2.AddToScheme(scheme)
 
 	_ = clusterv1beta1.AddToScheme(scheme)
 	_ = clusterv1.AddToScheme(scheme)
