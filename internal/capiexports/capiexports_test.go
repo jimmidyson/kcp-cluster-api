@@ -59,8 +59,8 @@ func TestClaimsCarryTheOtherExportsIdentity(t *testing.T) {
 	got := map[string]string{}
 	for _, c := range claims {
 		got[c.Resource] = c.IdentityHash
-		if !c.All {
-			t.Errorf("claim for %s is not All: a claim that selects nothing grants nothing", c.Resource)
+		if len(c.Verbs) == 0 {
+			t.Errorf("claim for %s carries no verbs: v1alpha2 requires at least one, and a claim granting nothing grants nothing", c.Resource)
 		}
 	}
 
@@ -176,7 +176,7 @@ func TestClaimGraphMatchesTheWiring(t *testing.T) {
 // certificates, workload-cluster kubeconfigs.
 func TestEveryProviderClaimsSecrets(t *testing.T) {
 	for _, p := range All() {
-		if !slices.Contains(p.CoreClaims, secrets) {
+		if !slices.ContainsFunc(p.CoreClaims, func(r Resource) bool { return r.Resource == secrets.Resource }) {
 			t.Errorf("%s does not claim secrets", p.Export)
 		}
 	}

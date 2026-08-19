@@ -76,6 +76,7 @@ import (
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -158,7 +159,7 @@ type sweepConfig struct {
 	// bootstrap and control plane providers do - measures nothing without
 	// them: the writes are refused, and what the sweep records is a workspace
 	// that never became active.
-	permissionClaims []apisv1alpha1.PermissionClaim
+	permissionClaims []apisv1alpha2.PermissionClaim
 
 	// newSetup builds the per-workspace wiring under measurement. It is called
 	// once, before the manager starts, so anything process-global it needs is

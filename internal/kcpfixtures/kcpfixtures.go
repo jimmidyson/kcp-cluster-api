@@ -32,7 +32,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"slices"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -43,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 )
 
 // LoadCRD reads and decodes a single CustomResourceDefinition manifest, as
@@ -114,7 +114,12 @@ type PublishAPIExportOptions struct {
 	// bootstrap provider's data secrets and certificates. A claim only
 	// declares the need; the binding workspace has to accept it, which is
 	// what BindExportOptions.PermissionClaims does.
-	PermissionClaims []apisv1alpha1.PermissionClaim
+	//
+	// v1alpha2 rather than v1alpha1, because only v1alpha2 has verbs: a
+	// v1alpha1 claim grants every verb and there is no way to say otherwise.
+	// APIResourceSchema and APIExportEndpointSlice have no v1alpha2, so those
+	// stay where they are; kcp serves both versions of the two types that do.
+	PermissionClaims []apisv1alpha2.PermissionClaim
 
 	// CRDTransform, if set, is called on each loaded CRD before conversion
 	// to an APIResourceSchema (and before the ConversionWebhookClientConfig
@@ -139,7 +144,7 @@ type PublishAPIExportOptions struct {
 // WaitForAPIExportEndpointSlice after binding at least one workspace to this
 // export via BindExport.
 func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExportOptions) error {
-	schemaNames := make([]string, 0, len(opts.CRDPaths))
+	resources := make([]apisv1alpha2.ResourceSchema, 0, len(opts.CRDPaths))
 	for _, path := range opts.CRDPaths {
 		crd, err := LoadCRD(path)
 		if err != nil {
@@ -169,14 +174,24 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 		if err := cl.Create(ctx, schema); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("creating APIResourceSchema %s: %w", schema.Name, err)
 		}
-		schemaNames = append(schemaNames, schema.Name)
+		// v1alpha2 names the resource and group alongside the schema, where
+		// v1alpha1 carried the schema name alone and left kcp to parse the
+		// rest back out of it.
+		resources = append(resources, apisv1alpha2.ResourceSchema{
+			Name:   crd.Spec.Names.Plural,
+			Group:  crd.Spec.Group,
+			Schema: schema.Name,
+			Storage: apisv1alpha2.ResourceSchemaStorage{
+				CRD: &apisv1alpha2.ResourceSchemaStorageCRD{},
+			},
+		})
 	}
 
-	export := &apisv1alpha1.APIExport{
+	export := &apisv1alpha2.APIExport{
 		ObjectMeta: metav1.ObjectMeta{Name: opts.ExportName},
-		Spec: apisv1alpha1.APIExportSpec{
-			LatestResourceSchemas: schemaNames,
-			PermissionClaims:      opts.PermissionClaims,
+		Spec: apisv1alpha2.APIExportSpec{
+			Resources:        resources,
+			PermissionClaims: opts.PermissionClaims,
 		},
 	}
 	if err := cl.Create(ctx, export); err != nil {
@@ -207,16 +222,16 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 }
 
 // updateAPIExport brings an existing APIExport in line with want.
-func updateAPIExport(ctx context.Context, cl client.Client, want *apisv1alpha1.APIExport) error {
-	got := &apisv1alpha1.APIExport{}
+func updateAPIExport(ctx context.Context, cl client.Client, want *apisv1alpha2.APIExport) error {
+	got := &apisv1alpha2.APIExport{}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(want), got); err != nil {
 		return fmt.Errorf("reading existing APIExport %s: %w", want.Name, err)
 	}
-	if slices.Equal(got.Spec.LatestResourceSchemas, want.Spec.LatestResourceSchemas) &&
+	if reflect.DeepEqual(got.Spec.Resources, want.Spec.Resources) &&
 		reflect.DeepEqual(got.Spec.PermissionClaims, want.Spec.PermissionClaims) {
 		return nil
 	}
-	got.Spec.LatestResourceSchemas = want.Spec.LatestResourceSchemas
+	got.Spec.Resources = want.Spec.Resources
 	got.Spec.PermissionClaims = want.Spec.PermissionClaims
 	if err := cl.Update(ctx, got); err != nil {
 		return fmt.Errorf("updating APIExport %s: %w", want.Name, err)
@@ -268,7 +283,7 @@ type BindExportOptions struct {
 	// WorkspaceType's Maintain lifecycle instead.
 	//
 	// [ADR-0001's decision 3]: ../../docs/adr-0001-provider-api-permissions.md
-	PermissionClaims []apisv1alpha1.PermissionClaim
+	PermissionClaims []apisv1alpha2.PermissionClaim
 
 	// ReadyTimeout bounds how long BindExport waits for the APIBinding to
 	// reach phase Bound. Defaults to 30s.
@@ -283,19 +298,25 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 		opts.ReadyTimeout = 30 * time.Second
 	}
 
-	accepted := make([]apisv1alpha1.AcceptablePermissionClaim, 0, len(opts.PermissionClaims))
+	accepted := make([]apisv1alpha2.AcceptablePermissionClaim, 0, len(opts.PermissionClaims))
 	for _, claim := range opts.PermissionClaims {
-		accepted = append(accepted, apisv1alpha1.AcceptablePermissionClaim{
-			PermissionClaim: claim,
-			State:           apisv1alpha1.ClaimAccepted,
+		accepted = append(accepted, apisv1alpha2.AcceptablePermissionClaim{
+			ScopedPermissionClaim: apisv1alpha2.ScopedPermissionClaim{
+				PermissionClaim: claim,
+				// Every object of the claimed resource. A selector is how
+				// v1alpha2 scopes a claim by labels; nothing here wants that
+				// yet, and matchAll is what v1alpha1's `all: true` meant.
+				Selector: apisv1alpha2.PermissionClaimSelector{MatchAll: true},
+			},
+			State: apisv1alpha2.ClaimAccepted,
 		})
 	}
 
-	binding := &apisv1alpha1.APIBinding{
+	binding := &apisv1alpha2.APIBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: opts.BindingName},
-		Spec: apisv1alpha1.APIBindingSpec{
-			Reference: apisv1alpha1.BindingReference{
-				Export: &apisv1alpha1.ExportBindingReference{
+		Spec: apisv1alpha2.APIBindingSpec{
+			Reference: apisv1alpha2.BindingReference{
+				Export: &apisv1alpha2.ExportBindingReference{
 					Path: opts.ExportPath,
 					Name: opts.ExportName,
 				},
@@ -309,7 +330,7 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 		}
 		// Same reasoning as the export: a binding that exists but accepts
 		// fewer claims than asked for is not the binding that was asked for.
-		got := &apisv1alpha1.APIBinding{}
+		got := &apisv1alpha2.APIBinding{}
 		if err := cl.Get(ctx, client.ObjectKeyFromObject(binding), got); err != nil {
 			return fmt.Errorf("reading existing APIBinding %s: %w", opts.BindingName, err)
 		}
@@ -322,11 +343,11 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 	}
 
 	return wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, opts.ReadyTimeout, true, func(ctx context.Context) (bool, error) {
-		got := &apisv1alpha1.APIBinding{}
+		got := &apisv1alpha2.APIBinding{}
 		if err := cl.Get(ctx, client.ObjectKeyFromObject(binding), got); err != nil {
 			return false, nil //nolint:nilerr // transient; keep polling until timeout.
 		}
-		return got.Status.Phase == apisv1alpha1.APIBindingPhaseBound, nil
+		return got.Status.Phase == apisv1alpha2.APIBindingPhaseBound, nil
 	})
 }
 

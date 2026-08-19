@@ -57,6 +57,7 @@ import (
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 
@@ -131,9 +132,9 @@ var (
 // They are claimed whether or not a run wires the bootstrap provider: a demo
 // that changed the export's shape depending on its flags would make two runs
 // against one server disagree about what the export is.
-var PermissionClaims = []apisv1alpha1.PermissionClaim{
-	{GroupResource: apisv1alpha1.GroupResource{Resource: "secrets"}, All: true},
-	{GroupResource: apisv1alpha1.GroupResource{Resource: "configmaps"}, All: true},
+var PermissionClaims = []apisv1alpha2.PermissionClaim{
+	{GroupResource: apisv1alpha2.GroupResource{Resource: "secrets"}, Verbs: []string{"*"}},
+	{GroupResource: apisv1alpha2.GroupResource{Resource: "configmaps"}, Verbs: []string{"*"}},
 }
 
 // Options configures a demo run.
@@ -323,6 +324,7 @@ func fixtureScheme() (*runtime.Scheme, error) {
 		clientgoscheme.AddToScheme,
 		apiextensionsv1.AddToScheme,
 		apisv1alpha1.AddToScheme,
+		apisv1alpha2.AddToScheme,
 		tenancyv1alpha1.AddToScheme,
 		corev1alpha1.AddToScheme,
 	} {

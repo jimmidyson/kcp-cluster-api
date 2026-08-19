@@ -45,6 +45,7 @@ import (
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -91,6 +92,7 @@ func TestWorkspaceCeiling(t *testing.T) {
 		clientgoscheme.AddToScheme,
 		apiextensionsv1.AddToScheme,
 		apisv1alpha1.AddToScheme,
+		apisv1alpha2.AddToScheme,
 		clusterv1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {

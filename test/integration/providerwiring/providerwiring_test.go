@@ -54,6 +54,7 @@ import (
 	"github.com/kcp-dev/logicalcluster/v3"
 	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	kcptesting "github.com/kcp-dev/sdk/testing"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -241,6 +242,7 @@ func TestEveryBoundWorkspaceIsWired(t *testing.T) {
 	must(t, clientgoscheme.AddToScheme(scheme))
 	must(t, apiextensionsv1.AddToScheme(scheme))
 	must(t, apisv1alpha1.AddToScheme(scheme))
+	must(t, apisv1alpha2.AddToScheme(scheme))
 	must(t, clusterv1.AddToScheme(scheme))
 
 	rootCfg := kcpclient.SetCluster(rest.CopyConfig(baseCfg), logicalcluster.NewPath("root"))

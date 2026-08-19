@@ -41,6 +41,7 @@ import (
 	"github.com/kcp-dev/logicalcluster/v3"
 	"github.com/kcp-dev/multicluster-provider/apiexport"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
@@ -129,6 +130,7 @@ func TestReconcileThroughput(t *testing.T) {
 		clientgoscheme.AddToScheme,
 		apiextensionsv1.AddToScheme,
 		apisv1alpha1.AddToScheme,
+		apisv1alpha2.AddToScheme,
 		clusterv1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {

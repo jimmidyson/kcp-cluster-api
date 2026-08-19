@@ -35,6 +35,7 @@ import (
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
@@ -108,16 +109,16 @@ func TestCoreCanReachAnotherExportsTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving the core CRD: %v", err)
 	}
-	devClusterClaim := apisv1alpha1.PermissionClaim{
-		GroupResource: apisv1alpha1.GroupResource{Group: infrav1.GroupVersion.Group, Resource: "devclusters"},
+	devClusterClaim := apisv1alpha2.PermissionClaim{
+		GroupResource: apisv1alpha2.GroupResource{Group: infrav1.GroupVersion.Group, Resource: "devclusters"},
 		IdentityHash:  identityHash,
-		All:           true,
+		Verbs:         []string{"*"},
 	}
 	if err := kcpfixtures.PublishAPIExport(ctx, rootClient, kcpfixtures.PublishAPIExportOptions{
 		ExportName:       coreExport,
 		SchemaPrefix:     "v1",
 		CRDPaths:         coreCRDs,
-		PermissionClaims: []apisv1alpha1.PermissionClaim{devClusterClaim},
+		PermissionClaims: []apisv1alpha2.PermissionClaim{devClusterClaim},
 		CRDTransform:     kcpfixtures.KeepStorageVersion,
 	}); err != nil {
 		t.Fatalf("publishing the core APIExport: %v", err)
@@ -142,7 +143,7 @@ func TestCoreCanReachAnotherExportsTypes(t *testing.T) {
 			BindingName:      coreExport,
 			ExportPath:       "root",
 			ExportName:       coreExport,
-			PermissionClaims: []apisv1alpha1.PermissionClaim{devClusterClaim},
+			PermissionClaims: []apisv1alpha2.PermissionClaim{devClusterClaim},
 			ReadyTimeout:     time.Minute,
 		},
 	} {

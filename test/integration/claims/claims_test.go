@@ -47,7 +47,7 @@ import (
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
-	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
@@ -65,16 +65,16 @@ const (
 // workspace. Narrower selectors exist, and a deployment may want them; what
 // is being established here is whether the mechanism serves the resource at
 // all.
-var secretClaim = apisv1alpha1.PermissionClaim{
-	GroupResource: apisv1alpha1.GroupResource{Group: "", Resource: "secrets"},
-	All:           true,
+var secretClaim = apisv1alpha2.PermissionClaim{
+	GroupResource: apisv1alpha2.GroupResource{Group: "", Resource: "secrets"},
+	Verbs:         []string{"*"},
 }
 
 // configMapClaim is the other half of what the bootstrap provider needs: the
 // control plane init lock is a ConfigMap.
-var configMapClaim = apisv1alpha1.PermissionClaim{
-	GroupResource: apisv1alpha1.GroupResource{Group: "", Resource: "configmaps"},
-	All:           true,
+var configMapClaim = apisv1alpha2.PermissionClaim{
+	GroupResource: apisv1alpha2.GroupResource{Group: "", Resource: "configmaps"},
+	Verbs:         []string{"*"},
 }
 
 func TestClaimedSecretsAreServedThroughTheVirtualWorkspace(t *testing.T) {
@@ -107,7 +107,7 @@ func TestClaimedSecretsAreServedThroughTheVirtualWorkspace(t *testing.T) {
 		ExportName:       exportName,
 		SchemaPrefix:     "v1",
 		CRDPaths:         crdPaths,
-		PermissionClaims: []apisv1alpha1.PermissionClaim{secretClaim, configMapClaim},
+		PermissionClaims: []apisv1alpha2.PermissionClaim{secretClaim, configMapClaim},
 		CRDTransform:     kcpfixtures.KeepStorageVersion,
 	}); err != nil {
 		t.Fatalf("publishing the APIExport: %v", err)
@@ -129,7 +129,7 @@ func TestClaimedSecretsAreServedThroughTheVirtualWorkspace(t *testing.T) {
 		BindingName:      bindingName,
 		ExportPath:       "root",
 		ExportName:       exportName,
-		PermissionClaims: []apisv1alpha1.PermissionClaim{secretClaim, configMapClaim},
+		PermissionClaims: []apisv1alpha2.PermissionClaim{secretClaim, configMapClaim},
 		ReadyTimeout:     time.Minute,
 	}); err != nil {
 		t.Fatalf("binding the APIExport: %v", err)

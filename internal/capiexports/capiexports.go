@@ -53,7 +53,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 )
@@ -73,6 +73,18 @@ const (
 type Resource struct {
 	Group    string
 	Resource string
+
+	// Verbs is what the claiming provider may do with it. Empty means every
+	// verb, which is what a v1alpha1 claim granted and what this project asked
+	// for before v1alpha2 gave it a way to say otherwise.
+	//
+	// Narrowing these is worth doing and is not free to get wrong: a verb a
+	// controller needs and does not have shows up as a write refused deep in a
+	// reconcile, not as a validation error at bind time. Anything narrowed
+	// here has to be exercised end to end - the demo brings a cluster up and
+	// test/integration/teardown takes one down again, which between them cover
+	// the create and delete paths.
+	Verbs []string
 }
 
 // Provider is one provider's export: what it publishes, and what it needs from
@@ -245,8 +257,8 @@ type Identities map[string]string
 // claim with an empty identity. An empty identity hash does not mean "any
 // export"; it means "a core type", so writing one for a provider resource
 // would silently claim something else.
-func (p Provider) Claims(identities Identities) []apisv1alpha1.PermissionClaim {
-	claims := make([]apisv1alpha1.PermissionClaim, 0, len(p.CoreClaims))
+func (p Provider) Claims(identities Identities) []apisv1alpha2.PermissionClaim {
+	claims := make([]apisv1alpha2.PermissionClaim, 0, len(p.CoreClaims))
 	for _, r := range p.CoreClaims {
 		claims = append(claims, claim(r, ""))
 	}
@@ -267,7 +279,7 @@ func (p Provider) Claims(identities Identities) []apisv1alpha1.PermissionClaim {
 		}
 	}
 
-	slices.SortFunc(claims, func(a, b apisv1alpha1.PermissionClaim) int {
+	slices.SortFunc(claims, func(a, b apisv1alpha2.PermissionClaim) int {
 		if a.Group != b.Group {
 			return compare(a.Group, b.Group)
 		}
@@ -290,11 +302,18 @@ func (p Provider) MissingIdentities(identities Identities) []string {
 	return missing
 }
 
-func claim(r Resource, identity string) apisv1alpha1.PermissionClaim {
-	return apisv1alpha1.PermissionClaim{
-		GroupResource: apisv1alpha1.GroupResource{Group: r.Group, Resource: r.Resource},
+func claim(r Resource, identity string) apisv1alpha2.PermissionClaim {
+	verbs := r.Verbs
+	if len(verbs) == 0 {
+		// v1alpha2 requires at least one verb, so "unset" has to become
+		// something. Every verb is what a v1alpha1 claim granted, which keeps
+		// an unnarrowed resource behaving as it did.
+		verbs = []string{"*"}
+	}
+	return apisv1alpha2.PermissionClaim{
+		GroupResource: apisv1alpha2.GroupResource{Group: r.Group, Resource: r.Resource},
 		IdentityHash:  identity,
-		All:           true,
+		Verbs:         verbs,
 	}
 }
 
@@ -379,7 +398,7 @@ func WaitForIdentities(ctx context.Context, cl client.Client, providers []Provid
 	for _, p := range providers {
 		var identity string
 		err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, timeout, true, func(ctx context.Context) (bool, error) {
-			export := &apisv1alpha1.APIExport{}
+			export := &apisv1alpha2.APIExport{}
 			if err := cl.Get(ctx, client.ObjectKey{Name: p.Export}, export); err != nil {
 				return false, nil //nolint:nilerr // transient; keep polling until timeout.
 			}
@@ -394,8 +413,8 @@ func WaitForIdentities(ctx context.Context, cl client.Client, providers []Provid
 	return identities, nil
 }
 
-func setClaims(ctx context.Context, cl client.Client, name string, claims []apisv1alpha1.PermissionClaim) error {
-	export := &apisv1alpha1.APIExport{}
+func setClaims(ctx context.Context, cl client.Client, name string, claims []apisv1alpha2.PermissionClaim) error {
+	export := &apisv1alpha2.APIExport{}
 	if err := cl.Get(ctx, client.ObjectKey{Name: name}, export); err != nil {
 		return fmt.Errorf("reading APIExport %s: %w", name, err)
 	}
@@ -409,8 +428,9 @@ func setClaims(ctx context.Context, cl client.Client, name string, claims []apis
 	return nil
 }
 
-func sameClaim(a, b apisv1alpha1.PermissionClaim) bool {
-	return a.Group == b.Group && a.Resource == b.Resource && a.IdentityHash == b.IdentityHash && a.All == b.All
+func sameClaim(a, b apisv1alpha2.PermissionClaim) bool {
+	return a.Group == b.Group && a.Resource == b.Resource &&
+		a.IdentityHash == b.IdentityHash && slices.Equal(a.Verbs, b.Verbs)
 }
 
 func (p Provider) manifestPaths() ([]string, error) {
