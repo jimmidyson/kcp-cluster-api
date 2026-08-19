@@ -16,9 +16,10 @@ exception costs and why it is there.
 
 ## Seeing it work
 
-[`task demo`](demo.md) provisions clusters across several workspaces from one
-manager in about a minute, starting its own kcp server. It is the fastest way
-to see what the rest of this page describes.
+[`task demo`](demo.md) brings up a cluster in each of several workspaces from
+one manager, and waits for them to be ready, in about a minute — starting its
+own kcp server. It is the fastest way to see what the rest of this page
+describes.
 
 ## What is different, and what is not
 
