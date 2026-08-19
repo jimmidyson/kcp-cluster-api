@@ -153,6 +153,13 @@ type sweepConfig struct {
 	// crdTransform is applied to each CRD before it is published.
 	crdTransform func(*apiextensionsv1.CustomResourceDefinition)
 
+	// permissionClaims are declared on the export and accepted by every
+	// binding. A shape whose controllers write Secrets or ConfigMaps - the
+	// bootstrap and control plane providers do - measures nothing without
+	// them: the writes are refused, and what the sweep records is a workspace
+	// that never became active.
+	permissionClaims []apisv1alpha1.PermissionClaim
+
 	// newSetup builds the per-workspace wiring under measurement. It is called
 	// once, before the manager starts, so anything process-global it needs is
 	// installed exactly once.
@@ -183,6 +190,24 @@ type sweepConfig struct {
 	// that what the counter sees is the manager's traffic alone.
 	activate func(t *testing.T, ctx context.Context, tn *tenant, objects int)
 	active   func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool
+
+	// deactivate deletes what activate wrote, and deactivated reports when the
+	// workspace is clear of it. Optional: a shape whose objects can be dropped
+	// by the APIBinding's own teardown leaves both nil and is unbound directly.
+	//
+	// A shape that owns a deletion *order* cannot. Deleting an APIBinding makes
+	// kcp delete every object of every bound type at once, and Cluster API's
+	// teardown is a sequence — a Cluster deletes its control plane, which
+	// deletes its Machines, which delete their InfraMachines. Removed out of
+	// order it deadlocks: the dev provider's DevMachine reconciler returns
+	// without requeueing when the DevCluster it needs is already gone
+	// (reconcilers/devmachine_reconciler.go), so the DevMachine keeps its
+	// finalizer, kcp keeps the APIBinding, and the workspace never disengages.
+	// Deleting the Cluster first and waiting is what a tenant winding a
+	// workspace down would do anyway, and it is the only sequence that reaches
+	// the departure this phase is here to measure.
+	deactivate  func(t *testing.T, ctx context.Context, tn *tenant, objects int)
+	deactivated func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool
 }
 
 // tenant is one workspace in the sweep: its logical cluster name, and a client
@@ -337,10 +362,11 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	must(t, err)
 
 	must(t, kcpfixtures.PublishAPIExport(ctx, rootClient, kcpfixtures.PublishAPIExportOptions{
-		ExportName:   cfg.exportName,
-		SchemaPrefix: "v1",
-		CRDPaths:     cfg.crds(t),
-		CRDTransform: cfg.crdTransform,
+		ExportName:       cfg.exportName,
+		SchemaPrefix:     "v1",
+		CRDPaths:         cfg.crds(t),
+		CRDTransform:     cfg.crdTransform,
+		PermissionClaims: cfg.permissionClaims,
 	}))
 
 	// --- The workspaces. All are created up front, because creating a
@@ -426,9 +452,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		count := i + 1
 
 		must(t, kcpfixtures.BindExport(ctx, tn.directClient, kcpfixtures.BindExportOptions{
-			BindingName: bindingName,
-			ExportPath:  "root",
-			ExportName:  cfg.exportName,
+			BindingName:      bindingName,
+			ExportPath:       "root",
+			ExportName:       cfg.exportName,
+			PermissionClaims: cfg.permissionClaims,
 		}))
 		if i == 0 {
 			must(t, kcpfixtures.WaitForAPIExportEndpointSlice(ctx, rootClient, cfg.exportName, 60*time.Second))
@@ -496,10 +523,22 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 			"every tenant read is meant to come from the one wildcard cache", perTenant)
 	}
 
-	// --- Down: unbind one at a time. User story 2 says a workspace that
-	// unbinds "stops costing anything"; this is the measurement of that.
+	// --- Down: wind each workspace down and unbind it, one at a time. User
+	// story 2 says a workspace that unbinds "stops costing anything"; this is
+	// the measurement of that.
 	for i, tn := range tenants {
 		remaining := workspaceCount - i - 1
+
+		if cfg.deactivate != nil {
+			cfg.deactivate(t, ctx, tn, objectCount)
+			eventually(t, fmt.Sprintf("workspace %s to be clear of its %d object set(s)", tn.name, objectCount), func() bool {
+				return cfg.deactivated(t, ctx, tn, objectCount)
+			}, func() {
+				if cfg.diagnose != nil {
+					cfg.diagnose(t, ctx, tn, objectCount)
+				}
+			})
+		}
 
 		must(t, tn.directClient.Delete(ctx, &apisv1alpha1.APIBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: bindingName},
@@ -524,8 +563,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	// the sample taken at the same workspace count on the way up is the only
 	// way to see it: both describe a process serving k workspaces, and any
 	// difference is what the workspaces that left are still costing.
-	if retained, departed, ok := retainedPerDeparture(report.Samples, workspaceCount); ok {
-		perDeparture := float64(retained) / float64(departed)
+	if perDeparture, _, ok := sweep.Retained(report.Samples, sweep.Goroutines); ok {
 		report.AddFact("goroutinesRetainedPerDepartedWorkspace", fmt.Sprintf("%.1f", perDeparture))
 
 		// Measured, not desired. A departing workspace leaves two goroutines
@@ -573,32 +611,6 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	// The inventory behind the headline: every stream the process held at its
 	// widest, with tenant names made readable so two runs can be compared.
 	report.Streams = sweep.Inventory(peak.Counts, sweep.IsWatch, tenantRenamer(tenants))
-}
-
-// retainedPerDeparture compares the teardown with the way up, at the same
-// workspace count, and reports what the departed workspaces are still
-// costing. It uses the point where the most workspaces have left while at
-// least one remains, because the last departure also shuts the shared
-// wildcard cache down — kcp empties the APIExportEndpointSlice when the last
-// APIBinding goes — and that is a fixed cost coming off, not a workspace's.
-func retainedPerDeparture(samples []sweep.Sample, workspaceCount int) (retained, departed int, ok bool) {
-	var up, down *sweep.Sample
-	for i := range samples {
-		s := &samples[i]
-		if s.Workspaces != 1 {
-			continue
-		}
-		switch s.Phase {
-		case sweep.PhaseActive:
-			up = s
-		case sweep.PhaseDisengaged:
-			down = s
-		}
-	}
-	if up == nil || down == nil || workspaceCount < 2 {
-		return 0, 0, false
-	}
-	return down.Goroutines - up.Goroutines, workspaceCount - 1, true
 }
 
 // tenantRenamer maps kcp's generated logical cluster names onto stable ones,

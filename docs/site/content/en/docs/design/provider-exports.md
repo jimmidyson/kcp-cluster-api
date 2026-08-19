@@ -105,26 +105,39 @@ creates them directly; a deployment automates it with a `WorkspaceType`'s
 `defaultAPIBindings`, because a tenant is not meant to hand-accept a claim per
 provider. That `WorkspaceType` is the conversion plan's P6 and is not built.
 
-## What the split costs, and what has not been measured
+## What the split costs, measured per deployment
 
 Each deployment runs its own manager, its own `multicluster-provider` and its
-own wildcard cache. Two consequences follow, and only the shape of them is
-known:
+own wildcard cache — so each of them engages a workspace separately, and what
+an installation pays is the sum. Measured one deployment at a time, twenty
+workspaces each:
 
-- **Per-workspace cost multiplies by the number of deployments.** A workspace
-  measured at 2.0 goroutines under one fleet-wide manager costs that in each
-  process that engages it. Three deployments is of the order of three times as
-  much, plus each process's own engagement discovery.
-- **Watches are per export.** `Cluster` is watched by all three, once each
+| Deployment | Goroutines/ws | Discovery/ws | Requests/ws | Streams held |
+|---|--:|--:|--:|--:|
+| `core-manager` | 2 | 3 | 7 | 6 |
+| `dev-infrastructure-manager` | 2 | 3 | 8 | 6 |
+| `kubeadm-bootstrap-manager` | 2 | 4 | 16 | 7 |
+| `kubeadm-control-plane-manager` | 2 | 7 | 72 | 7 |
+| **All four** | **8** | **17** | **103** | **26** |
+
+Three things follow, and they are measured rather than reasoned about:
+
+- **Engagement is uniform and cheap.** Two goroutines per workspace in every
+  deployment, exactly linear to twenty, no watch streams and no LISTs added by
+  a workspace, and all of it returned when one departs. Four deployments make
+  that eight.
+- **Reconciling is not uniform.** The control plane provider costs an order of
+  magnitude more per workspace than core — certificates, then a `Machine`, an
+  infrastructure machine and a bootstrap config each time. Sizing every
+  deployment alike would over-provision three of them and under-provision the
+  one that matters.
+- **Watches are per export.** `Cluster` is watched by all four, once each
   through its own virtual workspace, where a single export would have watched
-  it once.
+  it once. That is the 26 streams: what the shard sees from an installation at
+  rest, flat in workspace count.
 
-Neither has been measured since the split. The sweep
-(`task test:sweep`) still measures a process wiring core *and* the dev provider
-together, which is now a shape no deployment runs — so the figures in
-[Workspace resource usage](workspace-resource-usage.md) describe the wiring
-they were taken against and not this one. Per-deployment sweeps are the
-measurement this page is missing, and until they exist the honest statement is
-the one above: the direction is known, the number is not.
+The per-deployment figures are what to plan with. See
+[Workspace resource usage](workspace-resource-usage.md) for the method, the
+runs, and what a workspace with a *running cluster* in it costs on top.
 
 [adr]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0001-provider-api-permissions.md

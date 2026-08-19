@@ -44,39 +44,55 @@ changes is *where* those objects live and how the controllers reach them:
 
 ## What a workspace costs
 
-One process serves many workspaces, so the practical question when sizing a
-deployment is what each one adds.
+One process per provider serves many workspaces, and each of them engages a
+workspace separately — so the practical question when sizing an installation is
+what one workspace adds to each process. Measured per deployment, twenty
+workspaces each:
 
-The measured figure for a fleet-wide manager is **2.0 goroutines per active
-workspace**, flat from two workspaces to a hundred, with **no watch connections
-to the shard** — reads for every workspace come from one shared wildcard cache,
-so the shard sees the same streams whether the process serves one workspace or
-twenty. A departing workspace gives all of it back.
+| Deployment | Goroutines/ws | Discovery/ws | Requests/ws | Streams held |
+|---|--:|--:|--:|--:|
+| `core-manager` | 2 | 3 | 7 | 6 |
+| `dev-infrastructure-manager` | 2 | 3 | 8 | 6 |
+| `kubeadm-bootstrap-manager` | 2 | 4 | 16 | 7 |
+| `kubeadm-control-plane-manager` | 2 | 7 | 72 | 7 |
+| **All four** | **8** | **17** | **103** | **26** |
 
-Two things that figure does *not* account for, both stated rather than
-estimated:
+Engaging a workspace costs the same two goroutines in every deployment, flat
+from one workspace to twenty, with **no watch connections to the shard** added
+by a workspace: reads come from one shared wildcard cache per deployment, so
+the shard sees the same 26 streams whether the installation serves one
+workspace or twenty. A departing workspace gives all of it back.
 
-- **It was measured on one process wiring core and the dev infrastructure
-  provider together.** Providers are now separate deployments, and a workspace
-  is engaged by each of them, so a real installation pays that cost once per
-  deployment it runs. The multiple is known; the number has not been
-  re-measured. See [One APIExport per provider](../design/provider-exports.md).
-- **Engagement costs a handful of discovery requests per workspace per
-  process**, paid once when the workspace binds.
+What differs between deployments is what they then do. The kubeadm control
+plane provider costs an order of magnitude more per workspace than core,
+because per workspace it generates a cluster's certificates and creates its
+first machine. Size that one against your cluster count, not just your
+workspace count.
+
+One thing the table does not include: **the clusters in a workspace cost more
+than the workspace does.** A workspace holding a running control plane costs
+about 45 goroutines in the process that runs its infrastructure provider,
+against the 8 that serving the workspace costs across all four.
 
 `task test:sweep` is the instrument, and it needs no container runtime. See
 [Workspace resource usage](../design/workspace-resource-usage.md) for the
-method and the full results, and read its figures as describing the wiring they
-were taken against.
+method and the full results.
+
+**Unbinding is not a cancel button.** Deleting an `APIBinding` while the
+workspace still holds clusters does not tear them down in the order Cluster API
+needs, and the binding will not finish deleting. Delete the clusters first,
+then unbind.
 
 ## Not supported yet
 
-- Engaging every workspace bound to the export, instead of one named
-  workspace
-- Bootstrap and control-plane providers: only the core reconcilers and the
-  docker development infrastructure provider are wired
+- Webhooks: nothing defaults or validates the objects a tenant writes, so a
+  manifest must spell out what a webhook would otherwise fill in
+- `WorkspaceType` with `defaultAPIBindings`, so a tenant workspace binds each
+  provider's export by hand
+- MachineHealthCheck, ClusterClass and topology: the core deployment wires
+  `Cluster`, `Machine`, `MachineSet` and `MachineDeployment`, and no more
 - `clusterctl`, published manifests, or any installation flow other than
-  building and running the manager yourself
+  building and running the managers yourself
 
 ## Reporting issues
 

@@ -101,17 +101,32 @@ tasks:
       # run's numbers as this run's, which for a measurement is not a saving
       # but a wrong answer.
       #
-      # Two shapes run here, sized independently so widening the cheap one
-      # does not widen the expensive one by accident:
+      # Six shapes run here, sized independently so widening a cheap one does
+      # not widen an expensive one by accident. One per provider deployment,
+      # because a workspace is engaged by each of them and a single aggregate
+      # would hide which one a regression is in:
       #
-      #   SWEEP_WORKSPACES / SWEEP_OBJECTS           (default 4 / 5)
+      #   SWEEP_WORKSPACES / SWEEP_OBJECTS                     (default 4 / 5)
       #     one controller watching one type — bin/sweep-report.{md,json}
-      #   SWEEP_CORE_WORKSPACES / SWEEP_CORE_OBJECTS (default 3 / 1)
-      #     the core-manager reconciler set on the dev provider's in-memory
-      #     backend — bin/sweep-report-coremanager.{md,json}
+      #   SWEEP_CORE_WORKSPACES / SWEEP_CORE_OBJECTS           (default 3 / 1)
+      #     cmd/core-manager — bin/sweep-report-core.{md,json}
+      #   SWEEP_BOOTSTRAP_WORKSPACES / SWEEP_BOOTSTRAP_OBJECTS (default 3 / 1)
+      #     cmd/kubeadm-bootstrap-manager — bin/sweep-report-bootstrap.{md,json}
+      #   SWEEP_CONTROLPLANE_WORKSPACES / ..._OBJECTS          (default 3 / 1)
+      #     cmd/kubeadm-control-plane-manager —
+      #     bin/sweep-report-controlplane.{md,json}
+      #   SWEEP_DEV_WORKSPACES / SWEEP_DEV_OBJECTS             (default 3 / 1)
+      #     cmd/dev-infrastructure-manager — bin/sweep-report-dev.{md,json}
+      #   SWEEP_FLEET_WORKSPACES / SWEEP_FLEET_OBJECTS         (default 2 / 1)
+      #     every provider's controllers on one fleet, taken to an initialized
+      #     control plane — bin/sweep-report-fleet.{md,json}
       #
       # A quantifying run is `SWEEP_WORKSPACES=100 task test:sweep`.
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=90m -count=1 -v ./test/integration/sweep/...
+      # The addition, from the reports the run just wrote. It fails when a
+      # deployment is missing, because a sum of three of the four is not what
+      # an installation pays and must not be quoted as though it were.
+      - go run ./cmd/sweeptotals -reports {{.BIN}}
 
   test:integration:container-runtime:
     desc: Integration tests needing a real kcp server and a container runtime
