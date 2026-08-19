@@ -4,8 +4,8 @@ description: What the one-command demo demonstrates, what it deliberately leaves
 weight: 28
 ---
 
-`task demo` provisions Cluster API clusters across several kcp workspaces from
-one manager. This page is why it exists in the shape it does. For how to run
+`task demo` builds Cluster API clusters across several kcp workspaces from
+one manager, and waits for them to be ready. This page is why it exists in the shape it does. For how to run
 it, see [Demo](../user/demo.md).
 
 ## Why a demo is a deliverable
@@ -19,7 +19,8 @@ whoever is about to change it.
 So the demo is not a script that reimplements the manager. `internal/demo`
 calls `coremanager.SetupFleetControllers` — the same function
 `cmd/core-manager` calls, with the same options — because a demo of a
-reimplementation demonstrates the reimplementation.
+reimplementation demonstrates the reimplementation. The same holds for each of
+the other three providers' setup functions.
 
 ## What it asserts, and where
 
@@ -29,8 +30,10 @@ CI rather than being discovered at the next presentation.
 
 The test asserts two things:
 
-1. **Every workspace's cluster is provisioned** by one manager that was told
-   about no workspace. Each is engaged because its `APIBinding` became ready.
+1. **Every workspace's cluster is ready** — the `Cluster`'s `Available`
+   condition, every control plane replica it was asked for, and every `Machine`
+   Ready — driven by one manager that was told about no workspace. Each is
+   engaged because its `APIBinding` became ready.
 2. **No workspace's objects are another's.** Each workspace sees exactly one
    `Cluster`, the `Cluster`s are distinct objects, and each `DevCluster` is
    owned by the `Cluster` in its own workspace.
@@ -47,13 +50,22 @@ Identical object names in every workspace are load-bearing for that assertion.
 A leak between two workspaces each holding a `demo-00` cannot hide behind names
 that happen not to collide.
 
-## What it leaves out, and why
+## Why it waits for ready rather than provisioned
 
-**Machines.** The demo provisions cluster infrastructure and stops. A `Machine`
-reaching Ready needs a bootstrap provider and a control-plane provider — the
-conversion plan's P1 and P2 — and neither is wired. Creating `Machine`s that
-could only sit unprovisioned would make the demo's own table a list of things
-that do not work.
+It did wait for provisioned, back when a `Machine` reaching Ready needed a
+bootstrap provider and a control-plane provider and neither was wired. Both are
+wired now (the conversion plan's P1 and P2), so the reason to stop early is
+gone — and stopping early was never free. Provisioned infrastructure, an
+initialized control plane and a bootstrap data secret are all true of a cluster
+whose machines never go Ready, which is the shape every bug in this wiring has
+had: a missing `spec.providerID` index meant no `Machine` ever got a `nodeRef`,
+and the demo reported that run as a success.
+
+So the done-condition is readiness, and the table reports the milestones
+alongside it rather than instead of it. A run that does not finish says which
+condition it is still waiting on.
+
+## What it leaves out, and why
 
 **Webhooks.** They are served for one workspace or none until the webhook
 dispatch layer (G4) lands, so a multi-workspace demo cannot use them. Two

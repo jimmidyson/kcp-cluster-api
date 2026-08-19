@@ -49,7 +49,7 @@ import (
 // anything; a third would cost a minute of test time to demonstrate it again.
 const workspaces = 2
 
-func TestDemoProvisionsEveryWorkspace(t *testing.T) {
+func TestDemoBringsEveryWorkspaceToAReadyCluster(t *testing.T) {
 	ctrl.SetLogger(testr.New(t))
 	ctx := t.Context()
 
@@ -62,8 +62,17 @@ func TestDemoProvisionsEveryWorkspace(t *testing.T) {
 		// no images. The docker backend is the same reconcilers over a real
 		// container runtime, and is exercised by
 		// test/integration/dockerbackend.
-		Backend:    demo.BackendInMemory,
-		RunManager: true,
+		Backend: demo.BackendInMemory,
+		// What `task demo` asks for by default, and the reason this test is
+		// the one that catches the whole chain: a cluster only reaches ready
+		// if the bootstrap provider writes the data secret, the control plane
+		// provider brings the machine up, the ClusterCache connects to the
+		// workload cluster and the Machine reconciler finds its Node. Stopping
+		// at provisioned infrastructure asserted none of that, and every bug
+		// this wiring has had lived in it.
+		ControlPlaneMachines: demo.DefaultControlPlaneMachines,
+		WorkerMachines:       demo.DefaultWorkerMachines,
+		RunManager:           true,
 		// Ten minutes, matching the other packages that wait for ready: CI
 		// shares two cores across six integration packages, and a budget that
 		// only holds on an idle machine fails on a busy one rather than on a
