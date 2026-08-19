@@ -62,23 +62,44 @@ func TestDemoProvisionsEveryWorkspace(t *testing.T) {
 		// no images. The docker backend is the same reconcilers over a real
 		// container runtime, and is exercised by
 		// test/integration/dockerbackend.
-		Backend:      demo.BackendInMemory,
-		RunManager:   true,
-		Timeout:      4 * time.Minute,
+		Backend:    demo.BackendInMemory,
+		RunManager: true,
+		// Ten minutes for a run that takes about ninety seconds when it works.
+		//
+		// The budget was five while demo.Run stopped at provisioned, and
+		// waiting for ready is a longer wait by construction. But this number
+		// is headroom, not a diagnosis: CI has twice shown a run reaching
+		// "1 of 2 clusters ready" and staying there, in the same job where
+		// another package did the identical work in 87 seconds. That is a
+		// stall, not slowness, and it is recorded in docs/conversion-plan.md
+		// rather than fixed by this number. Raise nothing further here - if
+		// this budget is hit again, the stall is what needs looking at.
+		Timeout:      10 * time.Minute,
 		PollInterval: 2 * time.Second,
 		Log:          ctrl.Log.WithName("demo"),
 	})
 	if err != nil {
-		t.Fatalf("demo run failed: %v", err)
+		// The tables, not just the error. A run that times out says how many
+		// clusters got there; only the tables say which condition each one is
+		// waiting on, and without them a stalled workspace is indistinguishable
+		// from a slow one - which is exactly the confusion this suite has
+		// already cost once.
+		var sb strings.Builder
+		_ = demo.RenderTable(&sb, result.Statuses)
+		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
+		_ = demo.RenderMachineTable(&sb, result.Machines)
+		t.Fatalf("demo run failed: %v\n%s", err, sb.String())
 	}
 
 	if got := len(result.Workspaces); got != workspaces {
 		t.Fatalf("demo created %d workspaces, want %d", got, workspaces)
 	}
-	if !result.Provisioned() {
+	if !result.Ready() {
 		var sb strings.Builder
 		_ = demo.RenderTable(&sb, result.Statuses)
-		t.Fatalf("not every cluster was provisioned:\n%s", sb.String())
+		_ = demo.RenderControlPlaneTable(&sb, result.ControlPlanes)
+		_ = demo.RenderMachineTable(&sb, result.Machines)
+		t.Fatalf("not every cluster was ready:\n%s", sb.String())
 	}
 
 	assertWorkspacesAreIsolated(t, result)

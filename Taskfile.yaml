@@ -69,6 +69,11 @@ tasks:
     desc: Integration tests needing only a real kcp server, no container runtime
     deps: [tools]
     cmds:
+      # The step bound is well above the sum of what a healthy run takes
+      # (about eight minutes). It exists to stop a hung suite running forever,
+      # not to bound a slow one: the per-package budgets do that, and this has
+      # to leave room for all of them on a shared two-core runner.
+      #
       # PATH is set on the command, not in a top-level `env:` block: go-task
       # silently ignores `env: PATH:`, so bin/ never reached the test process
       # and the kcp fixture failed with "kcp: executable file not found in
@@ -77,7 +82,7 @@ tasks:
       # PATH is the right mechanism despite what the fixture's failure hint
       # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
       # fixture resolves the server as a bare "kcp" and relies on lookup.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=15m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
 
   demo:
     desc: Provision clusters across several kcp workspaces from one manager, and watch them come up
