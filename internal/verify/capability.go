@@ -18,8 +18,11 @@ package verify
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // EnvCapabilitiesAsserted names the environment variable Run sets, for the
@@ -46,15 +49,73 @@ const CapabilityContainerRuntime = "container runtime"
 // ran the step, and the test skipped itself. The step reported pass. That is
 // the failure this whole package exists to prevent, one level further down, so
 // there is now one function and both callers use it.
+//
+// # Why it connects rather than looking
+//
+// A socket file outlives the daemon that made it. A daemon that has died - or
+// has not started yet, which is the ordinary state of a fresh sandbox - leaves
+// the path exactly as a running one does, so "the file is there" answered a
+// question nobody asked. The harness would assert the capability, the step
+// would start, and the suite would fail some minutes later on whatever it
+// tried first, with an error about that operation rather than about the
+// daemon.
+//
+// Connecting is the cheapest thing that distinguishes the two, and it is
+// deliberately no more than that: it establishes that something is listening,
+// not that the daemon is healthy, and not that it can obtain images. Those
+// failures still surface where they happen. What this removes is the one that
+// was being reported as a different problem entirely.
 func ContainerRuntimeAvailable() error {
 	if host := os.Getenv("DOCKER_HOST"); host != "" {
-		return nil
+		return dialDockerHost(host)
 	}
 	const sock = "/var/run/docker.sock"
 	if _, err := os.Stat(sock); err != nil {
 		return fmt.Errorf("%s is not present and DOCKER_HOST is unset", sock)
 	}
+	if err := dial("unix", sock); err != nil {
+		return fmt.Errorf("%s is present but nothing is listening on it, so the daemon is not running: %w", sock, err)
+	}
 	return nil
+}
+
+// dialDockerHost connects to whatever DOCKER_HOST names.
+//
+// Only the two transports a daemon is actually reached over are dialled. The
+// rest - ssh:// most of all, which would mean running a remote command - are
+// accepted unchecked rather than half-checked, because a probe that cannot
+// tell "unreachable" from "unsupported here" would reintroduce the confusion
+// this function exists to remove.
+func dialDockerHost(host string) error {
+	u, err := url.Parse(host)
+	if err != nil {
+		return fmt.Errorf("DOCKER_HOST=%q is not a URL: %w", host, err)
+	}
+	switch u.Scheme {
+	case "unix":
+		if err := dial("unix", u.Path); err != nil {
+			return fmt.Errorf("DOCKER_HOST=%q names a socket nothing is listening on: %w", host, err)
+		}
+	case "tcp", "http", "https":
+		if err := dial("tcp", u.Host); err != nil {
+			return fmt.Errorf("DOCKER_HOST=%q is not accepting connections: %w", host, err)
+		}
+	}
+	return nil
+}
+
+// dockerDialTimeout bounds the probe. A daemon on this machine answers
+// immediately and a remote one over a working network answers in well under
+// this; the bound is here so an unreachable host fails the check rather than
+// hanging the harness before any step has run.
+const dockerDialTimeout = 5 * time.Second
+
+func dial(network, address string) error {
+	conn, err := net.DialTimeout(network, address, dockerDialTimeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 // ContainerRuntime is the capability an integration step depends on.
