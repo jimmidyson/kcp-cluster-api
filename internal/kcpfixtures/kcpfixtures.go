@@ -254,3 +254,21 @@ func BindExport(ctx context.Context, cl client.Client, opts BindExportOptions) e
 		return got.Status.Phase == apisv1alpha1.APIBindingPhaseBound, nil
 	})
 }
+
+// KeepStorageVersion trims a CRD to the single version kcp will store, for
+// use as a PublishAPIExportOptions.CRDTransform.
+//
+// A multi-version CRD needs a conversion strategy before kcp accepts it as an
+// APIResourceSchema, and a conversion strategy means a webhook server. A
+// caller that serves no webhooks - because webhook wiring is single-workspace
+// by construction until the conversion plan's G4 lands - publishes one version
+// instead.
+func KeepStorageVersion(crd *apiextensionsv1.CustomResourceDefinition) {
+	kept := crd.Spec.Versions[:0]
+	for _, v := range crd.Spec.Versions {
+		if v.Storage {
+			kept = append(kept, v)
+		}
+	}
+	crd.Spec.Versions = kept
+}

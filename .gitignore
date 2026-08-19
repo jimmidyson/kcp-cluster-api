@@ -17,3 +17,6 @@ bin/
 # committed go.work would silently override it for everyone.
 go.work
 go.work.sum
+
+# `task demo` keeps its kcp server's state and log here.
+.demo/
