@@ -34,19 +34,29 @@ having to reconstruct the answer from the commit log.
   `cmd/kubeadm-bootstrap-manager`, plus `--control-plane-machines` in the demo,
   and `test/integration/bootstrap` asserts per-workspace bootstrap data and
   per-workspace cluster certificates. It needed D3's open item settled — see
-  below. The fork is tagged `v1.15.0-kcp.7` and `go.mod` pins that tag, so
+  below. The fork is tagged `v1.15.0-kcp.8` and `go.mod` pins that tag, so
   `task drift` runs against a real ref again (see [`DRIFT.md`](../DRIFT.md)).
 - **P2 has landed: a control plane comes up in every workspace.**
-  `cmd/kubeadm-control-plane-manager` and its own export; `task demo
-  DEMO_FLAGS="--control-plane-machines 1"` brings a KubeadmControlPlane to
-  initialized in each workspace, and `test/integration/bootstrap` asserts it.
-  The remaining gap to a cluster a person can use is a kubeconfig and a worker
-  MachineDeployment, neither of which needs new wiring.
-- **There is a demo now: `task demo`.** One command provisions clusters across
-  several workspaces from one manager, starting its own single-shard kcp
-  server; `test/integration/demo` asserts the same run under `task verify`,
-  including the tenancy isolation P8 existed to prove. It stops at cluster
-  infrastructure, because Machines need P1 and P2. See
+  `cmd/kubeadm-control-plane-manager` and its own export; `task demo` brings a
+  KubeadmControlPlane to ready in each workspace, and
+  `test/integration/bootstrap` asserts it. The kubeconfig and the worker
+  `MachineDeployment` that were the remaining gap to a usable cluster have
+  landed too.
+- **The demo reaches ready clusters.** `task demo` builds a cluster with a
+  control plane machine and a worker in each of several workspaces from one
+  manager, starting its own single-shard kcp server, and waits for the
+  `Cluster`'s `Available` condition, every control plane replica and every
+  Machine. `test/integration/demo` asserts the same run under `task verify`,
+  including the tenancy isolation P8 existed to prove.
+
+  Getting there took two defects that only a readiness done-condition could
+  surface, because provisioned infrastructure was true throughout both. The
+  fleet-wide `ClusterCache` did not register the Node-by-`providerID` index the
+  Machine reconciler lists through, so no Machine ever got a `nodeRef`; and in
+  the fork, a source declared with `WatchesRawSource` on a wildcard-mode
+  controller was never started, so the ClusterCache's Cluster-event sends
+  blocked until they timed out and no probe failure reached the control plane
+  provider. Both are fixed, the second in `v1.15.0-kcp.8`. See
   [The demo](site/content/en/docs/design/demo.md).
 - **G4, the webhook dispatch layer, is the gating item.** Phase 3's P4 waits
   on it, and until it lands webhook wiring serves one named workspace and
@@ -397,7 +407,7 @@ different binary/concern."
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
 | P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
 | P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | mostly — isolation is proven across workspaces reconciling concurrently; Machines wait on P1/P2 | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation. The container-runtime suite (`test/integration/dockerbackend`) still drives one workspace to Machine and only engages a second | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
 | P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
@@ -447,12 +457,19 @@ the demo's done-condition is readiness rather than provisioned infrastructure:
 the Cluster's `Available` condition, every control plane replica it was asked
 for, and every Machine Ready, control plane and worker alike.
 
-**Unsettled:** this table lists G3 as a dependency of P1–P3, while Phase 2
-records G3's trigger as P5 alone — i.e. that a ported provider binary needs
-nothing outside the engaged manager pool. The second reading is what G2's
-implementation supports, but the two statements have never been reconciled
-deliberately. Settle it before dispatching P1, and correct whichever line is
-wrong.
+What is left of P8 is the backend rather than the shape. That proof runs on the
+dev provider's in-memory backend; `test/integration/dockerbackend` is the one
+that uses a real container runtime, and it still takes a single workspace to
+Machine and does no more than engage a second. Taking two of those to ready
+concurrently needs no new wiring — only the runtime budget to do it.
+
+**Settled: G3 is not a dependency of P1–P3.** This table listed it as one,
+while Phase 2 recorded G3's trigger as P5 alone — i.e. that a ported provider
+binary needs nothing outside the engaged manager pool. All three providers have
+now shipped, and G3 still has no caller and is not built, so the Phase 2
+reading is the correct one and the dependency column above is wrong for P1–P3.
+It is left as written rather than quietly corrected, because the evidence is
+what settled it: three ports, none of which reached for it.
 
 ## Phase 4 — hardening (after Phase 3 lands)
 

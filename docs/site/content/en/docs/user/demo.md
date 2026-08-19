@@ -1,6 +1,6 @@
 ---
 title: Demo
-description: Provision clusters in several kcp workspaces from one manager, in one command.
+description: Build a ready cluster in each of several kcp workspaces from one manager, in one command.
 weight: 5
 ---
 
@@ -150,15 +150,14 @@ off rather than failing.
 ## What it does and does not show
 
 It shows what this project is for: unmodified upstream Cluster API reconcilers,
-provisioning infrastructure in many kcp workspaces at once, from one manager
-that was told about none of them — each workspace is engaged because its
-`APIBinding` became ready, and nothing names a workspace in configuration.
+building clusters in many kcp workspaces at once and taking them to ready, from
+one manager that was told about none of them — each workspace is engaged
+because its `APIBinding` became ready, and nothing names a workspace in
+configuration.
 
-By default it stops at cluster infrastructure — `DevCluster`.
-`--control-plane-machines` adds a control plane, and with it the kubeadm
-bootstrap and control plane providers. It does not serve webhooks: those are single-workspace by construction
-until the webhook dispatch layer (G4) lands, so every object the demo creates
-is fully specified rather than defaulted.
+It does not serve webhooks: those are single-workspace by construction until
+the webhook dispatch layer (G4) lands, so every object the demo creates is
+fully specified rather than defaulted.
 
 The same run is an integration test — `test/integration/demo`, part of
 `task verify` — which additionally asserts the isolation the table cannot show:
