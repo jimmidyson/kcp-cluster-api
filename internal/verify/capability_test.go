@@ -17,7 +17,9 @@ limitations under the License.
 package verify
 
 import (
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -114,15 +116,92 @@ func TestSkippedStepAssertsNothing(t *testing.T) {
 // harness ran the step and the test skipped itself, and the step passed.
 // One definition, and it accepts both.
 func TestContainerRuntimeHonoursDockerHost(t *testing.T) {
-	t.Setenv("DOCKER_HOST", "tcp://192.0.2.1:2376")
+	t.Setenv("DOCKER_HOST", "tcp://"+listening(t, "tcp", "127.0.0.1:0"))
 	if err := ContainerRuntimeAvailable(); err != nil {
-		t.Errorf("DOCKER_HOST is set, so a runtime is reachable: %v", err)
+		t.Errorf("DOCKER_HOST names a listening daemon, so a runtime is reachable: %v", err)
 	}
 
 	if ContainerRuntime().Name != CapabilityContainerRuntime {
 		t.Errorf("capability name must match the constant tests compare against, got %q",
 			ContainerRuntime().Name)
 	}
+}
+
+// TestContainerRuntimeHonoursAUnixDockerHost covers the other transport a
+// daemon is reached over, which is the one a rootless daemon uses.
+func TestContainerRuntimeHonoursAUnixDockerHost(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix://"+listening(t, "unix", filepath.Join(t.TempDir(), "docker.sock")))
+	if err := ContainerRuntimeAvailable(); err != nil {
+		t.Errorf("DOCKER_HOST names a listening socket, so a runtime is reachable: %v", err)
+	}
+}
+
+// TestContainerRuntimeRejectsADeadDaemon is why the check connects instead of
+// looking.
+//
+// A socket file outlives the daemon that made it, and a fresh sandbox has the
+// path before it has the daemon. Answering "available" there sends the harness
+// on to run the suite, which fails minutes later on whatever it tried first -
+// reporting a missing image, or a refused connection to something else, rather
+// than a daemon that is not running.
+func TestContainerRuntimeRejectsADeadDaemon(t *testing.T) {
+	// A socket path with no listener: exactly what a daemon leaves behind.
+	dead := filepath.Join(t.TempDir(), "docker.sock")
+	if err := os.WriteFile(dead, nil, 0o600); err != nil {
+		t.Fatalf("writing a stand-in socket file: %v", err)
+	}
+	t.Setenv("DOCKER_HOST", "unix://"+dead)
+	if err := ContainerRuntimeAvailable(); err == nil {
+		t.Error("ContainerRuntimeAvailable() = nil for a socket nothing is listening on")
+	}
+
+	// And the remote equivalent: a port that was listening and is not.
+	addr := listening(t, "tcp", "127.0.0.1:0")
+	closeListener(t, addr)
+	t.Setenv("DOCKER_HOST", "tcp://"+addr)
+	if err := ContainerRuntimeAvailable(); err == nil {
+		t.Errorf("ContainerRuntimeAvailable() = nil for %s, which is not accepting connections", addr)
+	}
+}
+
+// TestContainerRuntimeAcceptsATransportItCannotProbe records the deliberate
+// gap. ssh:// would mean running a remote command to check, so it is accepted
+// unchecked - a probe that cannot tell "unreachable" from "not supported here"
+// would put back the confusion the connect removed.
+func TestContainerRuntimeAcceptsATransportItCannotProbe(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "ssh://someone@192.0.2.1")
+	if err := ContainerRuntimeAvailable(); err != nil {
+		t.Errorf("ContainerRuntimeAvailable() = %v for a transport it does not probe, want it accepted", err)
+	}
+}
+
+// listeners are kept until the test ends, so the address stays live for the
+// duration of the check, and closed by closeListener when a test needs the
+// address to go dead.
+var listeners = map[string]net.Listener{}
+
+func listening(t *testing.T, network, address string) string {
+	t.Helper()
+	l, err := net.Listen(network, address)
+	if err != nil {
+		t.Fatalf("listening on %s %s: %v", network, address, err)
+	}
+	addr := l.Addr().String()
+	listeners[addr] = l
+	t.Cleanup(func() { _ = l.Close() })
+	return addr
+}
+
+func closeListener(t *testing.T, addr string) {
+	t.Helper()
+	l, ok := listeners[addr]
+	if !ok {
+		t.Fatalf("no listener recorded for %s", addr)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("closing the listener on %s: %v", addr, err)
+	}
+	delete(listeners, addr)
 }
 
 var errNoRuntime = &capabilityError{"no container runtime"}
