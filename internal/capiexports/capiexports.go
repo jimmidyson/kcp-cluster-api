@@ -105,8 +105,10 @@ var (
 	secrets    = Resource{Resource: "secrets"}
 	configMaps = Resource{Resource: "configmaps"}
 
-	clusters = Resource{Group: "cluster.x-k8s.io", Resource: "clusters"}
-	machines = Resource{Group: "cluster.x-k8s.io", Resource: "machines"}
+	clusters           = Resource{Group: "cluster.x-k8s.io", Resource: "clusters"}
+	machines           = Resource{Group: "cluster.x-k8s.io", Resource: "machines"}
+	machineSets        = Resource{Group: "cluster.x-k8s.io", Resource: "machinesets"}
+	machineDeployments = Resource{Group: "cluster.x-k8s.io", Resource: "machinedeployments"}
 
 	kubeadmConfigs         = Resource{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigs"}
 	kubeadmConfigTemplates = Resource{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigtemplates"}
@@ -189,7 +191,11 @@ func Bootstrap() Provider {
 		},
 		CoreClaims: []Resource{secrets, configMaps},
 		ProviderClaims: map[string][]Resource{
-			CoreExport: {clusters, machines},
+			// MachineSets and MachineDeployments as well as the types it
+			// watches: reconciling a worker's config walks the owner chain
+			// from its Machine up, and a link it cannot read fails the
+			// reconcile rather than shortening the log line.
+			CoreExport: {clusters, machines, machineSets, machineDeployments},
 			// It reads the KubeadmControlPlane a Machine belongs to, to
 			// resolve the control plane's version when preparing a config.
 			ControlPlaneExport: {kubeadmControlPlanes},

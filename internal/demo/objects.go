@@ -20,8 +20,10 @@ import (
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -132,9 +134,15 @@ func ClusterName(n int) string {
 // provider names the Machines it creates after it.
 func ControlPlaneName(cluster string) string { return cluster + "-cp" }
 
-// MachineTemplateName names the infrastructure template the control plane
-// builds its Machines from.
-func MachineTemplateName(cluster string) string { return cluster + "-cp" }
+// MachineTemplateName names the infrastructure template a cluster's Machines
+// are built from. One per cluster, shared by the control plane and the worker
+// deployment: they want the same backend, and a second identical template
+// would be a thing to keep in step for no reason.
+func MachineTemplateName(cluster string) string { return cluster }
+
+// WorkerDeploymentName names a cluster's worker MachineDeployment, and the
+// KubeadmConfigTemplate its Machines are bootstrapped from.
+func WorkerDeploymentName(cluster string) string { return cluster + "-md" }
 
 // NewDevMachineTemplate builds the infrastructure template a KubeadmControlPlane
 // stamps each of its Machines from.
@@ -195,6 +203,91 @@ func NewKubeadmControlPlane(cluster string, replicas int, version string) *contr
 		},
 	}
 }
+
+// NewKubeadmConfigTemplate builds the bootstrap template a worker
+// MachineDeployment stamps each of its Machines from.
+//
+// The spec is left at its zero value, as the control plane's is: the bootstrap
+// provider fills in what kubeadm needs to join a worker to an initialized
+// control plane.
+func NewKubeadmConfigTemplate(cluster string) *bootstrapv1.KubeadmConfigTemplate {
+	return &bootstrapv1.KubeadmConfigTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      WorkerDeploymentName(cluster),
+			Namespace: Namespace,
+			Labels: map[string]string{
+				DemoLabel:                  cluster,
+				clusterv1.ClusterNameLabel: cluster,
+			},
+		},
+	}
+}
+
+// NewMachineDeployment builds a cluster's worker pool.
+//
+// Workers need a control plane to join, so a run that asks for them asks for a
+// control plane too - see Options.validate.
+func NewMachineDeployment(cluster string, replicas int, version string) *clusterv1.MachineDeployment {
+	return &clusterv1.MachineDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      WorkerDeploymentName(cluster),
+			Namespace: Namespace,
+			Labels: map[string]string{
+				DemoLabel:                  cluster,
+				clusterv1.ClusterNameLabel: cluster,
+			},
+		},
+		Spec: clusterv1.MachineDeploymentSpec{
+			ClusterName: cluster,
+			Replicas:    ptr.To(int32(replicas)), //nolint:gosec // a replica count from a flag, not arithmetic on untrusted input.
+			// Spelled out because nothing defaults it: the rollout strategy is
+			// normally filled in by the MachineDeployment admission webhook,
+			// and this demo serves no webhooks. Without it the reconciler
+			// fails with "unexpected deployment strategy type: ".
+			Rollout: clusterv1.MachineDeploymentRolloutSpec{
+				Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+					RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+						MaxSurge:       ptr.To(intstr.FromInt32(1)),
+						MaxUnavailable: ptr.To(intstr.FromInt32(0)),
+					},
+				},
+			},
+			// The selector is required, and has to match the labels the
+			// template stamps onto each Machine - the MachineSet the
+			// deployment creates adopts Machines by it.
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{clusterv1.ClusterNameLabel: cluster},
+			},
+			Template: clusterv1.MachineTemplateSpec{
+				ObjectMeta: clusterv1.ObjectMeta{
+					Labels: map[string]string{clusterv1.ClusterNameLabel: cluster},
+				},
+				Spec: clusterv1.MachineSpec{
+					ClusterName: cluster,
+					Version:     version,
+					Bootstrap: clusterv1.Bootstrap{
+						ConfigRef: clusterv1.ContractVersionedObjectReference{
+							APIGroup: bootstrapv1.GroupVersion.Group,
+							Kind:     "KubeadmConfigTemplate",
+							Name:     WorkerDeploymentName(cluster),
+						},
+					},
+					InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+						APIGroup: infrav1.GroupVersion.Group,
+						Kind:     "DevMachineTemplate",
+						Name:     MachineTemplateName(cluster),
+					},
+				},
+			},
+		},
+	}
+}
+
+// KubeconfigSecretName names the Secret holding a workload cluster's
+// kubeconfig. The control plane provider writes it once the cluster's
+// certificates exist, and it is what a person uses to talk to the cluster.
+func KubeconfigSecretName(cluster string) string { return cluster + "-kubeconfig" }
 
 // DefaultKubernetesVersion is what demo clusters ask for. The bootstrap
 // provider parses it to decide which kubeadm API version to marshal, so it has
