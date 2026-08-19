@@ -55,12 +55,13 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.7`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.9`
 
-> The `api` module stays at `v1.15.0-kcp.6`, and that is not an oversight:
-> nothing since that tag touches `api/`, so re-tagging it would point a new
-> version at an unchanged tree. The root and `test` modules are at
-> `v1.15.0-kcp.7`.
+> All three modules are at `v1.15.0-kcp.9`. `api/` was left behind at
+> `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
+> have pointed a new version at an unchanged tree; it is tagged along with the
+> others again now, which costs nothing and removes a version skew that had to
+> be explained every time it was read.
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
@@ -119,6 +120,8 @@ cannot build without them. See the feature's research notes (R2).
 | `bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmConfig reconciler. One substantive difference from its single-cluster twin: `KubeadmInitLock` defaults to a mutex over the reconciler's own cluster-aware client rather than the manager's, because the lock is a ConfigMap in the cluster being reconciled and the manager's client addresses no cluster in particular. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmControlPlane reconciler. One behavioural difference: the Machine client that returns the deleted object is built from the reconciler's cluster-aware client rather than from the manager's config, which addresses no cluster in particular here. The cost is the cache-consistency optimisation it enabled; both call sites already handle a nil result. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller.go` | **Modified.** The `controller` field narrows to the three methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine reconciler carries, for the same reason. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/inmemory/pkg/server/mux.go` | **Modified.** `getFreePortLocked` binds each candidate port to check it is free and skips what is taken, implementing the TODO that stood in its place. The port is recorded on the listener and never revisited, so an unchecked one that turns out to be taken is retried with the same port forever — a workload cluster whose endpoint nothing answers on, which presents as slowness rather than as failure. | **Pending** |
+| `test/infrastructure/inmemory/pkg/server/mux_test.go` | **Modified.** Covers both halves of the above: a port in use is skipped, and a range with nothing free still reports that rather than handing one out. | **Pending** |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/workspace_keys.go` | New file. Names the in-memory backend's per-cluster state by management cluster as well as namespace and name. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorycluster_backend.go` | **Modified.** Uses that key. Two clusters called `default/demo-00` in different workspaces previously shared one resource group and one listener, so one tenant's control plane served the other's — a collision that worked rather than failed. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorymachine_backend.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
