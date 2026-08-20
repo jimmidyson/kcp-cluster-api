@@ -533,9 +533,9 @@ or assert what a container runtime proves without one — ready Clusters,
 initialized control planes, bootstrapped Machines — which is already more than
 any in-memory suite establishes.
 
-**Unexplained, and recorded rather than guessed at:** throughout that run the
-KubeadmControlPlane's etcd health check failed to connect, for twelve minutes
-rather than transiently:
+**Explained: the TLS failures were the two workspaces sharing containers.**
+Throughout that run the KubeadmControlPlane's etcd health check failed to
+connect, for twelve minutes rather than transiently:
 
 ```
 grpc: addrConn.createTransport failed to connect to {Addr: "etcd-demo-00-cp-…"}
@@ -544,12 +544,39 @@ x509: certificate signed by unknown authority (… candidate authority
 certificate "kubernetes")
 ```
 
-That is a port-forward upgrade against the workload API server whose CA does not
-verify — while the `ClusterCache`'s own connection to the same cluster works,
-since `RemoteConnectionProbe` passes and the Clusters report ready. Two clients
-resolving the workload CA differently is the shape of it; which one is wrong,
-and whether this gates control plane readiness independently of the CNI, is not
-yet established.
+This was first recorded here as unexplained, with two clients resolving the
+workload CA differently as the shape of it. That was the wrong reading. Nothing
+is confused about the CA: one client is reaching **the wrong cluster**.
+
+Every container lookup in the docker backend selected on the
+`io.x-k8s.kind.cluster` label, whose value is the Cluster's *name*, with nothing
+naming the workspace. That is sufficient where Cluster API normally runs — one
+management cluster's daemon, one set of names — and insufficient here, because
+both demo workspaces hold a Cluster called `demo-00`. Two consequences, and the
+second is the one that bites:
+
+- The load balancer's container is `<name>-lb`, and container names are unique
+  per daemon, so the second cluster adopted the first's rather than getting one.
+- `LoadBalancer.UpdateConfiguration` collects its backend servers by that label,
+  so **one workspace's load balancer was configured with the other workspace's
+  control plane** and forwarded to it.
+
+kubeadm names every cluster's CA `kubernetes`. Reaching the wrong cluster
+therefore reports a certificate signed by an unknown authority whose name is
+right and whose key is not — which reads as a certificate bug rather than the
+routing one it is.
+
+This is the same defect the in-memory backend had and had already fixed:
+`workspace_keys.go` names that backend's per-cluster state by management cluster
+as well as namespace and name, because two `default/demo-00` clusters otherwise
+shared a resource group and a listener. The docker backend was never given the
+same treatment. It now is — containers carry the logical cluster their Cluster
+was read from and every lookup filters on it, carried in the fork and recorded
+in [`DRIFT.md`](../DRIFT.md).
+
+**What that means for the CNI finding above: it was necessary but not
+sufficient.** Installing a CNI alone would not have made this run green, because
+the two clusters would still have been sharing a load balancer.
 
 **Settled: G3 is not a dependency of P1–P3.** This table listed it as one,
 while Phase 2 recorded G3's trigger as P5 alone — i.e. that a ported provider
