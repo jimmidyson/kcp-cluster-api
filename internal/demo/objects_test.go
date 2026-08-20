@@ -126,3 +126,43 @@ func TestClusterNameIsWorkspaceIndependent(t *testing.T) {
 		t.Error("ClusterName is not unique within a workspace")
 	}
 }
+
+// TestDevClusterIsFullySpecifiedForEveryBackend is the demo's stated contract,
+// enforced rather than asserted in prose.
+//
+// The demo serves no webhooks, so nothing defaults what it creates. That is
+// written down in the design doc and was not true of the docker backend: the
+// control plane port came from the admission webhook, the demo left it zero,
+// and the docker backend sets only the host. The resulting endpoint fails
+// APIEndpoint.IsValid, and the control plane provider returns early on every
+// reconcile without ever creating a Machine - while the DevCluster reports
+// itself provisioned, so nothing else looks wrong.
+func TestDevClusterIsFullySpecifiedForEveryBackend(t *testing.T) {
+	for _, backend := range []Backend{BackendInMemory, BackendDocker} {
+		t.Run(string(backend), func(t *testing.T) {
+			devCluster := NewDevCluster(ClusterName(0), backend)
+
+			switch backend {
+			case BackendDocker:
+				// The docker backend fills in the host from the load balancer
+				// it creates and takes the port as given, so the port has to
+				// be here or the endpoint is never valid.
+				if devCluster.Spec.ControlPlaneEndpoint.Port == 0 {
+					t.Error("a docker-backed DevCluster has no control plane port, so its endpoint can never become valid and no control plane machine is ever created")
+				}
+			case BackendInMemory:
+				// The in-memory backend assigns the port of the listener it
+				// starts, so setting one here would be overwritten and would
+				// suggest the demo had a say in it.
+				if devCluster.Spec.ControlPlaneEndpoint.Port != 0 {
+					t.Errorf("an in-memory DevCluster specifies port %d, but the backend assigns the listener's own port",
+						devCluster.Spec.ControlPlaneEndpoint.Port)
+				}
+			}
+
+			if devCluster.Spec.Backend.Docker == nil && devCluster.Spec.Backend.InMemory == nil {
+				t.Error("neither backend is set, which the webhook would have defaulted")
+			}
+		})
+	}
+}
