@@ -115,6 +115,17 @@ func NewCluster(name string, backend Backend, controlPlane bool) *clusterv1.Clus
 			Labels:    map[string]string{DemoLabel: name},
 		},
 		Spec: clusterv1.ClusterSpec{
+			// Stated rather than left to kubeadm's default, because on a real
+			// container runtime something else has to agree with it: a CNI
+			// allocates out of this range, and a CNI configured for a
+			// different one leaves every Node NotReady. The kubeadm bootstrap
+			// provider copies this into the ClusterConfiguration it renders
+			// (kubeadmconfig_controller.go), so setting it here is what makes
+			// the two sides the same value rather than two defaults that
+			// happen to match.
+			ClusterNetwork: clusterv1.ClusterNetwork{
+				Pods: clusterv1.NetworkRanges{CIDRBlocks: []string{DefaultPodCIDR}},
+			},
 			InfrastructureRef: clusterv1.ContractVersionedObjectReference{
 				APIGroup: infrav1.GroupVersion.Group,
 				Kind:     "DevCluster",
@@ -309,6 +320,13 @@ func NewMachineDeployment(cluster string, replicas int, version string) *cluster
 // kubeconfig. The control plane provider writes it once the cluster's
 // certificates exist, and it is what a person uses to talk to the cluster.
 func KubeconfigSecretName(cluster string) string { return cluster + "-kubeconfig" }
+
+// DefaultPodCIDR is the range demo clusters allocate pod addresses from.
+//
+// kind's own default, which is not a coincidence: the CNI that ships inside
+// the kindest/node image is configured from whatever this is, and staying on
+// the range that image was built around is one less thing to get wrong.
+const DefaultPodCIDR = "10.244.0.0/16"
 
 // DefaultKubernetesVersion is what demo clusters ask for. The bootstrap
 // provider parses it to decide which kubeadm API version to marshal, so it has

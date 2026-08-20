@@ -521,17 +521,38 @@ reason:NetworkPluginNotReady message:Network plugin returns error:
 cni plugin not initialized
 ```
 
-A kubeadm cluster's Node stays `NotReady` until a CNI is applied, and nothing in
-this repository applies one — the string `cni` does not appear in it. The
-in-memory backend never raised the question because it writes its Nodes rather
-than joining them. So "two container-backed workspaces reach ready" is not a
-budget away; it needs a CNI installed into each workload cluster, with a
-manifest to apply and images the runner can pull.
+A kubeadm cluster's Node stays `NotReady` until a CNI is applied. Nothing in
+Cluster API applies one — in a deployment that is an add-on provider's job, and
+in Cluster API's own e2e suites it is a manifest the test applies
+(`test/framework/clusterctl`, `CNIManifestPath`). The in-memory backend never
+raised the question, because it writes its Nodes rather than joining them.
 
-Two routes, neither taken yet: install a CNI and keep the readiness assertion,
-or assert what a container runtime proves without one — ready Clusters,
-initialized control planes, bootstrapped Machines — which is already more than
-any in-memory suite establishes.
+**The test now installs one, and it costs no image pull and no vendored
+manifest.** kind's node image already contains both halves: its build writes the
+manifest for its own CNI to `/kind/manifests/default-cni.yaml` and preloads the
+`kindnetd` image that manifest names into the node's containerd store
+(`pkg/build/nodeimage/`, `buildcontext.go` and `const_cni.go`). So the test
+reads the manifest back out of a control plane container and applies it through
+the workload kubeconfig — which is exactly how kind installs it
+(`pkg/cluster/internal/create/actions/installcni`). A runner that can start the
+cluster can install this CNI with no registry reachable, and the manifest cannot
+drift from the Kubernetes version it is for, because it ships inside the image
+built for that version.
+
+Two details this pinned down. The manifest is a Go template whose one variable
+is the pod subnet, so demo `Cluster`s now **state** `spec.clusterNetwork.pods`
+rather than leaving it to a default: the kubeadm bootstrap provider copies that
+field into the `ClusterConfiguration` it renders, which is what makes kubeadm
+and the CNI the same value rather than two defaults that happen to agree. And
+the templating is marked in kind's own source as "intentionally undocumented …
+not intended for external usage and is unstable", so the test checks for the
+marker string rather than assuming, and applies the manifest verbatim if a
+future node image stops carrying it.
+
+The install runs *while* the clusters come up, through `demo.Options`'
+`WhileProvisioning` hook, because it cannot run before — the kubeconfig it needs
+does not exist until the control plane is up — or after, since waiting for ready
+would be waiting for the thing it unblocks.
 
 **Explained: the TLS failures were the two workspaces sharing containers.**
 Throughout that run the KubeadmControlPlane's etcd health check failed to

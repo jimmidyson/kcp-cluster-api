@@ -279,10 +279,12 @@ minute rather than twenty. Run the same thing on real containers with
 `task demo DEMO_FLAGS="--backend=docker"`.
 
 {{% pageinfo color="info" %}}
-The docker backend brings clusters and control planes up, but its Nodes stay
-`NotReady` because nothing in this repository installs a CNI. See
-[the conversion plan](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/conversion-plan.md)
-for where that stands.
+`task demo --backend=docker` brings clusters and control planes up, and its
+Nodes then stay `NotReady`: a kubeadm Node needs a CNI, and the demo command
+does not install one. The container-runtime *test suite* does — it applies the
+CNI that ships inside the kind node image — so this is a gap in the demo command
+rather than in the wiring. See
+[the conversion plan](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/conversion-plan.md).
 {{% /pageinfo %}}
 
 ## 8. The multicluster part

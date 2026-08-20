@@ -217,6 +217,22 @@ type Options struct {
 	// DefaultPollInterval.
 	PollInterval time.Duration
 
+	// WhileProvisioning, if set, runs in its own goroutine once every
+	// workspace holds its objects, concurrently with the wait for readiness.
+	//
+	// It exists for work that has to happen *during* provisioning rather than
+	// before or after it, of which there is one case: a real workload cluster's
+	// Nodes stay NotReady until a CNI is applied, and the CNI can only be
+	// applied through a kubeconfig that does not exist until the control plane
+	// is up. Waiting for ready first would deadlock, and doing it before the
+	// objects exist would have nothing to talk to - so a caller that needs it
+	// polls here while Run watches.
+	//
+	// Run does not wait for it and ignores what it does; its effect, if it has
+	// one, shows up as the clusters reaching ready. A caller that needs to know
+	// whether it succeeded should report that itself.
+	WhileProvisioning func(ctx context.Context, workspaces []Workspace)
+
 	// Out receives the status tables. Nil discards them.
 	Out io.Writer
 
@@ -577,7 +593,13 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			"workerMachines", opts.ClustersPerWorkspace*opts.WorkerMachines)
 	}
 
-	// 5. Watch them come up.
+	// 5. Anything the caller has to do while they come up, in parallel with
+	// watching. See Options.WhileProvisioning.
+	if opts.WhileProvisioning != nil {
+		go opts.WhileProvisioning(ctx, workspaces)
+	}
+
+	// 6. Watch them come up.
 	result, err := waitForReady(ctx, opts, workspaces)
 	result.Manager = manager
 	result.Managers = byExport
