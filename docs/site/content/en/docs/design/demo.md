@@ -1,6 +1,6 @@
 ---
 title: The Demo
-description: What the one-command demo demonstrates, what it deliberately leaves out, and the two environment facts it had to learn.
+description: What the one-command demo demonstrates, how it makes two tenants real, what it deliberately leaves out, and the two environment facts it had to learn.
 weight: 28
 ---
 
@@ -28,7 +28,7 @@ The demo prints a table; the assertions live in `test/integration/demo`, which
 `task verify` runs. Both drive `internal/demo.Run`, so a demo that breaks fails
 CI rather than being discovered at the next presentation.
 
-The test asserts two things:
+The test asserts three things:
 
 1. **Every workspace's cluster is ready** — the `Cluster`'s `Available`
    condition, every control plane replica it was asked for, and every `Machine`
@@ -37,9 +37,13 @@ The test asserts two things:
 2. **No workspace's objects are another's.** Each workspace sees exactly one
    `Cluster`, the `Cluster`s are distinct objects, and each `DevCluster` is
    owned by the `Cluster` in its own workspace.
+3. **No tenant can read another tenant's workspaces.** Each user lists their
+   own home and their own `Cluster`s, and is refused every other user's home,
+   every other user's `Cluster`s, and the org workspace that holds all the
+   homes.
 
-The second is the conversion plan's P8, and it is the one the rest of the suite
-never made:
+The second and third are the conversion plan's P8, and they are the ones the
+rest of the suite never made:
 [`TestEveryBoundWorkspaceIsWired`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/test/integration/providerwiring/providerwiring_test.go)
 exercises many workspaces without reconciling any of them to completion, and
 `TestCoreManagerClusterToMachine` reconciles one workspace's cluster without
@@ -48,7 +52,104 @@ workspace's status into another.
 
 Identical object names in every workspace are load-bearing for that assertion.
 A leak between two workspaces each holding a `demo-00` cannot hide behind names
-that happen not to collide.
+that happen not to collide. The workspaces are named identically too — Alice's
+`capi-demo-1` and Bob's — for the same reason.
+
+The third assertion has a failure mode the second does not, and it is asserted
+in both directions because of it. "No user read another's workspaces" is
+satisfied completely by an RBAC bug that refuses everybody everything, so the
+test requires an allowed read as well as a refused one, and a run that produced
+no checks at all is not isolated rather than trivially isolated.
+
+## Two tenants, and where the isolation actually comes from
+
+The demo builds this:
+
+```
+root                     the four APIExports
+└── capi-demo            the org workspace: nobody owns it, nobody may read it
+    ├── alice            alice's home: alice may list the workspaces in it
+    │   └── capi-demo-1  alice's workspace: her Cluster, her kubeconfig Secret
+    └── bob
+        └── capi-demo-1
+```
+
+Two grants per user, and nothing else: `access` plus workspace reads in their
+own home, and full use of the Cluster API groups in the workspaces they own.
+Everything a tenant cannot do is something nothing granted them.
+
+**The org workspace is the part that is not decoration.** Two facts about kcp
+put it there:
+
+- `root` binds `system:kcp:tenancy:reader` to `system:authenticated` by
+  default, so every authenticated user on the shard can list root's direct
+  children — including tenants who can enter none of them.
+- A `Workspace` list is neither recursive nor filtered by what the caller can
+  enter. It returns the workspaces stored in the one workspace addressed, all
+  of them or none, since RBAC cannot narrow a list by resource name. There is
+  no "the workspaces I have access to" for kcp to answer; what a tenant has is
+  the path to their own home.
+
+Homes directly under `root` would therefore have leaked the tenant list: the
+demonstration would have been "Alice can see that Bob exists but cannot go in",
+which is a weaker and much less interesting claim. One workspace in between,
+granting nobody anything, makes the refusal complete: Alice cannot discover Bob
+at all.
+
+The access table reports the `root` row rather than asserting it, and
+`Result.Isolated()` ignores it. What a shard's parent workspace serves an
+authenticated user is that shard's policy; a deployment that has narrowed it
+would otherwise be reported as a demo that locked its tenants out.
+
+**Each user gets two bindings per workspace, because two authorizers decide.**
+Before RBAC on the resource is consulted at all, kcp's workspace content
+authorizer asks whether the user may be in the workspace — the verb `access` on
+the **non-resource URL** `/`. Leave that grant out and every request is refused
+with `access denied` no matter what the rest of the role says, including,
+confusingly, requests for types the workspace plainly serves. It cost a
+debugging session to find.
+
+The grant is made by **binding kcp's own `system:kcp:workspace:access`
+ClusterRole**, not by writing its rule out:
+
+```yaml
+roleRef:
+  kind: ClusterRole
+  name: system:kcp:workspace:access
+```
+
+kcp bootstraps that role into the local admin logical cluster and merges that
+cluster's roles when it resolves the check, so a binding in any workspace
+resolves it. Reproducing the rule would work today and would be a copy of kcp's
+policy, drifting silently the day kcp changes the mechanism — and the shape is
+odd enough that a copy invites being "corrected" into an ordinary resource
+rule. Binding by name is what kcp's own e2e framework does
+(`AdmitWorkspaceAccess`) and what its root workspace does for
+`system:authenticated`. A unit test asserts the demo's own roles do **not**
+carry the rule.
+
+The second binding is the ordinary one: `demo-home-owner` in a home,
+`demo-workspace-owner` in a workspace, resolved by ordinary RBAC.
+
+## Why impersonation rather than credentials
+
+The demo authenticates as the kcp admin and sets `Impersonate-User` — which is
+what `kubectl --as` sends — rather than minting a token per user.
+
+kcp evaluates its whole authorization stack against the impersonated user, so
+the answer is that user's authorization and not an approximation of it: the
+`forbidden` rows in the access table are the same denials a tenant holding
+their own credentials would get. What impersonation avoids is a second
+mechanism that would only work half the time. Tokens would mean a
+`--token-auth-file` written before the server starts, which the demo can only do
+for a kcp server it started itself — and `--kcp-kubeconfig` points it at one it
+did not. One mechanism that works in both places is worth more here than
+credentials that work in one.
+
+The honest limit is that this demonstrates **authorization**, not
+authentication. There is no identity provider, no accounts and no login; a
+deployment's users arrive through OIDC or a workspace authentication
+configuration, and nothing about that is exercised here.
 
 ## Why the clusters are ClusterClass based
 

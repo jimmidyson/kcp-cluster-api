@@ -88,8 +88,35 @@ exist, the response is to stop and raise it — find another integration point,
 propose the hook upstream, or accept the limitation. Adding it to the fork is
 the last resort, and costs a `DRIFT.md` entry and a deadline.
 
-The one patch carried today is exactly that case, and its shape reflects it:
+The contract-metadata patch is exactly that case, and its shape reflects it:
 rather than copying upstream logic or re-exporting an internal package
 wholesale, it exposes two symbols through a public seam that mirrors an
 escape hatch upstream already provides elsewhere — the shape most likely to
-be accepted when proposed.
+be accepted when proposed. It is also the only patch carried on those terms.
+
+## What the fork actually carries now
+
+The paragraphs above describe the arrangement as it was designed, and it is
+no longer the whole picture. [ADR-0003](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0003-workspace-aware-cluster-api.md)
+decided to carry the workspace-aware wiring in the fork and **not** to propose
+it upstream. Most of the record is therefore permanent rather than pending,
+and most of it modifies upstream files in place rather than adding new ones.
+
+`DRIFT.md` is the count, and is deliberately not reproduced here: a figure
+copied into prose is how the paragraph above came to describe a single-patch
+fork long after that stopped being true.
+
+Two consequences follow, and neither is visible from the sections above.
+
+**The upgrade cost moved rather than disappeared.** "An upgrade is a diff of
+pins" is true of this repository. The in-place modifications are still
+replayed onto each new upstream release — in the fork, which deliberately
+carries no drift check, no specification process and no verification
+contract.
+
+**The fork's own composition matters now.** Some of what it carries is not
+Cluster API code at all: `util/multicluster/` imports controller-runtime and
+multicluster-runtime and nothing from Cluster API. It is in the fork because
+that is where it was written.
+[ADR-0004](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0004-scaling-to-many-provider-forks.md) takes up
+what that means once a second provider has to be forked.

@@ -9,25 +9,25 @@ task demo
 ```
 
 That starts a single-shard kcp server, publishes **one `APIExport` per
-provider** out of its `root` workspace, creates two workspaces bound to all of
-them, runs each provider's controllers — the same wiring each provider's own
+provider** out of its `root` workspace, gives **two users a workspace each**,
+runs each provider's controllers — the same wiring each provider's own
 deployment runs — and builds a cluster in each workspace **from a
 `ClusterClass`**, printing what they are doing until they are all ready:
 
 ```
-WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
-root:capi-demo-1  an4y05w1fxdiy8wi  demo-00  yes          yes    cluster ready
-root:capi-demo-2  37tqgo784myry3pn  demo-00  yes          yes    cluster ready
+WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  1lmla01gpzr6iezu  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    2ech2ot4va8usjgo  demo-00  yes          yes    cluster ready
 
-WORKSPACE         CONTROL PLANE  INITIALIZED  READY  DETAIL
-root:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
-root:capi-demo-2  demo-00-cp     yes          1/1    control plane ready
+WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
 
-WORKSPACE         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
-root:capi-demo-1  demo-00-cp-6gkn6        yes           yes    demo-00-cp-6gkn6        Running  machine ready
-root:capi-demo-1  demo-00-md-vm96z-dkxwb  yes           yes    demo-00-md-vm96z-dkxwb  Running  machine ready
-root:capi-demo-2  demo-00-cp-9msd2        yes           yes    demo-00-cp-9msd2        Running  machine ready
-root:capi-demo-2  demo-00-md-9zjvz-h6kpz  yes           yes    demo-00-md-9zjvz-h6kpz  Running  machine ready
+WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp-x22l5        yes           yes    demo-00-cp-x22l5        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-fcr25-fxvl7  yes           yes    demo-00-md-fcr25-fxvl7  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-c4bcf        yes           yes    demo-00-cp-c4bcf        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-mk8w2-rxcv5  yes           yes    demo-00-md-mk8w2-rxcv5  Running  machine ready
 ```
 
 Each cluster gets a control plane machine and a worker by default, because a
@@ -45,11 +45,102 @@ provider's topology controller — which is why the names above are the names
 they are: the class pins them, so that a `kubectl get` after the run is
 predictable.
 
-Both clusters are called `demo-00`, in both workspaces, on purpose: identical
+Alice's workspace and Bob's are both called `capi-demo-1`, both clusters are
+called `demo-00`, and both classes are called `demo`, on purpose: identical
 names are what makes a cross-workspace confusion visible rather than plausible.
-So are both classes.
 One shard, one manager per provider, every workspace served by all of them —
 and each workspace's objects stay its own.
+
+## Two users, and what neither can see
+
+The run finishes by asking kcp, as each user in turn, what it will let them
+read of the other's:
+
+```
+USER   WORKSPACE                         OWNER     RESOURCE    ALLOWED  DETAIL
+alice  root                              everyone  workspaces  yes      1 workspace: capi-demo
+alice  root:capi-demo                    nobody    workspaces  no       forbidden
+alice  root:capi-demo:alice              alice     workspaces  yes      1 workspace: capi-demo-1
+alice  root:capi-demo:alice:capi-demo-1  alice     clusters    yes      1 cluster: demo-00
+alice  root:capi-demo:bob                bob       workspaces  no       forbidden
+alice  root:capi-demo:bob:capi-demo-1    bob       clusters    no       forbidden
+bob    root                              everyone  workspaces  yes      1 workspace: capi-demo
+bob    root:capi-demo                    nobody    workspaces  no       forbidden
+bob    root:capi-demo:alice              alice     workspaces  no       forbidden
+bob    root:capi-demo:alice:capi-demo-1  alice     clusters    no       forbidden
+bob    root:capi-demo:bob                bob       workspaces  yes      1 workspace: capi-demo-1
+bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluster: demo-00
+```
+
+**ALLOWED is `yes` exactly where OWNER is you, or everyone.** Alice cannot list
+Bob's workspaces, cannot list the Clusters inside them, and cannot list the
+`root:capi-demo` workspace that holds both their homes — so she cannot discover
+that Bob exists at all. Bob is in the same position looking the other way. A
+run whose table does not have that shape says so in the DETAIL column and exits
+non-zero: ready clusters in leaky workspaces are not a success.
+
+The tree the demo builds is what produces that:
+
+```
+root                                  the APIExports live here
+└── capi-demo                         the org workspace — nobody's, readable by nobody
+    ├── alice                         alice's home — alice can list what is in it
+    │   └── capi-demo-1               alice's workspace — her Cluster, her kubeconfig
+    └── bob
+        └── capi-demo-1
+```
+
+Each user is granted two things and nothing else: the right to be in their own
+home and read the workspaces in it, and full use of the Cluster API types in
+the workspaces they own. Nothing grants them anything in the org workspace,
+which is why listing it is refused — and why the isolation is a property of
+where the workspaces are rather than of anything the demo does at read time.
+
+### The first row, and why the org workspace is in the way
+
+Alice **can** list `root`, and does see that a workspace called `capi-demo`
+exists. Two facts about kcp make that so, and both are worth knowing before
+laying out a tree of your own:
+
+- `root` binds `system:kcp:tenancy:reader` to `system:authenticated`, so any
+  authenticated user can list its direct children. That is the shard's policy
+  rather than this demo's, so the run **reports** that row rather than
+  asserting it — a deployment that has narrowed it has broken nothing here.
+- **There is no "list the workspaces I have access to".** A `Workspace` object
+  lives in its parent workspace, and a list returns that parent's direct
+  children — all of them or none, since RBAC cannot narrow a list by name, and
+  never anything deeper. What a tenant has instead is the path to their own
+  home.
+
+Put the homes directly under `root` and those two together would leak the
+tenant list: every authenticated user could read the names `alice` and `bob`,
+while being able to enter neither. One workspace in between, granting nobody
+anything, stops the walk a level higher — Alice sees `capi-demo` and is refused
+the moment she asks what is inside it.
+
+The demo authenticates to kcp as the admin and asks the server to evaluate each
+request **as** the user, which is what `kubectl --as` does. kcp runs its whole
+authorization stack against the impersonated user, so every `forbidden` above
+is a real RBAC denial and not a simulation of one. The commands the demo prints
+when it finishes are the ones that reproduce the table by hand:
+
+```sh
+kubectl --kubeconfig .demo/kcp/admin.kubeconfig --context base --as alice \
+  --server $KCP/clusters/root:capi-demo:alice get workspaces
+
+kubectl --kubeconfig .demo/kcp/admin.kubeconfig --context base --as alice \
+  --server $KCP/clusters/root:capi-demo:bob get workspaces
+```
+
+```
+Error from server (Forbidden): workspaces.tenancy.kcp.io is forbidden:
+User "alice" cannot list resource "workspaces" in API group "tenancy.kcp.io"
+at the cluster scope: access denied
+```
+
+Name the tenants yourself with `--users`, or turn the whole thing off with
+`--users ""` — which puts every workspace directly under `root` and lets only
+the demo's own credentials near them.
 
 The demo runs those managers in a single process for convenience. A deployment
 runs one process each; see
@@ -79,7 +170,7 @@ workspace *is* a URL path:
 
 ```sh
 kubectl --kubeconfig .demo/kcp/admin.kubeconfig --context base \
-  --server https://localhost:35891/clusters/root:capi-demo-1 \
+  --server https://localhost:35891/clusters/root:capi-demo:alice:capi-demo-1 \
   get clusters,devclusters -A
 ```
 
@@ -92,7 +183,8 @@ list.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--workspaces` | 2 | How many workspaces to create, bind and provision in |
+| `--workspaces` | 2 | How many workspaces to create, bind and provision in, shared out between the users |
+| `--users` | `alice,bob` | Tenants to share the workspaces out between, one home workspace each. `""` means none: every workspace goes directly under `--parent` and only admin credentials touch it |
 | `--clusters` | 1 | Clusters per workspace |
 | `--control-plane-machines` | 1 | Control plane machines per cluster, as a `KubeadmControlPlane`. Zero stops the run at provisioned infrastructure |
 | `--worker-machines` | 1 | Worker machines per cluster, as a `MachineDeployment`. Needs `--control-plane-machines`: a worker has no control plane to join otherwise |
@@ -107,6 +199,17 @@ Ten workspaces is as easy as two, and is the more interesting run:
 ```sh
 task demo DEMO_FLAGS="--workspaces 10 --wait"
 ```
+
+They are shared out between the users round-robin, so that is five workspaces
+each for Alice and Bob. Give it more tenants instead, or different ones:
+
+```sh
+task demo DEMO_FLAGS="--workspaces 12 --users alice,bob,carol,dave"
+```
+
+There has to be at least one workspace per user — a tenant with nothing to own
+has nothing to be isolated from, and the run refuses rather than printing a row
+of nothing.
 
 ## Machines, and the providers behind them
 
@@ -162,7 +265,15 @@ It shows what this project is for: unmodified upstream Cluster API reconcilers,
 building clusters in many kcp workspaces at once and taking them to ready, from
 one manager that was told about none of them — each workspace is engaged
 because its `APIBinding` became ready, and nothing names a workspace in
-configuration.
+configuration. It shows the other half of that too: the tenants those
+workspaces belong to cannot see each other, and the fleet-wide manager serving
+all of them is what makes that worth having.
+
+What it does not show is a real identity provider. The users are names kcp
+authorizes as, reached by impersonating from the demo's admin credentials;
+there is no OIDC, no token file and no accounts. That is the right shape for
+demonstrating *authorization*, which is where tenancy lives, and it is not a
+statement about how a deployment authenticates.
 
 It does not serve webhooks: those are single-workspace by construction until
 the webhook dispatch layer (G4) lands, so every object the demo creates is
@@ -171,9 +282,10 @@ out a rollout strategy for its worker class, and why the class declares no
 variables — variable defaulting is a webhook's job.
 
 The same run is an integration test — `test/integration/demo`, part of
-`task verify` — which additionally asserts the isolation the table cannot show:
-that each workspace sees exactly its own cluster, and that the status written
-into it was written for that workspace.
+`task verify` — which asserts both kinds of isolation: that each workspace sees
+exactly its own cluster and that the status written into it was written for
+that workspace, and that each user reads their own workspaces and is refused
+every other user's.
 
 ## Going through it a piece at a time
 

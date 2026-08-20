@@ -65,6 +65,14 @@ Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluste
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
+> **The pins do not propagate.** The fork keeps the module path
+> `sigs.k8s.io/cluster-api`, and Go honours `replace` only in the main module.
+> Anything consuming this module must restate all three `replace` directives
+> at matching versions; without them it resolves genuine upstream Cluster API,
+> which fails as a confusing "unknown revision" at best and as duplicate types
+> at worst. There is one consumer today, so nothing checks this. See
+> [ADR-0004](docs/adr-0004-scaling-to-many-provider-forks.md).
+
 The base is an upstream `main` commit, not a release tag, and that is
 forced rather than chosen: at `v1.14.0` the docker provider's reconcilers
 and admission webhooks were under `internal/`, which an external module

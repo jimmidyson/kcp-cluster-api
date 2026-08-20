@@ -50,6 +50,7 @@ type options struct {
 	kcpDirectory    string
 	kcpArgs         []string
 	workspaces      int
+	users           []string
 	clusters        int
 	machines        int
 	workers         int
@@ -74,6 +75,7 @@ func main() {
 		kcpDirectory    = flag.String("kcp-directory", ".demo/kcp", "Where a demo-started kcp server keeps its state and its log.")
 		kcpArgs         = flag.String("kcp-args", "", "Extra space-separated flags for a demo-started kcp server, e.g. \"--v=5\".")
 		workspaces      = flag.Int("workspaces", demo.DefaultWorkspaces, "How many workspaces to create, bind and provision a cluster in.")
+		users           = flag.String("users", strings.Join(demo.DefaultUsers, ","), "Comma-separated tenants to share the workspaces out between, one home workspace each. Each is granted their own workspaces and nothing else, and the run reports what each can and cannot read of the others. Empty means no users: every workspace sits under --parent and only admin credentials touch it.")
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
 		workers         = flag.Int("worker-machines", demo.DefaultWorkerMachines, "Worker machines per cluster, as a MachineDeployment. Needs --control-plane-machines: a worker has no control plane to join otherwise.")
 		machines        = flag.Int("control-plane-machines", demo.DefaultControlPlaneMachines, "Control plane replicas per cluster. The ClusterClass always names a control plane, so a cluster always gets one; this is how many machines it is asked for. Zero stops the run at provisioned infrastructure, because a control plane with no machines has no readiness to reach.")
@@ -102,6 +104,7 @@ func main() {
 		kcpDirectory:    *kcpDirectory,
 		kcpArgs:         strings.Fields(*kcpArgs),
 		workspaces:      *workspaces,
+		users:           splitUsers(*users),
 		clusters:        *clusters,
 		machines:        *machines,
 		workers:         *workers,
@@ -133,6 +136,19 @@ func lookupString(name string) string {
 	return ""
 }
 
+// splitUsers turns the --users flag into the list demo.Options takes. An
+// empty or whitespace-only value means no users rather than one user with no
+// name, which is what strings.Split would produce.
+func splitUsers(value string) []string {
+	var users []string
+	for _, user := range strings.Split(value, ",") {
+		if user = strings.TrimSpace(user); user != "" {
+			users = append(users, user)
+		}
+	}
+	return users
+}
+
 func firstSet(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -158,6 +174,7 @@ func run(ctx context.Context, opts options) error {
 		Parent:               opts.parent,
 		WorkspacePrefix:      opts.workspacePrefix,
 		Workspaces:           opts.workspaces,
+		Users:                opts.users,
 		ClustersPerWorkspace: opts.clusters,
 		ControlPlaneMachines: opts.machines,
 		WorkerMachines:       opts.workers,
@@ -185,10 +202,22 @@ func run(ctx context.Context, opts options) error {
 			return err
 		}
 	}
+	if len(result.Access) > 0 {
+		fmt.Println()
+		if err := demo.RenderAccessTable(os.Stdout, result.Access); err != nil {
+			return err
+		}
+	}
 	fmt.Println()
 
 	if runErr != nil {
 		return runErr
+	}
+	// A run with users that reached ready but leaked between them has not
+	// done what it was asked. Reporting it as a success would make the
+	// tenancy table decoration rather than a result.
+	if len(result.Users) > 0 && !result.Isolated() {
+		return errors.New("the clusters are ready but the workspaces are not isolated: see the access table above")
 	}
 
 	printNextSteps(result, baseConfig, kubeconfigPath)
@@ -230,6 +259,8 @@ func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath 
 			kubeconfigPath, demo.BaseContext, host, ws.Path)
 	}
 
+	printUserSteps(result, host, kubeconfigPath)
+
 	if len(result.ControlPlanes) == 0 {
 		return
 	}
@@ -241,8 +272,82 @@ func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath 
 	fmt.Println("Talk to a workload cluster (while this is running):")
 	for _, ws := range result.Workspaces {
 		cluster := demo.ClusterName(0)
-		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s -n %s get secret %s -o jsonpath='{.data.value}' | base64 -d > /tmp/%s.kubeconfig\n",
-			kubeconfigPath, demo.BaseContext, host, ws.Path, demo.Namespace, demo.KubeconfigSecretName(cluster), cluster)
-		fmt.Printf("  kubectl --kubeconfig /tmp/%s.kubeconfig get nodes   # %s\n", cluster, ws.Path)
+		// The file is named after the workspace, not the cluster. Every
+		// workspace's cluster has the same name, so a file named after the
+		// cluster would have each of these commands overwrite the last one's
+		// kubeconfig and every `get nodes` talk to the same workload cluster.
+		file := "/tmp/" + strings.ReplaceAll(ws.Path, ":", "_") + ".kubeconfig"
+		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s -n %s get secret %s -o jsonpath='{.data.value}' | base64 -d > %s\n",
+			kubeconfigPath, demo.BaseContext, host, ws.Path, demo.Namespace, demo.KubeconfigSecretName(cluster), file)
+		fmt.Printf("  kubectl --kubeconfig %s get nodes   # %s\n", file, ws.Path)
 	}
+}
+
+// printUserSteps prints the commands that reproduce the access table by hand.
+//
+// `--as` rather than a second credential: the kubeconfig is the kcp admin's,
+// and kcp evaluates the whole request as the impersonated user, so what comes
+// back is that user's authorization and not a rehearsal of it. Which is also
+// why the refused commands are worth pasting - the "Forbidden" is the point.
+func printUserSteps(result demo.Result, host, kubeconfigPath string) {
+	if len(result.Users) == 0 {
+		return
+	}
+
+	kubectl := func(user, path, args string) {
+		fmt.Printf("  kubectl --kubeconfig %s --context %s --as %s --server %s/clusters/%s %s\n",
+			kubeconfigPath, demo.BaseContext, user, host, path, args)
+	}
+
+	fmt.Println()
+	fmt.Println("Each user sees their own workspaces, and only by knowing their own home:")
+	for _, user := range result.Users {
+		kubectl(user.Name, user.Home, "get workspaces")
+	}
+	fmt.Printf("A workspace list is neither recursive nor filtered by what the caller can enter,\n")
+	fmt.Printf("so listing %s shows its direct children to any authenticated user and nothing below them:\n", result.Parent)
+	kubectl(result.Users[0].Name, result.Parent, "get workspaces")
+
+	fmt.Println()
+	fmt.Println("And each is refused everybody else's, and the org workspace holding them all:")
+	for _, user := range result.Users {
+		for _, other := range result.Users {
+			if other.Name != user.Name {
+				kubectl(user.Name, other.Home, "get workspaces   # Forbidden")
+			}
+		}
+		kubectl(user.Name, result.Org, "get workspaces   # Forbidden")
+	}
+
+	fmt.Println()
+	fmt.Println("Same again for what is inside them:")
+	for _, user := range result.Users {
+		// One of the user's own and one of somebody else's. Every pair would
+		// print the same two facts once per workspace, and a ten-workspace run
+		// would bury the tables above in commands that all say this.
+		if own, ok := firstOwnedBy(result.Workspaces, user.Name); ok {
+			kubectl(user.Name, own.Path, "get clusters -A")
+		}
+		if other, ok := firstNotOwnedBy(result.Workspaces, user.Name); ok {
+			kubectl(user.Name, other.Path, "get clusters -A   # Forbidden")
+		}
+	}
+}
+
+func firstOwnedBy(workspaces []demo.Workspace, user string) (demo.Workspace, bool) {
+	for _, ws := range workspaces {
+		if ws.Owner == user {
+			return ws, true
+		}
+	}
+	return demo.Workspace{}, false
+}
+
+func firstNotOwnedBy(workspaces []demo.Workspace, user string) (demo.Workspace, bool) {
+	for _, ws := range workspaces {
+		if ws.Owner != "" && ws.Owner != user {
+			return ws, true
+		}
+	}
+	return demo.Workspace{}, false
 }

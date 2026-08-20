@@ -1,6 +1,6 @@
 ---
 title: Walkthrough
-description: Stand the whole thing up on your laptop and look at every part — workspaces, exports, bindings, claims, and one manager serving all of them.
+description: Stand the whole thing up on your laptop and look at every part — workspaces, users, exports, bindings, claims, and one manager serving all of them.
 weight: 7
 ---
 
@@ -14,8 +14,9 @@ first meet it, and every command below is one you can paste.
 By the end you will have:
 
 - a kcp server running locally, with four `APIExport`s published in it
-- two workspaces, each holding a Cluster API cluster whose objects have
-  **identical names** and are nonetheless completely separate
+- two users, Alice and Bob, with a workspace each — **identically named**, in
+  identically named workspaces, and neither able to see the other at all
+- a Cluster API cluster in each of those workspaces
 - four manager processes — the same wiring each provider deploys — reconciling
   **both** workspaces without either being named in any configuration
 - a running workload cluster in each workspace that you can `kubectl` into
@@ -43,9 +44,9 @@ stops it and takes the kcp server with it.
 About a minute later you get the status tables, and then the server's address:
 
 ```
-WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
-root:capi-demo-1  2yqfrtuq4cjeh3n5  demo-00  yes          yes    cluster ready
-root:capi-demo-2  2pes8qc13ri2fa4y  demo-00  yes          yes    cluster ready
+WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  2yqfrtuq4cjeh3n5  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    2pes8qc13ri2fa4y  demo-00  yes          yes    cluster ready
 ```
 
 Leave that terminal alone and open a second one. Everything below runs there.
@@ -73,35 +74,161 @@ kubectl --context base --server $KCP/clusters/root get workspaces
 ```
 
 ```
-NAME          TYPE        REGION   PHASE   URL
-capi-demo-1   universal            Ready   https://localhost:33799/clusters/root:capi-demo-1
-capi-demo-2   universal            Ready   https://localhost:33799/clusters/root:capi-demo-2
+NAME        TYPE        REGION   PHASE   URL
+capi-demo   universal            Ready   https://localhost:33799/clusters/root:capi-demo
 ```
+
+One workspace, not four. The others are *inside* it, which is the next
+section's subject.
 
 ## 2. Workspaces, and what they actually are
 
 A **workspace** is kcp's unit of isolation. Think of it as a whole Kubernetes
 API server of your own — its own namespaces, its own objects, its own RBAC —
 except that it is cheap enough to have thousands of, and they are arranged in a
-tree. `root` is the top; `root:capi-demo-1` is a child.
+tree. `root` is the top; `root:capi-demo:alice:capi-demo-1` is four levels down:
+
+```
+root                     the four APIExports live here
+└── capi-demo            the org workspace
+    ├── alice            alice's home
+    │   └── capi-demo-1  alice's workspace: her Cluster
+    └── bob
+        └── capi-demo-1  bob's, with the same name
+```
+
+Walk it a level at a time — a `Workspace` object lives in its **parent**
+workspace, so a list returns that parent's direct children and nothing deeper:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo get workspaces
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice get workspaces
+```
+
+```
+NAME    TYPE        REGION   PHASE   URL
+alice   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice
+bob     universal            Ready   https://localhost:33799/clusters/root:capi-demo:bob
+
+NAME          TYPE        REGION   PHASE   URL
+capi-demo-1   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
+```
+
+Who may run each of those is [section 9](#9-two-users-and-what-neither-can-see),
+and it is the reason the tree has this shape.
 
 Two names for the same thing appear everywhere, and mixing them up is the
 first thing that confuses people:
 
 | | Example | What it is |
 |---|---|---|
-| **Path** | `root:capi-demo-1` | The human name, its position in the tree. Can be renamed and moved. |
+| **Path** | `root:capi-demo:alice:capi-demo-1` | The human name, its position in the tree. Can be renamed and moved. |
 | **Logical cluster** | `2yqfrtuq4cjeh3n5` | The identifier the server actually stores objects under. Never changes. |
 
 Both work in a URL. These are the same workspace:
 
 ```sh
-kubectl --context base --server $KCP/clusters/root:capi-demo-1 get namespaces
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 get namespaces
 kubectl --context base --server $KCP/clusters/2yqfrtuq4cjeh3n5 get namespaces
 ```
 
-Objects carry the logical cluster, not the path — which is why the status
-table prints both.
+### What a logical cluster actually is
+
+Creating a `Workspace` does two things. kcp allocates a **logical cluster** —
+the partition on a shard that objects will really be stored in — and gives it an
+opaque identifier. The `Workspace` object you created stays behind in the
+*parent* workspace as the handle that names that partition and manages its
+lifecycle. It is not the workspace's contents; nothing you create inside the
+workspace is stored anywhere near it.
+
+So the two rows above are different kinds of thing, not two spellings of one:
+
+- The **path** is a lookup key. `root:capi-demo:alice:capi-demo-1` says where the
+  handle sits in the tree, and kcp resolves it to a logical cluster on every
+  request. Rename the workspace or move it under a different parent and the path
+  changes with it.
+- The **logical cluster** is what is being addressed. Its identifier is assigned
+  once, when the workspace is created, and is never reused or changed — it
+  survives any renaming above it. It is not the `Workspace` object's
+  `metadata.uid`, which identifies the handle rather than the partition.
+
+Inside every logical cluster sits exactly one object describing it — a
+`LogicalCluster` named `cluster` — and every other object stored there carries
+the identifier in a `kcp.io/cluster` annotation. That annotation is what the
+fleet-wide query in [step 8](#8-the-multicluster-part) prints, and it is how a
+manager knows which workspace an object it is reconciling came from.
+
+Anything that has to survive a rename therefore names the logical cluster rather
+than the path: those object annotations, the wildcard view, and flags such as
+`--webhook-workspace-cluster-name` in [Installation](installation.md).
+
+### Getting a workspace's logical cluster ID
+
+Three ways, all returning the same string. Which one you want depends on what
+you are holding: the parent, the workspace itself, or an object out of it.
+
+**From the parent.** A `Workspace`'s `spec.cluster` is the logical cluster it
+points at, so the parent lists the whole mapping:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice get workspaces \
+  -o custom-columns='PATH:.metadata.name,LOGICAL CLUSTER:.spec.cluster,PHASE:.status.phase'
+```
+
+```
+PATH          LOGICAL CLUSTER    PHASE
+capi-demo-1   2yqfrtuq4cjeh3n5   Ready
+```
+
+That is the first identifier the status table in step 1 printed — the demo reads
+it from the same field. Bob's `capi-demo-1` has its own, and you ask his home
+for it: the mapping lives with the handle, so there is no one workspace that
+holds them all. For a single workspace:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice \
+  get workspace capi-demo-1 -o jsonpath='{.spec.cluster}{"\n"}'
+```
+
+**From inside the workspace**, where there is no parent to ask — the
+`LogicalCluster` object is the partition describing itself, and its URL ends in
+the identifier:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 get logicalcluster
+```
+
+```
+NAME      PHASE   URL                                                 AGE
+cluster   Ready   https://localhost:33799/clusters/2yqfrtuq4cjeh3n5   3m
+```
+
+Its annotations carry both names, so this is also how you go the other way —
+from an identifier you found in a log line or a wildcard query back to a path a
+human will recognise:
+
+```sh
+kubectl --context base --server $KCP/clusters/2yqfrtuq4cjeh3n5 \
+  get logicalcluster cluster \
+  -o jsonpath='{.metadata.annotations.kcp\.io/path}{"\n"}'
+```
+
+```
+root:capi-demo:alice:capi-demo-1
+```
+
+**From any object in it**, which is the one that works when all you have is a
+dumped object:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get namespace default \
+  -o jsonpath='{.metadata.annotations.kcp\.io/cluster}{"\n"}'
+```
+
+`root` is the exception to the opaque identifiers: its own logical cluster is
+called `root`, so there — and nowhere else — the path and the identifier are the
+same string.
 
 ## 3. APIExport: publishing an API for others to use
 
@@ -209,7 +336,7 @@ Three things worth noticing:
 Now look at the other side:
 
 ```sh
-kubectl --context base --server $KCP/clusters/root:capi-demo-1 get apibindings
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 get apibindings
 ```
 
 ```
@@ -225,7 +352,7 @@ were accepted. That is what makes the next command work at all — before the
 binding, `kubectl get clusters` here would have said the type does not exist:
 
 ```sh
-kubectl --context base --server $KCP/clusters/root:capi-demo-1 \
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
   get clusters,machines -A
 ```
 
@@ -297,7 +424,7 @@ Change one workspace's class and only that workspace's clusters roll.
 development and testing. It has two backends:
 
 ```sh
-kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 -n default \
   get devcluster demo-00 \
   -o jsonpath='{.spec}{"\n"}'
 ```
@@ -331,8 +458,8 @@ This is the piece the whole project exists for, and it is worth doing slowly.
 **First: the two workspaces hold objects with the same name.**
 
 ```sh
-for w in 1 2; do
-  kubectl --context base --server $KCP/clusters/root:capi-demo-$w -n default \
+for w in alice bob; do
+  kubectl --context base --server $KCP/clusters/root:capi-demo:$w:capi-demo-1 -n default \
     get cluster demo-00 -o jsonpath='{.metadata.uid}{"\n"}'
 done
 ```
@@ -395,16 +522,136 @@ What that costs, measured rather than asserted, is in
 [Workspace resource usage](../design/workspace-resource-usage.md) — the short
 version is 2 goroutines per workspace and no additional watch stream.
 
-## 9. Into a workload cluster
+## 9. Two users, and what neither can see
+
+Everything so far ran as the kcp admin, who can go anywhere. The two workspaces
+belong to two people, and the last thing the demo prints is what kcp will let
+each of them read of the other:
+
+```
+USER   WORKSPACE                         OWNER     RESOURCE    ALLOWED  DETAIL
+alice  root                              everyone  workspaces  yes      1 workspace: capi-demo
+alice  root:capi-demo                    nobody    workspaces  no       forbidden
+alice  root:capi-demo:alice              alice     workspaces  yes      1 workspace: capi-demo-1
+alice  root:capi-demo:alice:capi-demo-1  alice     clusters    yes      1 cluster: demo-00
+alice  root:capi-demo:bob                bob       workspaces  no       forbidden
+alice  root:capi-demo:bob:capi-demo-1    bob       clusters    no       forbidden
+bob    ...
+```
+
+Run any of those yourself. `--as` asks the server to authorize the request as
+somebody else, which is what the demo does — kcp evaluates its whole
+authorization stack against the named user, so what comes back is Alice's
+answer and not an imitation of it:
+
+```sh
+kubectl --context base --as alice \
+  --server $KCP/clusters/root:capi-demo:alice get workspaces
+```
+
+```
+NAME          TYPE        REGION   PHASE   URL
+capi-demo-1   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
+```
+
+```sh
+kubectl --context base --as alice \
+  --server $KCP/clusters/root:capi-demo:bob get workspaces
+```
+
+```
+Error from server (Forbidden): workspaces.tenancy.kcp.io is forbidden:
+User "alice" cannot list resource "workspaces" in API group "tenancy.kcp.io"
+at the cluster scope: access denied
+```
+
+The same holds for what is inside: `--as alice` against
+`root:capi-demo:bob:capi-demo-1` is refused, and Bob is refused Alice's, so
+neither can read a `Cluster`, a `Machine` or a kubeconfig `Secret` of the
+other's.
+
+### Where that comes from
+
+Two `ClusterRoleBinding`s per user per workspace, made by the demo when it
+creates the tree, and nothing else. Look at them:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice \
+  get clusterrolebindings -o custom-columns='NAME:.metadata.name,ROLE:.roleRef.name,SUBJECT:.subjects[*].name' \
+  | grep -E 'NAME|alice'
+```
+
+```
+NAME                                ROLE                          SUBJECT
+demo-home-owner:alice               demo-home-owner               alice
+system:kcp:workspace:access:alice   system:kcp:workspace:access   alice
+```
+
+The **first** is ordinary Kubernetes RBAC — a role the demo defines, granting
+`get`/`list`/`watch` on `tenancy.kcp.io` `workspaces`. In each workspace Alice
+owns it is `demo-workspace-owner` instead: full use of the four Cluster API
+groups, and read access to Secrets, because a cluster's admin kubeconfig is
+one.
+
+The **second** is kcp's. Before RBAC on the resource is consulted at all,
+kcp's workspace content authorizer asks whether you may be in the workspace —
+the verb `access` on the **non-resource URL** `/`, which is what
+`system:kcp:workspace:access` grants. That role is kcp's own, bootstrapped into
+its local admin logical cluster and resolvable from a binding in any workspace,
+which is why the demo binds it by name rather than writing the rule out. Leave
+this binding out and every request into the workspace is refused with `access
+denied`, whatever the first role grants — including for types the workspace
+plainly serves.
+
+### Why `root:capi-demo` is in the way
+
+The first row of the table is the interesting one: Alice **can** list `root`,
+and sees that a workspace called `capi-demo` exists.
+
+That is kcp's own policy — `root` binds `system:kcp:tenancy:reader` to
+`system:authenticated`, so any authenticated user can list root's direct
+children. And a `Workspace` list is neither recursive nor filtered by what the
+caller can enter: it returns the workspaces stored in the one workspace you
+addressed, all of them or none. There is no "list the workspaces I have access
+to" — what a tenant has instead is the path to their own home.
+
+Both facts together are why the homes sit under an org workspace rather than
+under `root`. Directly under `root` their names would be listable by every
+authenticated user on the shard, and Alice would at least learn that Bob
+exists. One workspace in between, granting nobody anything, stops the walk one
+level up: Alice can see `capi-demo` and gets `forbidden` the moment she asks
+what is in it.
+
+```sh
+kubectl --context base --as alice --server $KCP/clusters/root get workspaces
+kubectl --context base --as alice --server $KCP/clusters/root:capi-demo get workspaces
+```
+
+```
+NAME        TYPE        REGION   PHASE   URL
+capi-demo   universal            Ready   https://localhost:33799/clusters/root:capi-demo
+
+Error from server (Forbidden): unknown
+```
+
+(`unknown` rather than a named resource: Alice cannot enter the workspace, so
+the refusal comes before there is anything to name.)
+
+None of this is authentication. There is no identity provider here and no
+accounts — the users are names kcp authorizes as. A deployment's users arrive
+through OIDC or a workspace authentication configuration; what this section
+shows is the half that decides what they may then do.
+
+## 10. Into a workload cluster
 
 Each cluster's admin kubeconfig is a Secret in its own workspace, written by the
 control plane provider:
 
 ```sh
-kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
-  get secret demo-00-kubeconfig -o jsonpath='{.data.value}' | base64 -d > /tmp/demo-00.kubeconfig
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 -n default \
+  get secret demo-00-kubeconfig -o jsonpath='{.data.value}' | base64 -d > /tmp/alice.kubeconfig
 
-kubectl --kubeconfig /tmp/demo-00.kubeconfig get nodes
+kubectl --kubeconfig /tmp/alice.kubeconfig get nodes
 ```
 
 ```
@@ -417,9 +664,10 @@ Those Nodes are how the Machines reached `Ready`: the Machine reconciler finds
 each one by provider ID and records it. Fetch the *other* workspace's secret
 and you get that cluster's nodes instead — two separate workload clusters,
 reached through two separate kubeconfigs, from two workspaces that never see
-each other.
+each other. That command was the admin's; Bob is refused the Secret, so the
+kubeconfig for Alice's cluster is hers alone.
 
-## 10. Stopping, and what to change
+## 11. Stopping, and what to change
 
 `Ctrl-C` in the first terminal. The managers stop, the kcp server stops, and
 with the in-memory backend the workload clusters go with them. State lives
@@ -428,10 +676,12 @@ under `.demo/`, which is gitignored — delete it to start clean.
 Worth trying next:
 
 ```sh
-task demo DEMO_FLAGS="--workspaces=5"              # scale the fleet
-task demo DEMO_FLAGS="--control-plane-machines=3"  # a three-replica control plane
-task demo DEMO_FLAGS="--backend=docker"            # real containers
-task demo DEMO_FLAGS="--no-manager"                # run the managers yourself
+task demo DEMO_FLAGS="--workspaces=6"                    # scale the fleet
+task demo DEMO_FLAGS="--users=alice,bob,carol"           # more tenants
+task demo DEMO_FLAGS="--users="                          # none: everything under root, admin only
+task demo DEMO_FLAGS="--control-plane-machines=3"        # a three-replica control plane
+task demo DEMO_FLAGS="--backend=docker"                  # real containers
+task demo DEMO_FLAGS="--no-manager"                      # run the managers yourself
 ```
 
 `--no-manager` is the interesting one if you are heading towards a real
