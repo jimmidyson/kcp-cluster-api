@@ -17,9 +17,15 @@ name: pr title
 # not fire on push simply does not exist on the new head, and the pull
 # request waits forever for a verdict that can never arrive. This was caught
 # by auto-merge sitting on a commit with no title check at all.
+#
+# `ready_for_review` is in the list for the same head-commit reason. Marking a
+# draft ready does not push a commit, so it cannot produce a check run on its
+# own; it is here so the verdict on the head is re-established at the moment
+# the pull request becomes reviewable, rather than resting on whatever run
+# last happened while it was a draft.
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, edited, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
