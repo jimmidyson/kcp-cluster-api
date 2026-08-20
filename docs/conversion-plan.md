@@ -23,7 +23,8 @@ having to reconstruct the answer from the commit log.
   upstream defaults it off. The demo, `test/integration/demo`, the fleet sweep
   shape and the user documentation all build a `Cluster` that names a
   `ClusterClass` and let the topology controller create everything under it.
-  Four new patches in the fork, recorded in [`DRIFT.md`](../DRIFT.md); spec in
+  Four new patches in the fork, pinned at `v1.15.0-kcp.12` and recorded in
+  [`DRIFT.md`](../DRIFT.md); spec in
   [`specs/20260820-152056-clusterclass-based-clusters`](../specs/20260820-152056-clusterclass-based-clusters/spec.md).
 
   Three things had to be true for it that are worth carrying forward. A

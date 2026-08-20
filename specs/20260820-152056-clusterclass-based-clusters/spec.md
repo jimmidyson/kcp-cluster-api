@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-20
 
-**Status**: Draft — implementation complete, pending the fork tag (see Success Criteria)
+**Status**: Draft
 
 **Input**: "We should base everything on ClusterClass based clusters."
 
@@ -167,11 +167,9 @@ core provider's.
   and [Usage](../../docs/site/content/en/docs/user/usage.md) are the figures
   from that run. **Met** — the run is in [`evidence/`](evidence/README.md).
 - `task drift` passes against a signed tag of the fork carrying the four
-  setups. **Not met**, and it is the one thing here that cannot be finished
-  from a session: the pin is a pseudo-version of the fork branch until somebody
-  cuts `v1.15.0-kcp.12` with a key. `DRIFT.md` says what has to happen; the
-  check passes against the branch (`go run ./cmd/drift -ref <branch>`) and
-  reports *divergence matches DRIFT.md exactly*.
+  setups. **Met** — `v1.15.0-kcp.12`, signed and annotated across all three
+  modules at the same commit on `kcp/v1.15`, and the check reports *divergence
+  matches DRIFT.md exactly*.
 
 ## Where this landed
 

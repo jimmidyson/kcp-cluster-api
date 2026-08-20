@@ -55,21 +55,7 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.11`
-
-> **The pin is not a tag right now, and that is a defect with a fix rather
-> than a decision.** The ClusterClass and topology patches below are on the
-> fork's `claude/clusterclass-based-clusters-uketqw` branch and `go.mod` pins
-> the pseudo-version of that branch's head, because the tag this project pins
-> to has to be a signed annotated tag on `kcp/v1.15` and cutting one is not
-> something a session can do for somebody: `git tag -s` signs with a key, and
-> the key is the point.
->
-> What has to happen before this merges: replay the three commits onto
-> `kcp/v1.15`, tag all three modules `v1.15.0-kcp.12` with `git tag -s`, and
-> repin. Until then `task drift` reports against a ref that will be rewritten,
-> and a build resolves a name anybody with push access can move — which is
-> exactly what the signed-tag rule exists to prevent.
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.12`
 
 > All three modules are at the same version. `api/` was left behind at
 > `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
