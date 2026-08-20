@@ -41,7 +41,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -76,7 +75,6 @@ import (
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
@@ -103,34 +101,6 @@ const (
 
 	DefaultTimeout      = 5 * time.Minute
 	DefaultPollInterval = 2 * time.Second
-)
-
-// coreCRDs and devCRDs are the types the demo publishes, per ADR-0001's D3
-// scope. They are resolved from the pinned Cluster API modules at run time
-// rather than copied here, so they cannot disagree with the version this is
-// built against.
-//
-// MachineSet, MachineDeployment and MachineHealthCheck are published without
-// being reconciled: the Cluster and Machine reconcilers register watches on
-// them, and controller-runtime blocks a controller's startup on every
-// registered source's cache sync - including for kinds the server does not
-// serve. Leaving them out does not skip them, it hangs.
-var (
-	coreCRDs = []string{
-		"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
-	}
-	bootstrapCRDs = []string{
-		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigs.yaml",
-		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml",
-	}
-	devCRDs = []string{
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
-	}
 )
 
 // PermissionClaims are the core-type claims a single-export fixture needs:
@@ -628,48 +598,34 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	// 5. A cluster in every workspace, all with the same names.
+	// 5. The blueprint, then a cluster in every workspace, all with the same
+	// names.
 	for _, ws := range workspaces {
+		// The ClusterClass and the five templates it refers to, once per
+		// workspace. Templates before the class that names them: the
+		// ClusterClass reconciler resolves every reference and reports the
+		// class not ready until they all resolve, and a class created first
+		// simply waits - but a demo that watched it wait would be showing the
+		// wait rather than the cluster.
+		for _, obj := range Blueprint(opts.Backend) {
+			if err := create(ctx, ws.Client, obj); err != nil {
+				return Result{}, fmt.Errorf("creating %T %s in %s: %w", obj, obj.GetName(), ws.Path, err)
+			}
+		}
+
 		for n := range opts.ClustersPerWorkspace {
 			name := ClusterName(n)
-			// The infrastructure object first: the Cluster reconciler
-			// resolves spec.infrastructureRef and takes ownership of what it
-			// finds, and that ownership is what starts the DevCluster
-			// reconciler working.
-			if err := create(ctx, ws.Client, NewDevCluster(name, opts.Backend)); err != nil {
-				return Result{}, fmt.Errorf("creating DevCluster %s in %s: %w", name, ws.Path, err)
-			}
-			// The control plane and the template it stamps Machines from,
-			// before the Cluster that refers to them: the Cluster reconciler
-			// resolves spec.controlPlaneRef and takes ownership of what it
-			// finds, and that ownership is what starts the control plane
-			// provider working.
-			if opts.ControlPlaneMachines > 0 {
-				if err := create(ctx, ws.Client, NewDevMachineTemplate(name, opts.Backend)); err != nil {
-					return Result{}, fmt.Errorf("creating DevMachineTemplate for %s in %s: %w", name, ws.Path, err)
-				}
-				if err := create(ctx, ws.Client, NewKubeadmControlPlane(name, opts.ControlPlaneMachines, opts.KubernetesVersion)); err != nil {
-					return Result{}, fmt.Errorf("creating KubeadmControlPlane for %s in %s: %w", name, ws.Path, err)
-				}
-			}
-
-			if err := create(ctx, ws.Client, NewCluster(name, opts.Backend, opts.ControlPlaneMachines > 0)); err != nil {
+			// One object per cluster, and it names a class rather than the
+			// objects under it. The topology controller creates the DevCluster,
+			// the KubeadmControlPlane and the worker MachineDeployment from the
+			// class, and the reconcilers that were already wired take those on
+			// exactly as they did when the demo wrote them out by hand.
+			if err := create(ctx, ws.Client, NewCluster(name, opts.ControlPlaneMachines, opts.WorkerMachines, opts.KubernetesVersion)); err != nil {
 				return Result{}, fmt.Errorf("creating Cluster %s in %s: %w", name, ws.Path, err)
-			}
-
-			// The worker pool last: its Machines cannot join a control plane
-			// that does not exist yet, and the MachineDeployment is what
-			// creates them.
-			if opts.WorkerMachines > 0 {
-				if err := create(ctx, ws.Client, NewKubeadmConfigTemplate(name)); err != nil {
-					return Result{}, fmt.Errorf("creating KubeadmConfigTemplate for %s in %s: %w", name, ws.Path, err)
-				}
-				if err := create(ctx, ws.Client, NewMachineDeployment(name, opts.WorkerMachines, opts.KubernetesVersion)); err != nil {
-					return Result{}, fmt.Errorf("creating MachineDeployment for %s in %s: %w", name, ws.Path, err)
-				}
 			}
 		}
 		log.Info("Clusters created", "workspace", ws.Path,
+			"class", ClassName,
 			"clusters", opts.ClustersPerWorkspace,
 			"controlPlaneMachines", opts.ClustersPerWorkspace*opts.ControlPlaneMachines,
 			"workerMachines", opts.ClustersPerWorkspace*opts.WorkerMachines)
@@ -768,23 +724,31 @@ func ensureUsers(
 	return users, nil
 }
 
+// Blueprint is every object a workspace needs before a Cluster can name a
+// class: the templates, and the ClusterClass that refers to them.
+//
+// One set per workspace rather than one per cluster, and in this order - the
+// class last, so that by the time it exists everything it refers to does.
+//
+// Exported because the integration tests build clusters the same way the demo
+// does, and a second copy of a class is a second thing to keep in step with the
+// exports that publish its types.
+func Blueprint(backend Backend) []client.Object {
+	return []client.Object{
+		NewDevClusterTemplate(backend),
+		NewDevMachineTemplate(ControlPlaneMachineTemplateName, backend),
+		NewDevMachineTemplate(WorkerMachineTemplateName, backend),
+		NewKubeadmControlPlaneTemplate(),
+		NewKubeadmConfigTemplate(WorkerBootstrapTemplateName),
+		NewClusterClass(backend),
+	}
+}
+
 func create(ctx context.Context, cl client.Client, obj client.Object) error {
 	if err := cl.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
 	return nil
-}
-
-func manifestPaths() ([]string, error) {
-	core, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, append(slices.Clone(coreCRDs), bootstrapCRDs...)...)
-	if err != nil {
-		return nil, fmt.Errorf("resolving core CRD manifests: %w", err)
-	}
-	dev, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPITest, devCRDs...)
-	if err != nil {
-		return nil, fmt.Errorf("resolving dev provider CRD manifests: %w", err)
-	}
-	return append(core, dev...), nil
 }
 
 // startManagers starts one manager per provider, each addressed at its own
@@ -804,11 +768,12 @@ func startManagers(
 	scheme *runtime.Scheme,
 	log logr.Logger,
 ) (map[string]mcmanager.Manager, error) {
-	// MachinePool is on by default upstream and watched as an event source by
-	// the core reconcilers; it is outside what these exports publish, so
-	// leaving it on stalls their cache sync.
-	if err := feature.MutableGates.Set("MachinePool=false"); err != nil {
-		return nil, fmt.Errorf("disabling the MachinePool feature gate: %w", err)
+	// The same gates a deployment runs with, set the same way: ClusterTopology
+	// on, because a demo cluster is a ClusterClass based cluster, and
+	// MachinePool off, because these exports publish no MachinePool CRD and a
+	// watch on a type the server does not serve stalls the cache sync.
+	if err := coremanager.SetFeatureGateDefaults(); err != nil {
+		return nil, err
 	}
 	coremanager.SetupProcessGlobals()
 
@@ -882,7 +847,8 @@ func newFleetFor(
 	scheme *runtime.Scheme,
 ) (mcmanager.Manager, *coremanager.Fleet, error) {
 	registry := &capicontrollerutil.WildcardRegistry{}
-	provider, err := providerwiring.NewAPIExportProvider(parentCfg, export, scheme, registry)
+	provider, err := providerwiring.NewAPIExportProvider(parentCfg, export, scheme, registry,
+		providerwiring.WithCacheIndexes(ctx, coremanager.FleetCacheIndexes()...))
 	if err != nil {
 		return nil, nil, fmt.Errorf("constructing the kcp APIExport provider for %s: %w", export, err)
 	}

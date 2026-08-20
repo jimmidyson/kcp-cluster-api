@@ -45,7 +45,6 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
@@ -124,7 +123,6 @@ func TestBootstrapDeploymentWorkspaceSweep(t *testing.T) {
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 			coremanager.SetupProcessGlobals()
 
 			fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{

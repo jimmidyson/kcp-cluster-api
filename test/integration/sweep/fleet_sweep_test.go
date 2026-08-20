@@ -47,18 +47,28 @@ import (
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
-// What one workspace's worth of every provider's controllers watches. Declared
-// rather than inferred, so a shape whose wiring changed underneath the number
-// fails rather than reporting the new shape under the old label.
+// What every provider's controllers watch when they share one process, and how
+// many handlers they register to do it. Declared rather than inferred, so a
+// shape whose wiring changed underneath the number fails rather than reporting
+// the new shape under the old label.
+//
+// Derived the same two ways as the core deployment's pair, and documented
+// there: the types are the Cluster API rows of a run's own stream inventory,
+// and the handlers are what `task scale:census` counts in the wired setup
+// functions.
+//
+// Eleven types rather than the core deployment's six, because three more
+// providers watch three more groups — and because MachineHealthCheck, which
+// nothing in the core deployment watches, is watched here by the control plane
+// provider.
 const (
-	fleetWatchedTypes  = 8
-	fleetEventHandlers = 27
+	fleetWatchedTypes  = 11
+	fleetEventHandlers = 41
 )
 
 // TestFleetWorkspaceSweep measures what every provider's controllers together
@@ -120,7 +130,8 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		facts: map[string]string{
 			"shape":             "every provider's controllers on one fleet: core, bootstrap, control plane, dev infrastructure",
 			"deployment":        "none — four deployments co-located, so one engagement per workspace rather than four",
-			"reconciledTypes":   "clusters, machines, machinesets, machinedeployments, kubeadmconfigs, kubeadmcontrolplanes, devclusters, devmachines",
+			"reconciledTypes":   "clusterclasses, clusters, machines, machinesets, machinedeployments, kubeadmconfigs, kubeadmcontrolplanes, devclusters, devmachines",
+			"clusterShape":      "ClusterClass based: one class per workspace, each Cluster naming it",
 			"devClusterBackend": "inMemory",
 			"endState":          "control plane initialized",
 		},
@@ -138,6 +149,10 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		},
 		crdTransform: keepStorageVersion,
 
+		// The index the topology controllers list through, on the cache they
+		// read through. See coremanager.FleetCacheIndexes.
+		cacheIndexes: coremanager.FleetCacheIndexes,
+
 		// The bootstrap and control plane providers write Secrets and
 		// ConfigMaps. Without these claims they write nothing, and the sweep
 		// would measure workspaces that never became active.
@@ -150,7 +165,6 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 			coremanager.SetupProcessGlobals()
 
 			fleetManager = mgr
@@ -179,17 +193,25 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 
 		activate: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {
 			t.Helper()
+			// The blueprint once per workspace, then one Cluster per object.
+			// This is the demo's own class and the demo's own Cluster: what
+			// this shape measures is what an installation pays for a
+			// ClusterClass based cluster, and building a different sort of
+			// cluster here would measure something nobody deploys.
+			for _, obj := range demo.Blueprint(demo.BackendInMemory) {
+				if err := tn.directClient.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+					t.Fatalf("creating %T %s in workspace %s: %v", obj, obj.GetName(), tn.name, err)
+				}
+			}
 			for n := range objects {
 				name := objectName(tn, n)
-				for _, obj := range []client.Object{
-					demo.NewDevCluster(name, demo.BackendInMemory),
-					demo.NewDevMachineTemplate(name, demo.BackendInMemory),
-					demo.NewKubeadmControlPlane(name, 1, demo.DefaultKubernetesVersion),
-					demo.NewCluster(name, demo.BackendInMemory, true),
-				} {
-					if err := tn.directClient.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-						t.Fatalf("creating %T %s in workspace %s: %v", obj, name, tn.name, err)
-					}
+				// No workers: this shape's end state is an initialized control
+				// plane, and a worker pool would add a MachineDeployment's
+				// worth of reconciling to every point of the sweep without
+				// moving that end state.
+				cluster := demo.NewCluster(name, 1, 0, demo.DefaultKubernetesVersion)
+				if err := tn.directClient.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
+					t.Fatalf("creating Cluster %s in workspace %s: %v", name, tn.name, err)
 				}
 			}
 		},

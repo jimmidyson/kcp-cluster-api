@@ -1,0 +1,278 @@
+{
+  "title": "Active workspace sweep (every provider's controllers, one process)",
+  "facts": {
+    "clusterShape": "ClusterClass based: one class per workspace, each Cluster naming it",
+    "deployment": "none — four deployments co-located, so one engagement per workspace rather than four",
+    "devClusterBackend": "inMemory",
+    "discoveryRequestsPerWorkspace": "7.0",
+    "endState": "control plane initialized",
+    "eventHandlersPerWorkspace": "41",
+    "goMaxProcs": "4",
+    "goVersion": "go1.26.3",
+    "goroutinesPerWorkspace": "57.0",
+    "goroutinesReclaimedPerWorkspace": "-183.5",
+    "goroutinesRetainedPerDepartedWorkspace": "0.0",
+    "heapBytesPerWorkspace": "843252",
+    "objectsPerWorkspace": "1",
+    "reconciledTypes": "clusterclasses, clusters, machines, machinesets, machinedeployments, kubeadmconfigs, kubeadmcontrolplanes, devclusters, devmachines",
+    "secondsPerWorkspaceEngagement": "0.1",
+    "shape": "every provider's controllers on one fleet: core, bootstrap, control plane, dev infrastructure",
+    "watchStreamsPerWorkspace": "0.00",
+    "watchedTypesPerWorkspace": "11",
+    "workspaces": "3"
+  },
+  "samples": [
+    {
+      "phase": "baseline",
+      "label": "baseline (manager not started)",
+      "workspaces": 0,
+      "goroutines": 44,
+      "heapBytes": 17462704,
+      "traffic": {
+        "watchStreams": 0,
+        "wildcardWatchStreams": 0,
+        "scopedWatchStreams": 0,
+        "lists": 0,
+        "discovery": 7,
+        "total": 7
+      },
+      "stepSeconds": 0
+    },
+    {
+      "phase": "engaged",
+      "label": "1 bound, idle",
+      "workspaces": 1,
+      "goroutines": 476,
+      "heapBytes": 18762328,
+      "traffic": {
+        "watchStreams": 12,
+        "wildcardWatchStreams": 11,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 14,
+        "total": 26
+      },
+      "stepSeconds": 10.815607768
+    },
+    {
+      "phase": "active",
+      "label": "1 active",
+      "workspaces": 1,
+      "goroutines": 624,
+      "heapBytes": 28565616,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 23,
+        "total": 472
+      },
+      "stepSeconds": 44.403788097
+    },
+    {
+      "phase": "engaged",
+      "label": "2 bound, idle",
+      "workspaces": 2,
+      "goroutines": 626,
+      "heapBytes": 28642880,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 23,
+        "total": 472
+      },
+      "stepSeconds": 2.553283947
+    },
+    {
+      "phase": "active",
+      "label": "2 active",
+      "workspaces": 2,
+      "goroutines": 681,
+      "heapBytes": 30186264,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 30,
+        "total": 967
+      },
+      "stepSeconds": 44.614911487
+    },
+    {
+      "phase": "engaged",
+      "label": "3 bound, idle",
+      "workspaces": 3,
+      "goroutines": 683,
+      "heapBytes": 29733304,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 30,
+        "total": 967
+      },
+      "stepSeconds": 2.560148065
+    },
+    {
+      "phase": "active",
+      "label": "3 active",
+      "workspaces": 3,
+      "goroutines": 738,
+      "heapBytes": 30252120,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 1440
+      },
+      "stepSeconds": 44.587926895
+    },
+    {
+      "phase": "disengaged",
+      "label": "2 left",
+      "workspaces": 2,
+      "goroutines": 681,
+      "heapBytes": 29874488,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 1514
+      },
+      "stepSeconds": 17.818422668
+    },
+    {
+      "phase": "disengaged",
+      "label": "1 left",
+      "workspaces": 1,
+      "goroutines": 624,
+      "heapBytes": 29258864,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 1587
+      },
+      "stepSeconds": 17.802927147
+    },
+    {
+      "phase": "disengaged",
+      "label": "0 left",
+      "workspaces": 0,
+      "goroutines": 314,
+      "heapBytes": 27183544,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 1660
+      },
+      "stepSeconds": 17.748073587
+    }
+  ],
+  "streams": [
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "/configmaps",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "/secrets",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "apis.kcp.io/apibindings",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "root",
+      "resource": "apis.kcp.io/apiexportendpointslices",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
+      "count": 2
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/clusterclasses",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/clusters",
+      "count": 2
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machinedeployments",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machinehealthchecks",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machinepools",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machines",
+      "count": 2
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machinesets",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "controlplane.cluster.x-k8s.io/kubeadmcontrolplanes",
+      "count": 2
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "infrastructure.cluster.x-k8s.io/devclusters",
+      "count": 2
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "infrastructure.cluster.x-k8s.io/devmachines",
+      "count": 2
+    }
+  ]
+}

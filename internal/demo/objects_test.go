@@ -17,9 +17,15 @@ limitations under the License.
 package demo
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
+	"text/template"
 
-	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 func TestBackendValidate(t *testing.T) {
@@ -38,81 +44,216 @@ func TestBackendValidate(t *testing.T) {
 	}
 }
 
-func TestNewDevClusterBackend(t *testing.T) {
-	inMemory := NewDevCluster("demo-00", BackendInMemory)
-	if inMemory.Spec.Backend.InMemory == nil || inMemory.Spec.Backend.Docker != nil {
-		t.Errorf("in-memory DevCluster backend = %+v, want only InMemory set", inMemory.Spec.Backend)
+func TestTemplatesCarryTheChosenBackend(t *testing.T) {
+	inMemory := NewDevClusterTemplate(BackendInMemory)
+	if got := inMemory.Spec.Template.Spec.Backend; got.InMemory == nil || got.Docker != nil {
+		t.Errorf("in-memory DevClusterTemplate backend = %+v, want only InMemory set", got)
+	}
+	docker := NewDevClusterTemplate(BackendDocker)
+	if got := docker.Spec.Template.Spec.Backend; got.Docker == nil || got.InMemory != nil {
+		t.Errorf("docker DevClusterTemplate backend = %+v, want only Docker set", got)
 	}
 
-	docker := NewDevCluster("demo-00", BackendDocker)
-	if docker.Spec.Backend.Docker == nil || docker.Spec.Backend.InMemory != nil {
-		t.Errorf("docker DevCluster backend = %+v, want only Docker set", docker.Spec.Backend)
+	inMemoryMachine := NewDevMachineTemplate(ControlPlaneMachineTemplateName, BackendInMemory)
+	if got := inMemoryMachine.Spec.Template.Spec.Backend; got.InMemory == nil || got.Docker != nil {
+		t.Errorf("in-memory DevMachineTemplate backend = %+v, want only InMemory set", got)
+	}
+	dockerMachine := NewDevMachineTemplate(ControlPlaneMachineTemplateName, BackendDocker)
+	if got := dockerMachine.Spec.Template.Spec.Backend; got.Docker == nil || got.InMemory != nil {
+		t.Errorf("docker DevMachineTemplate backend = %+v, want only Docker set", got)
 	}
 }
 
-// The Cluster's infrastructureRef has to name the DevCluster this demo
-// creates alongside it, by group and kind as well as name: the Cluster
-// reconciler resolves it through the contract-metadata resolver, and a
-// reference that does not resolve leaves the cluster stuck with nothing
-// visibly wrong in either object.
-func TestNewClusterReferencesItsDevCluster(t *testing.T) {
-	name := ClusterName(0)
-	cluster := NewCluster(name, BackendInMemory, false)
-	devCluster := NewDevCluster(name, BackendInMemory)
+// TestClusterNamesAClassAndNothingElse is what makes these ClusterClass based
+// clusters rather than hand-built ones with a topology bolted on.
+//
+// A Cluster that set its own infrastructureRef or controlPlaneRef would have
+// the topology controller fighting it: those two fields are what that
+// controller writes, from the class.
+func TestClusterNamesAClassAndNothingElse(t *testing.T) {
+	cluster := NewCluster(ClusterName(0), 1, 1, DefaultKubernetesVersion)
 
-	ref := cluster.Spec.InfrastructureRef
-	if ref.Name != devCluster.Name {
-		t.Errorf("infrastructureRef.Name = %q, want %q", ref.Name, devCluster.Name)
+	if !cluster.Spec.Topology.IsDefined() {
+		t.Fatal("Cluster has no topology, so no topology controller will ever act on it")
 	}
-	if ref.Kind != "DevCluster" {
-		t.Errorf("infrastructureRef.Kind = %q, want DevCluster", ref.Kind)
+	if got := cluster.Spec.Topology.ClassRef.Name; got != ClassName {
+		t.Errorf("topology.classRef.name = %q, want %q", got, ClassName)
 	}
-	if ref.APIGroup != infrav1.GroupVersion.Group {
-		t.Errorf("infrastructureRef.APIGroup = %q, want %q", ref.APIGroup, infrav1.GroupVersion.Group)
+	if got := cluster.Spec.Topology.Version; got != DefaultKubernetesVersion {
+		t.Errorf("topology.version = %q, want %q", got, DefaultKubernetesVersion)
 	}
-	if cluster.Namespace != devCluster.Namespace {
-		t.Errorf("Cluster namespace %q != DevCluster namespace %q", cluster.Namespace, devCluster.Namespace)
+	if cluster.Spec.InfrastructureRef.IsDefined() {
+		t.Errorf("Cluster sets infrastructureRef %+v, which is the topology controller's to write", cluster.Spec.InfrastructureRef)
+	}
+	if cluster.Spec.ControlPlaneRef.IsDefined() {
+		t.Errorf("Cluster sets controlPlaneRef %+v, which is the topology controller's to write", cluster.Spec.ControlPlaneRef)
 	}
 }
 
-// A cluster with a control plane refers to it, and one without does not: the
-// reference is what makes the control plane provider take the cluster on, and
-// what makes the bootstrap provider stop generating certificates itself.
-func TestNewClusterControlPlaneReference(t *testing.T) {
-	without := NewCluster(ClusterName(0), BackendInMemory, false)
-	if without.Spec.ControlPlaneRef.IsDefined() {
-		t.Errorf("Cluster without a control plane has controlPlaneRef %+v", without.Spec.ControlPlaneRef)
+// The shape asked for is the shape written down: replicas reach the topology,
+// and a run that asks for no workers declares none rather than declaring zero.
+func TestClusterTopologyCarriesTheRequestedShape(t *testing.T) {
+	full := NewCluster(ClusterName(0), 3, 2, DefaultKubernetesVersion)
+	if got := full.Spec.Topology.ControlPlane.Replicas; got == nil || *got != 3 {
+		t.Errorf("topology.controlPlane.replicas = %v, want 3", got)
+	}
+	if len(full.Spec.Topology.Workers.MachineDeployments) != 1 {
+		t.Fatalf("topology has %d machine deployments, want 1", len(full.Spec.Topology.Workers.MachineDeployments))
+	}
+	md := full.Spec.Topology.Workers.MachineDeployments[0]
+	if md.Class != WorkerClass {
+		t.Errorf("machineDeployment.class = %q, want %q", md.Class, WorkerClass)
+	}
+	if md.Name != WorkerTopologyName {
+		t.Errorf("machineDeployment.name = %q, want %q", md.Name, WorkerTopologyName)
+	}
+	if got := md.Replicas; got == nil || *got != 2 {
+		t.Errorf("machineDeployment.replicas = %v, want 2", got)
 	}
 
-	with := NewCluster(ClusterName(0), BackendInMemory, true)
-	ref := with.Spec.ControlPlaneRef
-	if ref.Kind != "KubeadmControlPlane" {
-		t.Errorf("controlPlaneRef.Kind = %q, want KubeadmControlPlane", ref.Kind)
+	none := NewCluster(ClusterName(0), 1, 0, DefaultKubernetesVersion)
+	if len(none.Spec.Topology.Workers.MachineDeployments) != 0 {
+		t.Errorf("a cluster asking for no workers declares %d machine deployments", len(none.Spec.Topology.Workers.MachineDeployments))
 	}
-	if want := ControlPlaneName(ClusterName(0)); ref.Name != want {
-		t.Errorf("controlPlaneRef.Name = %q, want %q", ref.Name, want)
+
+	// Zero control plane machines is still a stated zero, not an absent field.
+	// A class always names a control plane template, so the cluster gets a
+	// control plane object either way - and left unstated its replica count
+	// would be waiting for a webhook this project does not serve.
+	noControlPlane := NewCluster(ClusterName(0), 0, 0, DefaultKubernetesVersion)
+	if got := noControlPlane.Spec.Topology.ControlPlane.Replicas; got == nil || *got != 0 {
+		t.Errorf("topology.controlPlane.replicas = %v for a cluster asking for no control plane machines, want a stated 0", got)
 	}
 }
 
-// The control plane stamps its Machines from the infrastructure template, so
-// the reference has to name the one the demo creates alongside it.
-func TestKubeadmControlPlaneReferencesItsTemplate(t *testing.T) {
-	cluster := ClusterName(0)
-	kcp := NewKubeadmControlPlane(cluster, 3, DefaultKubernetesVersion)
-	template := NewDevMachineTemplate(cluster, BackendInMemory)
+// TestClusterClassRefersOnlyToTemplatesTheBlueprintCreates is the invariant a
+// name typo breaks, and it breaks it silently: the ClusterClass reconciler
+// reports the class not ready, the topology controller waits for a class that
+// will never be ready, and every Cluster naming it sits with no infrastructure
+// and no control plane while nothing in either object says why.
+func TestClusterClassRefersOnlyToTemplatesTheBlueprintCreates(t *testing.T) {
+	created := map[string]bool{}
+	for _, obj := range Blueprint(BackendInMemory) {
+		created[key(obj)] = true
+	}
 
-	ref := kcp.Spec.MachineTemplate.Spec.InfrastructureRef
-	if ref.Name != template.Name {
-		t.Errorf("machineTemplate infrastructureRef.Name = %q, want %q", ref.Name, template.Name)
+	class := NewClusterClass(BackendInMemory)
+	refs := map[string]clusterv1.ClusterClassTemplateReference{
+		"infrastructure":            class.Spec.Infrastructure.TemplateRef,
+		"controlPlane":              class.Spec.ControlPlane.TemplateRef,
+		"controlPlane.machineInfra": class.Spec.ControlPlane.MachineInfrastructure.TemplateRef,
+		"workers[0].bootstrap":      class.Spec.Workers.MachineDeployments[0].Bootstrap.TemplateRef,
+		"workers[0].infrastructure": class.Spec.Workers.MachineDeployments[0].Infrastructure.TemplateRef,
 	}
-	if ref.Kind != "DevMachineTemplate" {
-		t.Errorf("machineTemplate infrastructureRef.Kind = %q, want DevMachineTemplate", ref.Kind)
+	for field, ref := range refs {
+		if ref.Name == "" || ref.Kind == "" || ref.APIVersion == "" {
+			t.Errorf("%s is not fully specified: %+v", field, ref)
+			continue
+		}
+		if !created[fmt.Sprintf("%s/%s", ref.Kind, ref.Name)] {
+			t.Errorf("%s refers to %s/%s, which the blueprint does not create", field, ref.Kind, ref.Name)
+		}
 	}
-	if got := *kcp.Spec.Replicas; got != 3 {
-		t.Errorf("replicas = %d, want 3", got)
+}
+
+// TestBlueprintCreatesTheClassLast is ordering the demo depends on for its
+// output rather than for correctness: a class created before its templates is
+// simply not ready until they exist.
+func TestBlueprintCreatesTheClassLast(t *testing.T) {
+	objs := Blueprint(BackendInMemory)
+	if len(objs) == 0 {
+		t.Fatal("the blueprint is empty")
 	}
-	if kcp.Spec.Version != DefaultKubernetesVersion {
-		t.Errorf("version = %q, want %q", kcp.Spec.Version, DefaultKubernetesVersion)
+	if _, ok := objs[len(objs)-1].(*clusterv1.ClusterClass); !ok {
+		t.Errorf("the last object of the blueprint is %T, want the ClusterClass", objs[len(objs)-1])
+	}
+	for _, obj := range objs[:len(objs)-1] {
+		if _, ok := obj.(*clusterv1.ClusterClass); ok {
+			t.Error("the blueprint holds more than one ClusterClass")
+		}
+	}
+}
+
+// TestWorkerRolloutStrategyIsSpelledOut covers what the absent MachineDeployment
+// webhook would otherwise have defaulted.
+//
+// The topology controller copies the class's strategy onto the MachineDeployment
+// it creates, so an unset strategy here is an unset strategy there, and the
+// MachineDeployment reconciler fails every reconcile with "unexpected deployment
+// strategy type: ".
+func TestWorkerRolloutStrategyIsSpelledOut(t *testing.T) {
+	strategy := NewClusterClass(BackendInMemory).Spec.Workers.MachineDeployments[0].Rollout.Strategy
+	if strategy.Type != clusterv1.RollingUpdateMachineDeploymentStrategyType {
+		t.Errorf("worker rollout strategy type = %q, want %q", strategy.Type, clusterv1.RollingUpdateMachineDeploymentStrategyType)
+	}
+	if strategy.RollingUpdate.MaxSurge == nil || strategy.RollingUpdate.MaxUnavailable == nil {
+		t.Errorf("worker rolling update is not fully specified: %+v", strategy.RollingUpdate)
+	}
+}
+
+// TestNamingTemplatesMatchTheNameHelpers keeps the two statements of a name in
+// step. The class is what actually names the objects; the helpers are what the
+// demo's status table, the integration tests and the walkthrough look them up
+// by, and a class that stopped agreeing with them would leave every lookup
+// finding nothing.
+func TestNamingTemplatesMatchTheNameHelpers(t *testing.T) {
+	class := NewClusterClass(BackendInMemory)
+	const cluster = "demo-00"
+
+	for _, tc := range []struct {
+		field    string
+		template string
+		want     string
+	}{
+		{"infrastructure", class.Spec.Infrastructure.Naming.Template, InfraClusterName(cluster)},
+		{"controlPlane", class.Spec.ControlPlane.Naming.Template, ControlPlaneName(cluster)},
+		{"workers[0]", class.Spec.Workers.MachineDeployments[0].Naming.Template, WorkerDeploymentName(cluster)},
+	} {
+		got := renderName(tc.template, cluster, WorkerTopologyName)
+		if got != tc.want {
+			t.Errorf("%s naming template %q renders %q, but the name helper says %q",
+				tc.field, tc.template, got, tc.want)
+		}
+	}
+}
+
+// TestDockerTemplateIsFullySpecified is the demo's stated contract, enforced
+// rather than asserted in prose.
+//
+// The demo serves no webhooks, so nothing defaults what it creates. That was
+// written down in the design doc and was not true of the docker backend: the
+// control plane port came from the admission webhook, the demo left it zero,
+// and the docker backend sets only the host. The resulting endpoint fails
+// APIEndpoint.IsValid, and the control plane provider returns early on every
+// reconcile without ever creating a Machine - while the DevCluster reports
+// itself provisioned, so nothing else looks wrong.
+func TestDockerTemplateIsFullySpecified(t *testing.T) {
+	for _, backend := range []Backend{BackendInMemory, BackendDocker} {
+		t.Run(string(backend), func(t *testing.T) {
+			spec := NewDevClusterTemplate(backend).Spec.Template.Spec
+
+			switch backend {
+			case BackendDocker:
+				// The docker backend fills in the host from the load balancer
+				// it creates and takes the port as given, so the port has to
+				// be here or the endpoint is never valid.
+				if spec.ControlPlaneEndpoint.Port == 0 {
+					t.Error("a docker-backed DevCluster has no control plane port, so its endpoint can never become valid and no control plane machine is ever created")
+				}
+			case BackendInMemory:
+				// The in-memory backend assigns the port of the listener it
+				// starts, so setting one here would be overwritten and would
+				// suggest the demo had a say in it.
+				if spec.ControlPlaneEndpoint.Port != 0 {
+					t.Errorf("an in-memory DevCluster specifies port %d, but the backend assigns the listener's own port",
+						spec.ControlPlaneEndpoint.Port)
+				}
+			}
+
+			if spec.Backend.Docker == nil && spec.Backend.InMemory == nil {
+				t.Error("neither backend is set, which the webhook would have defaulted")
+			}
+		})
 	}
 }
 
@@ -127,42 +268,33 @@ func TestClusterNameIsWorkspaceIndependent(t *testing.T) {
 	}
 }
 
-// TestDevClusterIsFullySpecifiedForEveryBackend is the demo's stated contract,
-// enforced rather than asserted in prose.
-//
-// The demo serves no webhooks, so nothing defaults what it creates. That is
-// written down in the design doc and was not true of the docker backend: the
-// control plane port came from the admission webhook, the demo left it zero,
-// and the docker backend sets only the host. The resulting endpoint fails
-// APIEndpoint.IsValid, and the control plane provider returns early on every
-// reconcile without ever creating a Machine - while the DevCluster reports
-// itself provisioned, so nothing else looks wrong.
-func TestDevClusterIsFullySpecifiedForEveryBackend(t *testing.T) {
-	for _, backend := range []Backend{BackendInMemory, BackendDocker} {
-		t.Run(string(backend), func(t *testing.T) {
-			devCluster := NewDevCluster(ClusterName(0), backend)
-
-			switch backend {
-			case BackendDocker:
-				// The docker backend fills in the host from the load balancer
-				// it creates and takes the port as given, so the port has to
-				// be here or the endpoint is never valid.
-				if devCluster.Spec.ControlPlaneEndpoint.Port == 0 {
-					t.Error("a docker-backed DevCluster has no control plane port, so its endpoint can never become valid and no control plane machine is ever created")
-				}
-			case BackendInMemory:
-				// The in-memory backend assigns the port of the listener it
-				// starts, so setting one here would be overwritten and would
-				// suggest the demo had a say in it.
-				if devCluster.Spec.ControlPlaneEndpoint.Port != 0 {
-					t.Errorf("an in-memory DevCluster specifies port %d, but the backend assigns the listener's own port",
-						devCluster.Spec.ControlPlaneEndpoint.Port)
-				}
-			}
-
-			if devCluster.Spec.Backend.Docker == nil && devCluster.Spec.Backend.InMemory == nil {
-				t.Error("neither backend is set, which the webhook would have defaulted")
-			}
-		})
+// key names an object the way a ClusterClass template reference does: by kind
+// and name. The kind is taken from the Go type, which is what the scheme
+// registers it under.
+func key(obj client.Object) string {
+	t := reflect.TypeOf(obj)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
+	return fmt.Sprintf("%s/%s", t.Name(), obj.GetName())
+}
+
+// renderName renders a ClusterClass naming template the way the topology
+// controller does, with the arguments it supplies. Only the two this demo's
+// templates use are bound: a template naming `.random` would render empty here
+// and is exactly what these tests exist to keep out, because a random name is
+// one nothing else in this project can look up.
+func renderName(tmpl, cluster, topologyName string) string {
+	t, err := template.New("name").Option("missingkey=error").Parse(tmpl)
+	if err != nil {
+		return fmt.Sprintf("<unparseable: %v>", err)
+	}
+	var out strings.Builder
+	if err := t.Execute(&out, map[string]any{
+		"cluster":           map[string]any{"name": cluster},
+		"machineDeployment": map[string]any{"topologyName": topologyName},
+	}); err != nil {
+		return fmt.Sprintf("<unrenderable: %v>", err)
+	}
+	return out.String()
 }

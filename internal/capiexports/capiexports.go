@@ -130,10 +130,6 @@ var (
 	// own is read plus the whole write path: create, take ownership of,
 	// update the status of, and delete.
 	own = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
-	// core's Secret marker, which grants everything except delete: it writes
-	// kubeconfigs and reads them back, and the objects it writes are deleted
-	// with their owners rather than by it.
-	writeNoDelete = []string{"get", "list", "watch", "create", "update", "patch"}
 	// the dev provider's Secret marker: it reads kubeconfigs and patches them,
 	// and creates none.
 	readPatch = []string{"get", "list", "watch", "patch"}
@@ -150,6 +146,7 @@ var (
 	configMaps = Resource{Resource: "configmaps"}
 
 	clusters           = Resource{Group: "cluster.x-k8s.io", Resource: "clusters"}
+	clusterClasses     = Resource{Group: "cluster.x-k8s.io", Resource: "clusterclasses"}
 	machines           = Resource{Group: "cluster.x-k8s.io", Resource: "machines"}
 	machineSets        = Resource{Group: "cluster.x-k8s.io", Resource: "machinesets"}
 	machineDeployments = Resource{Group: "cluster.x-k8s.io", Resource: "machinedeployments"}
@@ -161,6 +158,7 @@ var (
 	kubeadmControlPlaneTemplates = Resource{Group: "controlplane.cluster.x-k8s.io", Resource: "kubeadmcontrolplanetemplates"}
 
 	devClusters         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devclusters"}
+	devClusterTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devclustertemplates"}
 	devMachines         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachines"}
 	devMachineTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachinetemplates"}
 )
@@ -185,15 +183,38 @@ func Core() Provider {
 		Module: kcpfixtures.ModuleClusterAPI,
 		CRDs: []string{
 			"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
+			// The ClusterClass a Cluster's topology names. It is the core
+			// provider's own type and its own controller reconciles it, so it
+			// is published here rather than claimed.
+			"core/config/crd/bases/cluster.x-k8s.io_clusterclasses.yaml",
 			"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
 			"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
 			"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
 			"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
+			// Published, not reconciled, and not enabled: the MachinePool
+			// feature gate stays off and nothing here acts on a MachinePool.
+			// The topology reconciler reads the type on every reconcile of a
+			// managed topology whatever the gate says, so a workspace that
+			// cannot serve it gets "no matches for kind MachinePool" and its
+			// Cluster never leaves Pending - which is a message about a feature
+			// nobody asked for, on a cluster that does not use it.
+			"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
 		},
-		// Secrets without delete, and ConfigMaps read-only: core's markers
-		// grant `get;list;watch;create;patch;update` on Secrets and say
-		// nothing at all about ConfigMaps.
-		CoreClaims: []Resource{to(secrets, writeNoDelete), to(configMaps, read)},
+		// Secrets in full, and ConfigMaps read-only.
+		//
+		// The delete on Secrets is the topology reconciler's, whose marker is
+		// `secrets, get;create;delete` where the rest of core's is
+		// `get;list;watch;create;patch;update`. It creates a *cluster shim*
+		// Secret to own the objects it stamps from a class before the Cluster
+		// they belong to can own them, and deletes it once the real owner
+		// exists. Without the delete every ClusterClass based cluster comes up
+		// completely and then reports TopologyReconciled=False forever with
+		// `secrets "<cluster>-shim" is forbidden`, which is a permission
+		// failure wearing the costume of a reconcile bug.
+		//
+		// Core's markers say nothing at all about ConfigMaps; read is what the
+		// controllers that reach for one need.
+		CoreClaims: []Resource{to(secrets, own), to(configMaps, read)},
 		ProviderClaims: map[string][]Resource{
 			// Everything, on all three groups. Core's marker is
 			// `resources=*, verbs=get;list;watch;create;update;patch;delete`
@@ -201,9 +222,21 @@ func Core() Provider {
 			// it: the Cluster reconciler deletes the control plane and the
 			// infrastructure cluster, and the Machine reconciler deletes the
 			// bootstrap config and the infrastructure machine.
+			//
+			// The topology controller widens what "resolve" means without
+			// widening the claim: for a ClusterClass based cluster it does not
+			// only dereference these types, it *creates* them from the
+			// templates the class names — the infrastructure cluster, the
+			// control plane, and a MachineDeployment's bootstrap and
+			// infrastructure templates. Every template a class can name is
+			// therefore claimed alongside the object stamped from it, and the
+			// verbs are already the ones that allows.
 			BootstrapExport:    {to(kubeadmConfigs, own), to(kubeadmConfigTemplates, own)},
 			ControlPlaneExport: {to(kubeadmControlPlanes, own), to(kubeadmControlPlaneTemplates, own)},
-			InfraExport:        {to(devClusters, own), to(devMachines, own), to(devMachineTemplates, own)},
+			InfraExport: {
+				to(devClusters, own), to(devClusterTemplates, own),
+				to(devMachines, own), to(devMachineTemplates, own),
+			},
 		},
 	}
 }
@@ -291,8 +324,12 @@ func Infrastructure() Provider {
 		CRDs: []string{
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
-			// The template is published because the control plane provider's
-			// machineTemplate refers to one; nothing reconciles it.
+			// The templates are published because something else refers to
+			// them and nothing reconciles them: the control plane provider's
+			// machineTemplate names a DevMachineTemplate, and a ClusterClass
+			// names a DevClusterTemplate for the infrastructure cluster and a
+			// DevMachineTemplate per machine deployment class.
+			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclustertemplates.yaml",
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
 		},
 		// Read and patch, no create: its markers are

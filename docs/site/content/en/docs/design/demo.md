@@ -151,6 +151,34 @@ authentication. There is no identity provider, no accounts and no login; a
 deployment's users arrive through OIDC or a workspace authentication
 configuration, and nothing about that is exercised here.
 
+## Why the clusters are ClusterClass based
+
+A demo cluster is a `Cluster` that names a `ClusterClass`. Everything under it
+— the `DevCluster`, the `KubeadmControlPlane`, the worker `MachineDeployment`
+and the per-cluster templates each is stamped from — is created by the topology
+controller from a class the demo puts in each workspace.
+
+It used to be six objects written out by hand, and the change is not
+cosmetic. A workspace is a tenant, and what a tenant of a fleet is given is a
+class: eight lines to get a cluster, and one place where a version bump or a
+fix is made for every cluster built from it. Demonstrating the six-object form
+would be demonstrating the thing a class exists to replace.
+
+It is also the harder case to serve, which is the better reason to demonstrate
+it. A managed topology adds four reconcilers to the core provider, a
+server-side apply of every object under the `Cluster` on every reconcile, and a
+cross-object read — `Cluster` to `ClusterClass` to five templates — that has to
+resolve inside one workspace and never across two. That last clause is what
+this project is about, and the demo now exercises it.
+
+**The names are pinned, and that is for the reader.** A class names what it
+creates `{{ .cluster.name }}-{{ .random }}` by default. The demo's class sets
+naming templates that produce exactly what it used to create by hand:
+`demo-00`, `demo-00-cp`, `demo-00-md`. Nothing in the wiring depends on it — a
+class that omits them works as well, and is what a real tenant would write —
+but a walkthrough cannot print a name with five random characters in it, and
+the status table would have to look objects up by owner rather than by name.
+
 ## Why it waits for ready rather than provisioned
 
 It did wait for provisioned, back when a `Machine` reaching Ready needed a
@@ -185,6 +213,47 @@ consequences follow, and both are visible in the code: every object it creates
 is fully specified, because nothing defaults it, and every published type is
 trimmed to its storage version, because a multi-version type needs a conversion
 strategy and a conversion strategy needs a webhook server.
+
+## Two things about a managed topology that had to be learned
+
+Both presented as something other than what they were, and both are recorded
+because the next person to widen this project's export set will meet them
+again.
+
+**A published type is not the same as an enabled feature.** The topology
+reconciler reads the cluster's `MachinePool`s on every reconcile of a managed
+topology, whatever the `MachinePool` feature gate says — the gate guards the
+watch and the reconcilers, not that read. A workspace that does not serve the
+type gets
+
+```
+error reading current state of the Cluster topology: failed to read MachinePools
+for managed topology: no matches for kind "MachinePool" in version
+"cluster.x-k8s.io/v1beta2"
+```
+
+and its `Cluster` never leaves `Pending` — a message about a feature nobody
+asked for, on a cluster that does not use it. So `machinepools` is published,
+alongside the `MachineHealthCheck` and `MachineSet` that are published for the
+same kind of reason, and the gate stays off because nothing here reconciles
+one.
+
+**The last thing a managed topology does needs a permission the rest of core
+does not.** The topology reconciler creates a *cluster shim* `Secret` to own
+the objects it stamps from a class before the `Cluster` can own them, and
+deletes it once the real owner exists. Core's other Secret markers grant
+everything except delete, so with a claim built from those the cluster comes up
+**completely** — control plane available, both machines Running, workers
+available — and then reports
+
+```
+TopologyReconciled=False: failed to delete the cluster shim object:
+secrets "demo-00-shim" is forbidden
+```
+
+forever. A permission failure wearing the costume of a reconcile bug, and only
+visible at the very end of an otherwise perfect run. Core's Secret claim now
+includes delete, and cites the marker it comes from.
 
 ## Two things about the environment that had to be learned
 

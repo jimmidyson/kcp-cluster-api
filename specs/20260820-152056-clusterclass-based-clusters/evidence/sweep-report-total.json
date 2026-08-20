@@ -1,0 +1,83 @@
+{
+  "deployments": [
+    {
+      "name": "core-manager",
+      "title": "Active workspace sweep (the core provider's deployment)",
+      "measured": "2026-08-20T17:09:58.869796231Z",
+      "source": "sweep-report-core.json",
+      "workspaces": 20,
+      "fixedWatchStreams": 8,
+      "goroutinesPerWorkspace": 2,
+      "watchStreamsPerWorkspace": 0,
+      "discoveryRequestsPerWorkspace": 3,
+      "requestsPerWorkspace": 7,
+      "heapBytesPerWorkspace": 525181.7744360903,
+      "retainedGoroutinesPerDepartedWorkspace": 0,
+      "retainedMeasured": true
+    },
+    {
+      "name": "dev-infrastructure-manager",
+      "title": "Active workspace sweep (the dev infrastructure provider's deployment)",
+      "measured": "2026-08-20T17:16:57.769790543Z",
+      "source": "sweep-report-dev.json",
+      "workspaces": 20,
+      "fixedWatchStreams": 6,
+      "goroutinesPerWorkspace": 2,
+      "watchStreamsPerWorkspace": 0,
+      "discoveryRequestsPerWorkspace": 3,
+      "requestsPerWorkspace": 8,
+      "heapBytesPerWorkspace": 1019119.2,
+      "retainedGoroutinesPerDepartedWorkspace": 0,
+      "retainedMeasured": true
+    },
+    {
+      "name": "kubeadm-bootstrap-manager",
+      "title": "Active workspace sweep (the kubeadm bootstrap provider's deployment)",
+      "measured": "2026-08-20T16:53:29.98180966Z",
+      "source": "sweep-report-bootstrap.json",
+      "workspaces": 20,
+      "fixedWatchStreams": 7,
+      "goroutinesPerWorkspace": 2,
+      "watchStreamsPerWorkspace": 0,
+      "discoveryRequestsPerWorkspace": 4,
+      "requestsPerWorkspace": 16,
+      "heapBytesPerWorkspace": 1155611.3323308271,
+      "retainedGoroutinesPerDepartedWorkspace": 0,
+      "retainedMeasured": true
+    },
+    {
+      "name": "kubeadm-control-plane-manager",
+      "title": "Active workspace sweep (the kubeadm control plane provider's deployment)",
+      "measured": "2026-08-20T17:02:42.549802156Z",
+      "source": "sweep-report-controlplane.json",
+      "workspaces": 20,
+      "fixedWatchStreams": 7,
+      "goroutinesPerWorkspace": 1.9917293233082707,
+      "watchStreamsPerWorkspace": 0,
+      "discoveryRequestsPerWorkspace": 7,
+      "requestsPerWorkspace": 72.01729323308271,
+      "heapBytesPerWorkspace": 1034594.8511278195,
+      "retainedGoroutinesPerDepartedWorkspace": -0.06666666666666667,
+      "retainedMeasured": true
+    }
+  ],
+  "total": {
+    "name": "TOTAL",
+    "title": "",
+    "measured": "0001-01-01T00:00:00Z",
+    "source": "",
+    "workspaces": 0,
+    "fixedWatchStreams": 28,
+    "goroutinesPerWorkspace": 7.99172932330827,
+    "watchStreamsPerWorkspace": 0,
+    "discoveryRequestsPerWorkspace": 17,
+    "requestsPerWorkspace": 103.01729323308271,
+    "heapBytesPerWorkspace": 3734507.157894737,
+    "retainedGoroutinesPerDepartedWorkspace": -0.06666666666666667,
+    "retainedMeasured": true
+  },
+  "conditions": {
+    "goMaxProcs": "4",
+    "goVersion": "go1.26.3"
+  }
+}

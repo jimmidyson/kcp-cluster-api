@@ -33,14 +33,22 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/clustercache"
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/cluster-api/core/reconcilers/cluster"
+	"sigs.k8s.io/cluster-api/core/reconcilers/clusterclass"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machine"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machinedeployment"
 	"sigs.k8s.io/cluster-api/core/reconcilers/machineset"
+	topologycluster "sigs.k8s.io/cluster-api/core/reconcilers/topology/cluster"
+	topologymachinedeployment "sigs.k8s.io/cluster-api/core/reconcilers/topology/machinedeployment"
+	topologymachineset "sigs.k8s.io/cluster-api/core/reconcilers/topology/machineset"
+	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
+	"sigs.k8s.io/cluster-api/util/index"
 	capimulticluster "sigs.k8s.io/cluster-api/util/multicluster"
 )
 
@@ -369,9 +377,14 @@ func SetupFleetControllers(ctx context.Context, mgr mcmanager.Manager, registry 
 //
 // MachineSet and MachineDeployment are what make a worker pool possible: a
 // MachineDeployment owns MachineSets, which own Machines, and without them a
-// cluster can have only the Machines somebody wrote by hand. They are still
-// short of upstream's full core set - ClusterClass, topology, MachineHealthCheck
-// and the rest are not wired.
+// cluster can have only the Machines somebody wrote by hand.
+//
+// With the ClusterTopology gate on - which is this project's default, because a
+// cluster here is a ClusterClass based cluster - the four topology reconcilers
+// are wired too, and they are what turns a Cluster naming a class into the
+// objects the reconcilers above act on. See SetupTopologyControllers.
+//
+// MachineHealthCheck and the rest of upstream's core set are still not wired.
 //
 // The infrastructure provider's reconcilers are no longer wired here: they are
 // a provider of their own, with their own APIExport and their own deployment,
@@ -424,10 +437,104 @@ func SetupCoreControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fle
 		return fmt.Errorf("creating fleet-wide MachineDeployment controller: %w", err)
 	}
 
+	if feature.Gates.Enabled(feature.ClusterTopology) {
+		if err := SetupTopologyControllers(ctx, mgr, fleet); err != nil {
+			return err
+		}
+	}
+
 	if dev == nil {
 		return nil
 	}
 	return SetupDevInfrastructureControllers(ctx, mgr, fleet, dev)
+}
+
+// FleetCacheIndexes are the field indexes this process's fleet-wide controllers
+// list through, to be registered on every shard's cache before its watches are.
+//
+// Upstream registers the equivalent set against a manager
+// (index.AddDefaultIndexes), which works because there the manager's cache is
+// the cache the reconcilers read through. Here it is not: reads go through the
+// provider's kcp-aware caches, one per shard, built after every controller has
+// been declared. So the indexes are declared as data and replayed onto each
+// cache as it appears, exactly as the watches are.
+//
+// Only the ones a wired controller actually lists through are here. Upstream's
+// Machine-by-node and Machine-by-providerID indexes are not: nothing this
+// process wires selects on them, and an index costs memory on every object of
+// its type in the shard.
+func FleetCacheIndexes() []providerwiring.CacheIndex {
+	if !feature.Gates.Enabled(feature.ClusterTopology) {
+		return nil
+	}
+	return []providerwiring.CacheIndex{{
+		// What the topology reconciler maps a ClusterClass event through to
+		// find the Clusters using it.
+		Object:  &clusterv1.Cluster{},
+		Field:   index.ClusterClassRefPath,
+		Extract: index.ClusterByClusterClassRef,
+	}}
+}
+
+// SetupTopologyControllers wires the four reconcilers that make a Cluster
+// naming a ClusterClass into a cluster: the ClusterClass reconciler, the
+// topology reconciler that computes and applies a cluster's desired state, and
+// the two that clean up the templates a topology-owned MachineDeployment or
+// MachineSet was stamped from.
+//
+// It is called by SetupCoreControllers when the ClusterTopology gate is on, and
+// is separate only so that a caller wiring the core provider by hand can see
+// what the gate turns on.
+//
+// # What the caller has to have done
+//
+// Registered the Cluster-by-class index on the caches this fleet's controllers
+// read through. The topology reconciler maps a ClusterClass event to the
+// Clusters using it by listing with a field selector, and a controller-runtime
+// cache fails a List on a selector it has no index for rather than falling back
+// to a scan - so without it a ClusterClass change reaches no Cluster and the
+// failure is a log line on an event nobody is watching. FleetCacheIndexes is
+// the declaration; providerwiring.WithCacheIndexes is where it goes.
+func SetupTopologyControllers(ctx context.Context, mgr mcmanager.Manager, fleet *Fleet) error {
+	if fleet == nil {
+		return errors.New("a fleet is required")
+	}
+
+	// No RuntimeClient on either of the two that can take one: runtime
+	// extensions are the RuntimeSDK gate's business, that gate is off, and both
+	// reconcilers refuse a nil client only when it is on.
+	if err := (&clusterclass.Reconciler{
+		Client: fleet.Client,
+	}).SetupWithMulticlusterManager(ctx, mgr, fleet.Options, fleet.BuilderOptions()...); err != nil {
+		return fmt.Errorf("creating fleet-wide ClusterClass controller: %w", err)
+	}
+
+	if err := (&topologycluster.Reconciler{
+		Client:       fleet.Client,
+		APIReader:    fleet.APIReader,
+		ClusterCache: fleet.ClusterCache,
+	}).SetupWithMulticlusterManager(ctx, mgr, fleet.Options, fleet.ClusterSource, fleet.BuilderOptions()...); err != nil {
+		return fmt.Errorf("creating fleet-wide topology Cluster controller: %w", err)
+	}
+
+	// Neither of these two takes a cluster source: they watch nothing on the
+	// workload clusters, only the objects a topology owns in the management
+	// one.
+	if err := (&topologymachinedeployment.Reconciler{
+		Client:    fleet.Client,
+		APIReader: fleet.APIReader,
+	}).SetupWithMulticlusterManager(ctx, mgr, fleet.Options, fleet.BuilderOptions()...); err != nil {
+		return fmt.Errorf("creating fleet-wide topology MachineDeployment controller: %w", err)
+	}
+
+	if err := (&topologymachineset.Reconciler{
+		Client:    fleet.Client,
+		APIReader: fleet.APIReader,
+	}).SetupWithMulticlusterManager(ctx, mgr, fleet.Options, fleet.BuilderOptions()...); err != nil {
+		return fmt.Errorf("creating fleet-wide topology MachineSet controller: %w", err)
+	}
+
+	return nil
 }
 
 // SetupDevInfrastructureControllers wires the docker/dev infrastructure

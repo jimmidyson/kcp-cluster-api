@@ -16,6 +16,44 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **A cluster is a ClusterClass based cluster.** The core deployment wires the
+  four topology reconcilers — `clusterclass`, `topology/cluster`,
+  `topology/machinedeployment`, `topology/machineset` — as fleet-wide
+  controllers, and the `ClusterTopology` gate is on by default here where
+  upstream defaults it off. The demo, `test/integration/demo`, the fleet sweep
+  shape and the user documentation all build a `Cluster` that names a
+  `ClusterClass` and let the topology controller create everything under it.
+  Four new patches in the fork, pinned at `v1.15.0-kcp.12` and recorded in
+  [`DRIFT.md`](../DRIFT.md); spec in
+  [`specs/20260820-152056-clusterclass-based-clusters`](../specs/20260820-152056-clusterclass-based-clusters/spec.md).
+
+  Three things had to be true for it that are worth carrying forward. A
+  fleet-wide watch on a kind the server does not serve **hangs** the
+  controller's startup, so every type a wired reconciler watches has to be
+  published — `clusterclasses` and `devclustertemplates` join the exports for
+  that reason. A feature gate guards watches and reconcilers but not reads:
+  the topology reconciler lists `MachinePool`s on every reconcile whatever the
+  gate says, so `machinepools` is published and the gate stays off. And the
+  topology reconciler needs `delete` on `Secret`s for the cluster shim it owns
+  its work through — without it a cluster comes up completely and then reports
+  `TopologyReconciled=False` forever.
+
+  **Measured, not predicted.** Wiring the four topology controllers moved one
+  number in the per-deployment table: the core deployment holds eight watch
+  streams on the shard where it held six, for `ClusterClass` and `MachinePool`.
+  Every per-workspace column is unchanged — 2 goroutines, 3 discovery requests,
+  7 reconcile requests, nothing retained on departure. What did move is the
+  shape with clusters in it: a workspace holding a ClusterClass based cluster
+  costs 57 goroutines and ~484 reconcile requests, against 45 and ~236
+  previously reported for a hand-built one under the previous wiring — a
+  before-and-after of one change rather than an experiment isolating the
+  topology, and the evidence says so. The run is under the feature's
+  [`evidence/`](../specs/20260820-152056-clusterclass-based-clusters/evidence/README.md).
+
+  What is deliberately not done: class variables and patches, which need G4
+  because variable defaulting is a webhook's job; runtime extensions, which
+  stay behind `RuntimeSDK`; and upgrade-through-the-class, which is its own
+  feature with its own measurements.
 - **The fork model has a decided shape for more than one provider, and none of
   it is built yet.**
   [ADR-0004](adr-0004-scaling-to-many-provider-forks.md) settles that the
@@ -49,7 +87,7 @@ having to reconstruct the answer from the commit log.
   deployment costs **2 goroutines per active workspace**, flat to twenty, with
   no watch streams or LISTs added by a workspace and everything returned when
   one departs; an installation of all four pays 8, plus 17 discovery requests
-  and 26 watch streams held on the shard. What is *not* uniform is reconciling:
+  and 28 watch streams held on the shard. What is *not* uniform is reconciling:
   the control plane provider costs 72 requests per workspace against core's 7,
   which a single fleet-wide figure hid. `cmd/sweeptotals` does the addition and
   refuses to print a total when a deployment's report is missing. See

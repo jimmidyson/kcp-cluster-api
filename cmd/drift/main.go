@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/drift"
@@ -92,8 +93,29 @@ func pinnedForkVersion() (string, error) {
 	if v == "" {
 		return "", fmt.Errorf("the module graph reports no version for sigs.k8s.io/cluster-api")
 	}
+	if pseudoVersion.MatchString(v) {
+		// A pseudo-version names a commit, and it names it by a twelve
+		// character prefix — which git will not fetch by, so there is nothing
+		// this check can resolve. Say that, rather than letting it surface as
+		// "couldn't find remote ref" against a string that looks like a tag.
+		//
+		// This is a real state rather than a hypothetical one: a change that
+		// needs a fork patch is pinned to a branch until somebody cuts the
+		// signed tag, and the check has to be runnable in the meantime.
+		return "", fmt.Errorf("the pinned fork version %s is a pseudo-version, not a ref: "+
+			"pass -ref with the branch carrying the patches, and see DRIFT.md for the tag that has to be cut", v)
+	}
 	return v, nil
 }
+
+// pseudoVersion matches the form the go command synthesises for a module
+// resolved at a commit rather than at a tag: a base version, a UTC timestamp
+// and an abbreviated commit.
+//
+// The timestamp is separated by a dot rather than a hyphen when the base
+// version already has a pre-release part, which every version this project
+// pins does — `v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2`.
+var pseudoVersion = regexp.MustCompile(`[-.][0-9]{14}-[0-9a-f]{12}$`)
 
 // divergingPaths returns the files that differ between the upstream base
 // commit and the fork ref, using a temporary bare repository so the check

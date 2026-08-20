@@ -112,6 +112,10 @@ func initFlags(fs *pflag.FlagSet) {
 		"Worker goroutines for the KubeadmControlPlane controller. One pool for the process, shared by every "+
 			"workspace it serves.")
 
+	// This project's defaults, set before the flag is defined so that
+	// --feature-gates overrides them rather than the other way round. See
+	// coremanager.SetFeatureGateDefaults for what differs from upstream.
+	coremanager.MustSetFeatureGateDefaults()
 	feature.MutableGates.AddFlag(fs)
 }
 

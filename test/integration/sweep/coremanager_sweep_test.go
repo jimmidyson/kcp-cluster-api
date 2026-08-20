@@ -47,7 +47,6 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
@@ -62,14 +61,26 @@ import (
 var (
 	coreReconcilerCoreCRDs = []string{
 		"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
+		// The ClusterClass controller is wired whenever ClusterTopology is on,
+		// which is this project's default, and it watches this type. Publishing
+		// it is not optional for the same reason the rest of this list is not:
+		// an unserved watched type hangs the controller rather than skipping it.
+		"core/config/crd/bases/cluster.x-k8s.io_clusterclasses.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
+		// Read by the topology reconciler on every reconcile of a managed
+		// topology, whatever the MachinePool gate says. Published, not enabled.
+		"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
 	}
 	coreReconcilerDevCRDs = []string{
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
+		// Both templates, because a ClusterClass names one of each: nothing
+		// watches or reconciles them, and the topology controller reads them to
+		// stamp the DevCluster and each Machine's DevMachine.
+		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclustertemplates.yaml",
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
 	}
 	coreReconcilerBootstrapCRDs = []string{
@@ -82,20 +93,32 @@ var (
 	}
 )
 
-// What one workspace's worth of the core deployment watches, measured from a
-// run's own stream inventory and handler accounting rather than counted off
-// the source by eye.
+// What the core deployment watches, and how many handlers it registers to do
+// it. Declared rather than inferred, so a shape whose wiring changed
+// underneath the number fails rather than reporting the new shape under the
+// old label.
 //
-// The two numbers differ, and the difference is the point. Four published
-// types are watched — Cluster, Machine, MachineSet and MachineDeployment;
-// MachineHealthCheck is published because it must be bound for the controllers
-// to start, but nothing here watches it. More handlers than types are
-// registered against those informers, because five controllers each register
-// their own and several watch the same type. It is the registrations, not the
-// types, that decide what a departing workspace fails to give back.
+// The two are derived differently, and each says which:
+//
+//   - The types are **measured**: they are the `cluster.x-k8s.io` rows of a
+//     run's own stream inventory, printed at the bottom of
+//     `bin/sweep-report-core.md`. Six of the seven published types are watched
+//     — Cluster, ClusterClass, Machine, MachineSet, MachineDeployment and
+//     MachinePool. MachineHealthCheck is the seventh: published because it must
+//     be bound for the controllers to start, and watched by nobody here.
+//   - The handlers are **derived**, by the AST census `task scale:census`
+//     parses out of the wired setup functions. It counts what they declare,
+//     including two registrations behind feature gates this project turns off
+//     — the core Cluster reconciler's MachinePool watch, and the ClusterClass
+//     reconciler's ExtensionConfig watch.
+//
+// The two numbers differ, and the difference is the point: more handlers than
+// types are registered against those informers, because nine controllers each
+// register their own and several watch the same type. It is the registrations,
+// not the types, that decide what a departing workspace fails to give back.
 const (
-	coreReconcilerWatchedTypes  = 4
-	coreReconcilerEventHandlers = 12
+	coreReconcilerWatchedTypes  = 6
+	coreReconcilerEventHandlers = 28
 )
 
 // TestCoreDeploymentWorkspaceSweep measures what one deployment pays per
@@ -165,7 +188,7 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 		watchedTypes:  coreReconcilerWatchedTypes,
 		eventHandlers: coreReconcilerEventHandlers,
 		facts: map[string]string{
-			"shape":           "coremanager.SetupCoreControllers: ClusterCache, Cluster, Machine, MachineSet, MachineDeployment — one controller each for the whole shard",
+			"shape":           "coremanager.SetupCoreControllers: ClusterCache, Cluster, Machine, MachineSet, MachineDeployment, ClusterClass and the three topology controllers — one controller each for the whole shard",
 			"deploymentName":  "core-manager",
 			"deployment":      "core-manager, one of four provider deployments",
 			"reconciledTypes": "cluster.x-k8s.io/clusters",
@@ -183,6 +206,10 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 		},
 		crdTransform: keepStorageVersion,
 
+		// The index the topology controllers list through, on the cache they
+		// read through. See coremanager.FleetCacheIndexes.
+		cacheIndexes: coremanager.FleetCacheIndexes,
+
 		// Nothing is wired per workspace any more, so this contributes no
 		// reconcilers. The seam stays registered because engagement is what the
 		// sweep waits on before measuring a point, and because a deployment
@@ -194,12 +221,6 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
-
-			// MachinePool defaults to enabled upstream, and the core
-			// reconcilers watch it as an event source when it is on — which
-			// would stall their cache sync here, because this sweep publishes
-			// the ADR-0001 D3 scope and MachinePool is not in it.
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 
 			// Process-global, installed once: the contract-metadata and
 			// conversion resolvers the core reconcilers need to resolve
