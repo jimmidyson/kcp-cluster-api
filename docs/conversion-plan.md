@@ -23,11 +23,19 @@ having to reconstruct the answer from the commit log.
   boundary becomes three layers: shared multicluster plumbing as its own
   module, one thin patch-carrier fork per upstream repository, and per-provider
   integration as modules in this repository rather than separate repositories.
-  Per Principle VIII nothing is built for a set of one: the trigger for the
-  shared module is the first provider fork outside `sigs.k8s.io/cluster-api`,
-  and the trigger for the module boundary here is the second provider
-  integration. What the ADR changes today is the fork's admission rule — a new
-  file justifies itself against the shared layer before being carried — and two
+  Per Principle VIII nothing is built for a set of one, so the triggers are
+  named instead, and the second provider is named with them: **CAPX**
+  (`cluster-api-provider-nutanix`). Reading CAPX before porting it already
+  changed the ADR — its reconcilers are public, so a fork can be cut from a
+  release tag rather than a `main` commit; it is one Go module, so the
+  three-tag rule turns out to be a Cluster API fact rather than a general one;
+  and it carries two name-collision faults of the class the dev provider
+  needed patching for, which a CAPX fork under this project's ownership
+  (`jimmidyson/cluster-api-provider-nutanix`) will carry — a provider is
+  pinned at a fork this project controls, never at an upstream repository.
+
+  What the ADR changes today is the fork's admission rule — a new file
+  justifies itself against the shared layer before being carried — and two
   corrections: the design site and `go.mod` described a single-patch fork that
   ADR-0003 replaced, and the `replace` directives are now recorded as
   non-propagating.

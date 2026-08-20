@@ -3,9 +3,17 @@
 Status: **proposed**, 2026-08-20
 
 This project supports one infrastructure provider today, and that provider is
-upstream's *test* one. Supporting a real one — CAPA, CAPZ, CAPV — means a
-second patched fork, and then a third. This ADR asks whether the two-repository
-split survives that, and decides the shape it has to take.
+upstream's *test* one. Supporting a real one means a second patched fork, and
+then a third. This ADR asks whether the two-repository split survives that, and
+decides the shape it has to take.
+
+The second provider is **CAPX**,
+[`cluster-api-provider-nutanix`](https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix).
+Naming it turns the triggers below from anticipation into a scheduled piece of
+work, and it has already paid for itself: reading CAPX rather than reasoning
+about a hypothetical provider found two cross-tenant faults and three
+structural facts that change this ADR's own conclusions. Those are in
+[What CAPX establishes](#what-capx-establishes).
 
 It does not decide when to build any of it. That distinction is the point of
 the last two sections.
@@ -79,12 +87,13 @@ and name lets two workspaces collide on one container or one listener. The
 other two are a free-port fix in the in-memory server, which is the ordinary
 kind of bug a fork accumulates rather than anything about kcp.
 
-**Prediction, not measurement:** a cloud provider costs at least as much. The
+**Prediction, not measurement:** a real provider costs at least as much. The
 patch class that dominates here — *the backend names its real-world resources
 by namespace and name, and under kcp that is not unique* — applies to anything
-tagging cloud resources, and a cloud provider has more such surfaces than
-docker does, not fewer. No forked cloud provider exists, so nothing here is a
-measurement of one, and this figure is re-derived when one does.
+naming or tagging infrastructure. Reading CAPX confirms the class is present
+there in two places (below), which raises this from a guess to a grounded
+prediction; it remains a prediction, because no forked provider exists and the
+path count is only known once one does.
 
 ## Question 1: neither merge is available
 
@@ -153,6 +162,100 @@ CAPA fork to have.
 boundary: it imports `cluster-api/feature`, `cluster-api/util/cache` and
 `cluster-api/util/predicates`, and belongs where it is.
 
+## What CAPX establishes
+
+Read at `main` (`0b2405d`), before any port. These are code-reading findings:
+anyone can check the cited lines. What they mean *under kcp* is a prediction
+until a port exists.
+
+### Two collisions of the class the dev provider already needed patching for
+
+**VM identity is the Machine name, and the lookup is global.**
+`vmName := rctx.Machine.Name` (`controllers/nutanixmachine_controller.go:325`)
+— no namespace, no cluster, no workspace. `FindVMByName`
+(`controllers/helpers.go:237`) resolves it by listing Prism Central with
+`name eq '<vmName>'`, which spans the entire Prism Central, and **errors when
+more than one matches**:
+
+```go
+if len(vms) > 1 {
+    return nil, fmt.Errorf("error: found more than one (%v) vms with name %s", len(vms), vmName)
+}
+```
+
+That is the path taken whenever the VM UUID is not yet recorded — the create
+path. So two workspaces whose Machines share a name give each other a
+reconcile error rather than a silent cross-mount. Louder than the dev
+provider's collision, and still one tenant breaking another's reconcile.
+
+**Category identity is the cluster name alone.**
+`GetDefaultCAPICategoryIdentifiers(clusterName)` (`controllers/helpers.go:765`)
+builds the single identifier `KubernetesClusterName: <clusterName>`. Two
+workspaces each holding a cluster called `demo` address one Nutanix category —
+the mechanism by which CAPX marks what it owns.
+
+Teardown is where that matters. `deleteCategoryKeyValues`
+(`controllers/helpers.go:811`) deletes the category on cluster deletion, and
+what stops it destroying the other tenant's marker is Prism refusing to delete
+a category that still has VMs attached. The provider does not recognise that
+refusal — it swallows every delete error and returns `nil`, with an explicit
+`TODO` to match the specific error:
+
+```go
+// NCN-101935: If the category value still has VMs assigned, do not delete the category key:value
+// TODO:deepakmntnx Add a check for specific error mentioned in NCN-101935
+return nil
+```
+
+Isolation here is a remote API's refusal, not a property of the provider.
+
+**Both are arguably CAPX bugs today, independent of kcp.** Cluster and Machine
+names are namespace-scoped in Cluster API, so two *namespaces* in one ordinary
+management cluster collide the same way. That is worth recording because it
+sets what kind of drift entry each becomes — the same distinction `DRIFT.md`
+already draws for two of the dev provider's patches, which it marks "bug fix,
+upstreamable".
+
+**They are carried in a fork regardless.** Fixes go to
+`jimmidyson/cluster-api-provider-nutanix`, cut per the L2 contract below, not
+to `nutanix-cloud-native/cluster-api-provider-nutanix`. This project does not
+plan its work around another repository's review queue, and ADR-0003 already
+took that decision for the Cluster API wiring. Whether to *also* propose these
+two upstream in CAPX is a separate call, deliberately not made here: being
+upstreamable changes what a `DRIFT.md` entry says about itself, not where the
+patch lives.
+
+### Three structural facts that change this ADR's own conclusions
+
+**CAPX is one Go module.** No `api/` or `test/` submodules. L2's "three
+immutable tags per release" is therefore a Cluster API fact, not a general
+one — CAPX needs one tag. The contract below is corrected to say so.
+
+**Its reconcilers are public.** `controllers/` exports `NutanixClusterReconciler`,
+`NutanixMachineReconciler` and their `SetupWithManager` methods. This is the
+opposite of the constraint that forced this project's Cluster API fork off a
+release tag and onto a `main` commit — the dev provider's reconcilers were
+under `internal/`. A CAPX fork can be cut from a release tag.
+
+**The version skew is real, and is the dependency-conflict argument made
+concrete.** CAPX `main` against this project:
+
+| | CAPX | kcp-cluster-api |
+|---|---|---|
+| `sigs.k8s.io/cluster-api` | v1.13.1 | v1.15 (forked) |
+| `sigs.k8s.io/controller-runtime` | v0.23.3 | v0.24.1 |
+| `k8s.io/api` | v0.35.5 | v0.36.3 |
+
+A minor behind on all three, plus ten Nutanix SDK module requirements. Note
+what this is and is not: Go's minimum version selection resolves such a graph
+without complaint, picking the higher version throughout. The conflict is a
+*compile* problem — CAPX would have to build against controller-runtime v0.24
+and Cluster API v1.15 — and it is CAPX's fork that must absorb it, not this
+repository's `go.mod`. That is precisely the argument for L3 being separate
+modules: one module per provider means one version negotiation per provider,
+each visible and each owned, instead of one graph in which the newest provider
+silently forces the others forward.
+
 ## The decision: three layers
 
 **L1 — shared multicluster plumbing.** A module of its own, depending on
@@ -161,10 +264,18 @@ files above, plus whichever parts of `internal/` prove to have a second caller.
 Every fork and every integration imports it. This is the layer that must not
 exist four times.
 
-**L2 — one thin patch-carrier fork per upstream repository.** Contract exactly
-as today: one branch per release line cut from the upstream commit built
-against, one commit per carried patch, three signed and annotated tags, and
-nothing else. The admission rule tightens: **a fork may carry in-place
+**L2 — one thin patch-carrier fork per upstream repository**, under this
+project's own ownership: `jimmidyson/cluster-api` today,
+`jimmidyson/cluster-api-provider-nutanix` for CAPX. A provider is consumed
+from a fork this project controls, never pinned at an upstream repository —
+the pin has to be a ref nobody else can move, and the patches have to land
+without waiting on another project's review. Contract as today, with one
+generalisation CAPX forces: one branch per release line cut
+from the upstream commit built against, one commit per carried patch, and
+**one signed and annotated tag per Go module in the repository** — three for
+Cluster API, one for CAPX — and nothing else. The existing rule says "three",
+which is a fact about Cluster API's `api/` and `test/` submodules rather than
+about forks. The admission rule tightens: **a fork may carry in-place
 modifications to upstream files, and seams that cannot be expressed from
 outside the module. Anything expressible as a new file belongs in L1.** That
 rule is what keeps `git diff upstream..kcp/vX.Y` meaningful when there are four
@@ -202,9 +313,14 @@ is the thing that principle exists to stop. So:
 
 | Layer | State | Trigger to build |
 |---|---|---|
-| L1 | not built | the first provider fork outside `sigs.k8s.io/cluster-api` needing any of the six files |
-| L2 | exists, one instance | the tightened admission rule applies from now; a second instance arrives with the first forked provider |
-| L3 | exists, one instance, not yet a module boundary | the second provider integration |
+| L1 | not built | the CAPX fork needing any of the six files |
+| L2 | exists, one instance | the tightened admission rule applies from now; the second instance is the CAPX fork |
+| L3 | exists, one instance, not yet a module boundary | the CAPX integration |
+
+Naming CAPX rather than "a second provider" is the difference between a
+deferral and a plan. It also makes each trigger falsifiable: if the CAPX port
+turns out to need none of the six L1 files, L1 is not built and this ADR was
+wrong about what is shared.
 
 Principle VIII also requires that deferral be recorded as a decision naming its
 trigger, "because silent omission and deliberate deferral look identical
@@ -238,8 +354,13 @@ graph. Generalising it means passing the module path alongside the record path
   themselves against L1 before being carried. This applies to the next patch,
   not retroactively — the six files stay where they are until L1's trigger
   fires.
-- Adding a provider becomes: fork it (L2), integrate it as a module here (L3),
-  and — from the second one — import shared plumbing rather than copy it (L1).
+- Adding a provider becomes: fork it into this project's ownership (L2),
+  integrate it as a module here (L3), and — from the second one — import
+  shared plumbing rather than copy it (L1).
+- The fork count tracks the provider count, and each fork is a repository this
+  project maintains: a branch per release line, tags, and a drift record. That
+  is the standing cost of the model, and it is the reason L2's admission rule
+  is tight.
 - The drift record becomes N records, one per fork. `cmd/drift` grows a module
   path parameter at that point.
 - This ADR does not revisit ADR-0003. Whether carrying the workspace-aware
@@ -255,18 +376,29 @@ graph. Generalising it means passing the module path alongside the record path
   group.
 - **A provider that needs no in-place modification.** Then it needs no fork,
   only an L3 module, and the fork count stops tracking the provider count.
-- **Cloud providers costing far less than 17 paths.** The prediction above is
-  the load-bearing input to "four forks is a thing worth designing for". If the
-  first real one costs three paths, this is over-built and L3 alone suffices.
+  CAPX is the test, and it starts out better placed than the dev provider: its
+  reconcilers are already public, so the wiring may be layerable from outside.
+  The two collisions above still force in-place changes, so a CAPX fork is
+  expected rather than hoped against; what is open is how many paths it
+  carries.
+- **Real providers costing far less than 17 paths.** The prediction above is
+  the load-bearing input to "four forks is a thing worth designing for". If
+  CAPX costs three paths, this is over-built and L3 alone suffices.
 
 ## What is not established
 
-- No forked cloud provider exists. Every statement here about CAPA, CAPZ or
-  CAPV is projection from the dev provider, labelled as such.
+- No forked provider exists. CAPX has been read, not ported, not built and not
+  run against kcp. The two collisions are shown in its source; that they behave
+  under kcp as described is a prediction.
+- The path count a CAPX fork costs is unknown. The 17 paths the dev provider
+  costs is the only figure of its kind, and a provider with public reconcilers
+  may need fewer.
+- Whether the two collisions are accepted upstream in CAPX is unknown, and
+  nothing has been filed. If they are, they never become drift.
 - The six L1 files are shown free of Cluster API *imports*. That they are free
   of Cluster API *assumptions* is likely but unverified; extraction is the
   test, and it has not been run.
 - Whether L3's modules can share a `Taskfile` and verification contract across
   differing dependency graphs is untested. It is the main risk in preferring a
-  multi-module repository to four repositories, and it is cheap to test at the
-  second provider and expensive to discover at the fourth.
+  multi-module repository to four repositories, and it is cheap to test at
+  CAPX and expensive to discover at the fourth provider.
