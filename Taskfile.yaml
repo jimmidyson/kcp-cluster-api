@@ -85,7 +85,7 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
 
   demo:
-    desc: Provision clusters across several kcp workspaces from one manager, and watch them come up
+    desc: Build a ready cluster in each of several kcp workspaces from one manager, and watch it happen
     deps: [tools]
     # Not part of `verify`: the demo is for a person to watch, and what it
     # demonstrates is asserted by ./test/integration/demo, which verify does
