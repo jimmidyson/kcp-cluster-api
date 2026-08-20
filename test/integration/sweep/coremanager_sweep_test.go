@@ -194,6 +194,10 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 		},
 		crdTransform: keepStorageVersion,
 
+		// The index the topology controllers list through, on the cache they
+		// read through. See coremanager.FleetCacheIndexes.
+		cacheIndexes: coremanager.FleetCacheIndexes,
+
 		// Nothing is wired per workspace any more, so this contributes no
 		// reconcilers. The seam stays registered because engagement is what the
 		// sweep waits on before measuring a point, and because a deployment

@@ -138,6 +138,10 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		},
 		crdTransform: keepStorageVersion,
 
+		// The index the topology controllers list through, on the cache they
+		// read through. See coremanager.FleetCacheIndexes.
+		cacheIndexes: coremanager.FleetCacheIndexes,
+
 		// The bootstrap and control plane providers write Secrets and
 		// ConfigMaps. Without these claims they write nothing, and the sweep
 		// would measure workspaces that never became active.

@@ -210,6 +210,17 @@ type sweepConfig struct {
 	// address different API surfaces and some wiring needs the one the manager
 	// is not built on: the virtual workspace serves what the APIExport serves,
 	// and a kubeconfig Secret is not that.
+	// cacheIndexes returns the field indexes this shape's deployment registers
+	// on each shard's cache. Only the shapes that wire the core provider have
+	// any - it is the topology controllers that list by one - and a shape that
+	// registered an index its deployment does not would be measuring something
+	// nobody pays for.
+	//
+	// A function rather than a slice because what a deployment registers
+	// depends on its feature gates, and the gates are set by the harness after
+	// this config is built.
+	cacheIndexes func() []providerwiring.CacheIndex
+
 	newFleetSetup func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry)
 
 	// diagnose runs when a workspace never becomes active or never disengages,
@@ -456,9 +467,14 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	// anything.
 	must(t, coremanager.SetFeatureGateDefaults())
 
+	var indexes []providerwiring.CacheIndex
+	if cfg.cacheIndexes != nil {
+		indexes = cfg.cacheIndexes()
+	}
+
 	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
 	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry,
-		providerwiring.WithCacheIndexes(ctx, coremanager.FleetCacheIndexes()...))
+		providerwiring.WithCacheIndexes(ctx, indexes...))
 	must(t, err)
 
 	// The manager's local cluster. Per-workspace wiring wants the workspace
