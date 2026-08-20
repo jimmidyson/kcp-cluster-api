@@ -45,6 +45,50 @@ ordinary work.
 
 ---
 
+## ⚠️ Superseded, 2026-08-20 — read this too
+
+Fourteen of the sixteen remaining `GATED` tasks are marked `- [~]`. None of
+those should be built. They fall into two kinds:
+
+- **`SUPERSEDED`** (T035–T041, T043, T047, T050) — the demux work, overtaken.
+- **`CLOSED AT THE GATE`** (T051–T054) — gated on FR-009 and FR-011, both of
+  which the gate above closed. They were never to be built, and were only ever
+  open because a `close` verdict leaves its conditional tasks standing. The
+  label is here so that is legible without re-reading the gate.
+
+Two stay open: **T048** (FR-006, concurrent engagement) is worth much less than
+it was but its mechanism still exists, and **T049** (FR-008, per-workspace
+discovery) is untouched by any of this.
+
+The superseded tasks describe a `clusterdemux` package: an interposing cache
+holding one upstream registration per GVK with a `map[clusterName][]handler`
+beneath it, so
+that many per-workspace handlers cost one real watch. The project reached the
+same goal by removing the per-workspace handler instead — controllers are now
+fleet-wide, registered once against a cache spanning every workspace, with the
+cluster carried on the request. `cmd/core-manager` engages a workspace only to
+count it; its `SetupFunc` is empty and says so.
+
+The result is measured: **2 goroutines per active workspace and no additional
+watch stream**, flat across six doublings to a hundred, with everything
+returned when a workspace departs. That is US2's goal, met.
+
+Marked rather than deleted, because the gate above is the record of why each
+was to be built, and a deleted task cannot be checked against a decision that
+reverses it. See [spec.md, "Where this stands"](spec.md#where-this-stands) for
+what became of each of the four `build` verdicts, and for the constraint this
+route broke on purpose: FR-023 and SC-011 required no new drift entry, and the
+fleet-wide wiring is carried in the fork per
+[ADR-0003](../../docs/adr-0003-workspace-aware-cluster-api.md).
+
+**Nothing else in this list is superseded.** The unchecked tasks outside
+Phases 4–6 — the runtime capacity surface (T026–T028), engagement retry
+(T044–T046), replica sharding (US5), the remaining telemetry quantities (T064),
+rate limiting and backpressure (US7), and the Phase 10 documentation — were not
+reached, not overtaken.
+
+---
+
 ## Phase 1: Setup
 
 **Purpose**: Package skeletons and the task-runner surface
@@ -152,15 +196,15 @@ apart, identical event workload, compare per-event cost.
 
 **⚠️ Entirely conditional on T029/T030.** If both close, this phase does not exist.
 
-- [ ] T035 [US2] `GATED(FR-001)` Write failing unit tests in `internal/clusterdemux/registry_test.go` for **C4 of contracts/cache-interposition.md — `HasSynced` semantics**: synced only after that cluster's replay completes; returns rather than hanging when replay races disengagement; waits for both when registered before the underlying informer syncs. **This is the first TDD cycle of the demux work** (R6)
-- [ ] T036 [US2] `GATED(FR-001)` Write failing unit tests in `internal/clusterdemux/registry_test.go` for **C1 isolation** — a handler registered for workspace A is never invoked with an object from another cluster (FR-002, **unconditional invariant even here**)
-- [ ] T037 [P] [US2] `GATED(FR-001)` Write failing unit tests for **C2** (one real registration per GVK regardless of workspace count) and **C6** (dispatch cost flat) in `internal/clusterdemux/registry_test.go`
-- [ ] T038 [P] [US2] `GATED(FR-001)` Write failing unit tests for **C5** (removing a workspace removes its handlers; per-GVK entry released with its last workspace) in `internal/clusterdemux/registry_test.go` (FR-012, **unconditional**)
-- [ ] T039 [US2] `GATED(FR-001)` Implement the per-GVK registry in `internal/clusterdemux/registry.go`: one upstream registration per GVK, `map[clusterName][]handler`, per-cluster sync state
-- [ ] T040 [US2] `GATED(FR-003)` Implement the interposing cache in `internal/clusterdemux/cache.go` — delegating `Get`/`List`/`IndexField`/`WaitForCacheSync` unchanged to the scoped cache, interposing only `GetInformer`/`GetInformerForKind`. **Do not reimplement the read path**; that is the copying-upstream-code failure R5 refuses
-- [ ] T041 [US2] `GATED(FR-001)` Add the `GetCache()` override to `workspaceManager` in `internal/providerwiring/wiring.go`, alongside its existing `Add` and `GetWebhookServer` overrides, documenting why as those two are documented
+- [~] T035 [US2] `SUPERSEDED — was GATED(FR-001)` Write failing unit tests in `internal/clusterdemux/registry_test.go` for **C4 of contracts/cache-interposition.md — `HasSynced` semantics**: synced only after that cluster's replay completes; returns rather than hanging when replay races disengagement; waits for both when registered before the underlying informer syncs. **This is the first TDD cycle of the demux work** (R6)
+- [~] T036 [US2] `SUPERSEDED — was GATED(FR-001)` Write failing unit tests in `internal/clusterdemux/registry_test.go` for **C1 isolation** — a handler registered for workspace A is never invoked with an object from another cluster (FR-002, **unconditional invariant even here**)
+- [~] T037 [P] [US2] `SUPERSEDED — was GATED(FR-001)` Write failing unit tests for **C2** (one real registration per GVK regardless of workspace count) and **C6** (dispatch cost flat) in `internal/clusterdemux/registry_test.go`
+- [~] T038 [P] [US2] `SUPERSEDED — was GATED(FR-001)` Write failing unit tests for **C5** (removing a workspace removes its handlers; per-GVK entry released with its last workspace) in `internal/clusterdemux/registry_test.go` (FR-012, **unconditional**)
+- [~] T039 [US2] `SUPERSEDED — was GATED(FR-001)` Implement the per-GVK registry in `internal/clusterdemux/registry.go`: one upstream registration per GVK, `map[clusterName][]handler`, per-cluster sync state
+- [~] T040 [US2] `SUPERSEDED — was GATED(FR-003)` Implement the interposing cache in `internal/clusterdemux/cache.go` — delegating `Get`/`List`/`IndexField`/`WaitForCacheSync` unchanged to the scoped cache, interposing only `GetInformer`/`GetInformerForKind`. **Do not reimplement the read path**; that is the copying-upstream-code failure R5 refuses
+- [~] T041 [US2] `SUPERSEDED — was GATED(FR-001)` Add the `GetCache()` override to `workspaceManager` in `internal/providerwiring/wiring.go`, alongside its existing `Add` and `GetWebhookServer` overrides, documenting why as those two are documented
 - [ ] T042 [US2] Add integration test in `test/integration/coremanager/isolation_test.go` against real kcp asserting no workspace observes another's events under the new routing (FR-002, **unconditional — runs whether or not the demux was built**)
-- [ ] T043 [US2] `GATED(FR-001)` Re-run the sweep and record before/after evidence in `evidence/after-us2.json` against T023/T024 baselines, same profile same harness (FR-021, SC-002, SC-010)
+- [~] T043 [US2] `SUPERSEDED — was GATED(FR-001)` Re-run the sweep and record before/after evidence in `evidence/after-us2.json` against T023/T024 baselines, same profile same harness (FR-021, SC-002, SC-010)
 
 **Checkpoint**: SC-002 for built requirements; recorded determinations for closed ones.
 
@@ -179,10 +223,10 @@ workspace count); the rest are gated.
 - [ ] T044 [P] [US3] Write failing unit test in `internal/providerwiring/wiring_test.go` for engagement retry with bounded backoff: a transiently failing engagement retries, succeeds when the failure clears, and repeated failure stays visible and bounded (FR-007, **unconditional**)
 - [ ] T045 [US3] Implement engagement retry with bounded backoff in `internal/providerwiring/wiring.go` (FR-007). Today a failure returns into `multicluster-provider`'s `pkg/provider/provider.go:365`, which logs and forgets it — recovery waits for the next binding update or the ~10h resync
 - [ ] T046 [US3] Add integration test in `test/integration/providerwiring/retry_test.go` against real kcp: a workspace whose engagement fails transiently is engaged automatically once the failure clears, without waiting for resync (SC-014)
-- [ ] T047 [US3] `GATED(FR-004)` Implement per-cluster initial sync in `internal/clusterdemux/registry.go` via `indexer.ByIndex(kcpcache.ClusterIndexName, ...)`, replacing the full-store replay under `blockDeltas` (R2)
-- [ ] T048 [US3] `GATED(FR-006)` Make engagement of distinct workspaces proceed concurrently rather than serialized behind the provider's single endpoint-watcher goroutine, in `internal/providerwiring/wiring.go`
-- [ ] T049 [US3] `GATED(FR-008)` **BLOCKED — do not implement.** File the upstream proposal from R5 that `multicluster-provider` accept a caller-supplied `RESTMapper`, or that `Options.NewCluster` return `cluster.Cluster`. Record the filing in `research.md` under R5. Per Principle II the responses are another integration point, an upstream proposal, or accepting the limitation — **not** reimplementing the unexported forked cache reader
-- [ ] T050 [US3] `GATED(FR-005)` Re-run the sweep; record before/after evidence in `evidence/after-us3.json` for time-to-first-reconcile and for absence of delivery pause during join (FR-021, SC-003, SC-004, SC-005)
+- [~] T047 [US3] `SUPERSEDED — was GATED(FR-004)` Implement per-cluster initial sync in `internal/clusterdemux/registry.go` via `indexer.ByIndex(kcpcache.ClusterIndexName, ...)`, replacing the full-store replay under `blockDeltas` (R2)
+- [ ] T048 [US3] `STILL GATED(FR-006), lower value now` Make engagement of distinct workspaces proceed concurrently rather than serialized behind the provider's single endpoint-watcher goroutine, in `internal/providerwiring/wiring.go`
+- [ ] T049 [US3] `STILL GATED(FR-008)` **BLOCKED — do not implement.** File the upstream proposal from R5 that `multicluster-provider` accept a caller-supplied `RESTMapper`, or that `Options.NewCluster` return `cluster.Cluster`. Record the filing in `research.md` under R5. Per Principle II the responses are another integration point, an upstream proposal, or accepting the limitation — **not** reimplementing the unexported forked cache reader
+- [~] T050 [US3] `SUPERSEDED — was GATED(FR-005)` Re-run the sweep; record before/after evidence in `evidence/after-us3.json` for time-to-first-reconcile and for absence of delivery pause during join (FR-021, SC-003, SC-004, SC-005)
 
 **Checkpoint**: SC-003, SC-004, SC-005, SC-014.
 
@@ -197,10 +241,10 @@ measure resident footprint and goroutine count per workspace against the budget.
 
 **⚠️ Entirely conditional on T034.**
 
-- [ ] T051 [P] [US4] `GATED(FR-009)` Write failing unit tests in `internal/providerwiring/idle_test.go` for idle-workspace cost accounting against the budget set by T025
-- [ ] T052 [US4] `GATED(FR-011)` Implement idle release in `internal/providerwiring/wiring.go`: a quiescent workspace releases non-essential cost while remaining able to notice a new object promptly
-- [ ] T053 [US4] `GATED(FR-011)` Add integration test in `test/integration/scale/idle_test.go` against real kcp: an idle workspace's first Cluster API object starts reconciliation within the stated bound, and cost returns to the idle budget after quiescence
-- [ ] T054 [US4] `GATED(FR-009)` Re-run the `idle-heavy` sweep; record before/after evidence in `evidence/after-us4.json` (FR-021, SC-006, SC-010)
+- [~] T051 [P] [US4] `CLOSED AT THE GATE — was GATED(FR-009)` Write failing unit tests in `internal/providerwiring/idle_test.go` for idle-workspace cost accounting against the budget set by T025
+- [~] T052 [US4] `CLOSED AT THE GATE — was GATED(FR-011)` Implement idle release in `internal/providerwiring/wiring.go`: a quiescent workspace releases non-essential cost while remaining able to notice a new object promptly
+- [~] T053 [US4] `CLOSED AT THE GATE — was GATED(FR-011)` Add integration test in `test/integration/scale/idle_test.go` against real kcp: an idle workspace's first Cluster API object starts reconciliation within the stated bound, and cost returns to the idle budget after quiescence
+- [~] T054 [US4] `CLOSED AT THE GATE — was GATED(FR-009)` Re-run the `idle-heavy` sweep; record before/after evidence in `evidence/after-us4.json` (FR-021, SC-006, SC-010)
 
 **Checkpoint**: SC-006.
 

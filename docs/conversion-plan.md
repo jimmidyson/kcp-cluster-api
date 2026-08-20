@@ -538,15 +538,25 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
 1. Exact mechanism the target kcp version uses to identify the source
    workspace on an inbound webhook call (path prefix vs. header) — drives
    G4's design.
-2. Whether `ClusterCache` (the *workload*-cluster remote-client cache,
-   orthogonal to KCP workspaces) needs any workspace-awareness at all, or
-   whether per-workspace-manager isolation already makes it a non-issue
-   (current read: non-issue, since each workspace's Cluster objects and
-   their kubeconfig Secrets are already workspace-scoped by virtue of
-   which manager is reading them).
-3. How many workspaces this needs to scale to in practice — determines how
-   urgent D6 (horizontal sharding) and Phase 4's eviction work are
-   relative to Phase 3.
+2. ~~Whether `ClusterCache` (the *workload*-cluster remote-client cache,
+   orthogonal to KCP workspaces) needs any workspace-awareness at all.~~
+   **Answered: it does, and the "non-issue" reading was wrong.** That reading
+   held while each workspace had its own manager doing the reading. With
+   fleet-wide controllers there is one `ClusterCache` for every workspace, so
+   its accessors are keyed by workspace *and* cluster, and the kubeconfig
+   Secret it needs is not served by the export's virtual workspace at all —
+   it is read through a separate shard-scoped client
+   (`internal/coremanager/secretreader.go`). See
+   `controllers/clustercache/cluster_cache_workspace.go` in the fork.
+3. ~~How many workspaces this needs to scale to in practice.~~ **Answered:
+   100,000+, reached by composition across regional shards rather than by one
+   process** — with replicas scaled per shard and a stated capacity limit per
+   shard ([ADR-0002](adr-0002-shard-appliance-scaling.md)). What one workspace
+   costs a shard is now measured per deployment rather than argued; see
+   [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
+   and the feature that produced it,
+   [`specs/20260815-211812-workspace-wiring-scale`](../specs/20260815-211812-workspace-wiring-scale/spec.md),
+   whose own status records which of its work shipped and which was superseded.
 4. Whether `multicluster-provider`'s `Provider` reacts live to
    `APIExportEndpointSlice.status.endpoints` changing (e.g. a shard
    joining/leaving a `Partition`, or a workspace migrating between

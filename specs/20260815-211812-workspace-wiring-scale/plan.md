@@ -4,6 +4,14 @@
 
 **Input**: Feature specification from `specs/20260815-211812-workspace-wiring-scale/spec.md`
 
+> **Superseded in part, 2026-08-20.** The measurement gate ran and its eight
+> determinations stand. What follows the gate does not: the interposed-cache
+> design below was overtaken by fleet-wide controllers, which reach the same
+> goal by removing the per-workspace listener rather than by folding many into
+> one. Read [spec.md, "Where this stands"](spec.md#where-this-stands) first —
+> it says which requirements shipped, which were superseded, and which are
+> still open.
+
 ## Summary
 
 `core-manager` pays a per-event cost that grows with the number of workspaces it
