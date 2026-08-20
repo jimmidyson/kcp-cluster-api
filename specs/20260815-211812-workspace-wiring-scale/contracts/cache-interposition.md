@@ -1,9 +1,17 @@
 # Contract: cache interposition at the workspace manager seam
 
-**Status**: **GATED.** This contract is only implemented if P3's measurement
-records a `build` verdict for FR-001 / FR-004 / FR-005. It is specified now so
-the gate has something concrete to decide about, and so P3's verdict is a
-decision about a real design rather than a hypothesis.
+**Status**: **SUPERSEDED, 2026-08-20 — do not implement.** It was GATED, and
+only to be implemented on a `build` verdict for FR-001 / FR-004 / FR-005. The
+gate closed FR-001 and FR-003 and built FR-004 and FR-005 — and then the
+project reached the same goal by a different route, which removed the
+per-workspace handler this contract exists to make cheap. See
+[spec.md, "Where this stands"](../spec.md#where-this-stands).
+
+Kept because C1 — a handler registered for one workspace is never invoked with
+another's object — is an unconditional invariant of any routing scheme, and
+this is where it is written down. The fleet-wide wiring satisfies it by
+carrying the cluster on the request; `TestFleetWideControllerKeepsClustersApart`
+in the fork's `util/multicluster` is the assertion.
 
 **Requirements**: FR-001, FR-002 (unconditional), FR-003, FR-004, FR-005
 

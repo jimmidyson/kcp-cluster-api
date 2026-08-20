@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-15
 
-**Status**: Draft
+**Status**: Partly shipped, and superseded in its central mechanism — see [Where this stands](#where-this-stands)
 
 **Input**: The scalability question left open by
 [`docs/conversion-plan.md`](../../docs/conversion-plan.md) — "How many
@@ -14,6 +14,72 @@ with replicas scaled per shard and explicit capacity limits per shard. Follows
 the per-workspace wiring feature
 ([`specs/20260815-185524-per-workspace-wiring`](../20260815-185524-per-workspace-wiring/spec.md)),
 which made wiring dynamic but not cheap.
+
+## Where this stands
+
+*Added 2026-08-20, after the work below had been overtaken by the route the
+project actually took. The specification is left as it was written; this
+section says what happened to it.*
+
+**Not abandoned, and not obsolete. Its P1 goal was reached — by a mechanism
+this document rejected before measuring.**
+
+What this feature set out to fix was real and is fixed. A workspace no longer
+taxes every event: measured across six doublings to a hundred active
+workspaces, each costs **2 goroutines and no additional watch stream**, and a
+departing one leaves nothing behind. Every provider deployment pays the same
+2, flat to twenty. Those figures are published in
+[Workspace resource usage](../../docs/site/content/en/docs/design/workspace-resource-usage.md)
+and reproduced by `task test:sweep`.
+
+**The mechanism is not the one below.** Phases 4–6 of
+[tasks.md](tasks.md) build a `clusterdemux` package: an interposing cache
+holding one upstream registration per GVK and a `map[clusterName][]handler`
+underneath, so that many per-workspace handlers cost one real watch. What
+shipped instead removes the per-workspace handler: controllers are **fleet-wide**,
+built once against a cache spanning every workspace, and the cluster travels
+on the request rather than being fixed at registration. There is one
+registration per type because there is one controller, not because a demux
+folds many into one. `cmd/core-manager` now engages workspaces solely to count
+them — its `SetupFunc` is empty, and says so.
+
+That is a stronger result than the demux would have produced, and it costs
+something this specification explicitly forbade.
+
+**FR-023 and SC-011 no longer hold, by decision rather than by drift.** Both
+require this feature to add no entry to the drift record. The fleet-wide
+wiring is carried in the fork —
+`util/multicluster/lift.go`, `util/multicluster/recorder.go`,
+`util/controller/builder_workspace.go` and the rest, all recorded in
+[`DRIFT.md`](../../DRIFT.md) as *carried deliberately*. That was decided in
+[ADR-0003](../../docs/adr-0003-workspace-aware-cluster-api.md), which accepted
+option B and reopened [research R1](research.md) — the alternative this feature
+rejected at the outset, and which its own measurements made cheaper to reverse
+than assumed. FR-023's stated response to a requirement that cannot be met
+through a public extension point is *raise it as a finding*; that is what the
+ADR is.
+
+**The gate still stands.** All eight determinations in
+[evidence/determinations.md](evidence/determinations.md) were recorded before
+any of this, and the four `close` verdicts are unaffected — they closed on
+measurements, and the measurements have only improved. Of the four `build`
+verdicts:
+
+| Gated requirement | What happened |
+|---|---|
+| FR-004 — engagement cost independent of fleet and objects | **Superseded.** The cost was one store replay per watch per joining workspace. There are no per-workspace watch registrations left to pay it. |
+| FR-005 — engagement does not suspend delivery | **Superseded**, for the same reason: the process-wide lock was taken by that replay. |
+| FR-006 — engagement proceeds concurrently | **Superseded in importance.** Engagement is still serialized on the provider's goroutine, but what it now does per workspace is build a cluster, not register 14 watches. Reopen it if that stops being true. |
+| FR-008 — no repeated process-wide discovery | **Still open, and still measured.** A workspace costs 3 discovery requests in core and 7 in the control plane provider. The blocker recorded at the gate — no public seam, and Principle II forbidding the workaround — is unchanged. |
+
+**What is genuinely still open** is everything that was never gated on the
+demux: the runtime capacity surface (US1's T026–T028 — `internal/scaleharness`
+measures capacity offline, but a running manager does not report where it sits
+between its limits), engagement retry with bounded backoff (US3's T044–T046),
+replica sharding (US5, whose R3 entry criterion is still ASSUMED), the
+remaining telemetry quantities (US6's T064), aggregate rate limiting and
+backpressure (US7), and the capacity-planning documentation (US5–US7 and Phase
+10). Those are not superseded by anything; they were simply not reached.
 
 ## Purpose
 
