@@ -109,6 +109,14 @@ type Sample struct {
 	// not serialised: its keys are logical cluster names, which differ on
 	// every run and would make two reports incomparable.
 	Counts Counts `json:"-"`
+
+	// Stacks is what every goroutine was doing when the sample was taken,
+	// grouped by stack. It is what makes a retention figure explainable:
+	// subtracting the two samples the figure compares names the goroutines a
+	// departure did not give back. Not serialised — it is large, and it
+	// describes one run's process rather than anything comparable between
+	// runs.
+	Stacks Stacks `json:"-"`
 }
 
 // Take samples the process now.
@@ -130,6 +138,10 @@ func Take(phase Phase, label string, workspaces int, counter *Counter) Sample {
 		counts = counter.Snapshot()
 	}
 
+	// Profiled in the same breath as the count, so the two describe the same
+	// instant. A profile taken later would explain a different process.
+	stacks := takeStacks()
+
 	return Sample{
 		Phase:      phase,
 		Label:      label,
@@ -138,6 +150,7 @@ func Take(phase Phase, label string, workspaces int, counter *Counter) Sample {
 		HeapBytes:  mem.HeapAlloc,
 		Traffic:    TrafficOf(counts),
 		Counts:     counts,
+		Stacks:     stacks,
 	}
 }
 

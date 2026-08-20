@@ -52,7 +52,6 @@ limitations under the License.
 package sweep_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -114,7 +113,12 @@ const (
 
 	// How many reads a teardown sample is the lowest of, and how far apart.
 	// Enough to step over a transient without adding a minute to the sweep.
-	releasedSamples   = 5
+	releasedSamples = 5
+
+	// grownStacksLogged caps how many stacks a failure prints. A retention
+	// failure is a handful of goroutines; a log that scrolls for pages is one
+	// nobody reads to the end.
+	grownStacksLogged = 20
 	releasedSampleGap = 400 * time.Millisecond
 
 	// retainedGoroutinesPerEventHandler is what one event-handler registration
@@ -344,21 +348,6 @@ func sampleReleased(t *testing.T, report *sweep.Report, counter *sweep.Counter, 
 	s := sweep.TakeLowest(releasedSamples, releasedSampleGap, sweep.PhaseDisengaged, label, workspaces, counter)
 	report.Add(s)
 	return s
-}
-
-// dumpGoroutines writes every goroutine's stack into the test log.
-//
-// Only on a failure, and deliberately into the log rather than a file: the run
-// that needs it is a CI run somebody is reading after the fact, and a file
-// under bin/ is not in the log they are reading.
-func dumpGoroutines(t *testing.T, why string) {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
-		t.Logf("could not write the goroutine profile (%s): %v", why, err)
-		return
-	}
-	t.Logf("goroutine profile (%s), grouped by stack with counts:\n%s", why, buf.String())
 }
 
 // settleReleased is settle for a teardown sample, where the question is
@@ -630,7 +619,8 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	// the sample taken at the same workspace count on the way up is the only
 	// way to see it: both describe a process serving k workspaces, and any
 	// difference is what the workspaces that left are still costing.
-	if perDeparture, _, ok := sweep.Retained(report.Samples, sweep.Goroutines); ok {
+	if retention, ok := sweep.RetainedDetail(report.Samples, sweep.Goroutines); ok {
+		perDeparture := retention.PerDeparture
 		report.AddFact("goroutinesRetainedPerDepartedWorkspace", fmt.Sprintf("%.1f", perDeparture))
 
 		// Measured, not desired. A departing workspace leaves two goroutines
@@ -655,16 +645,17 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 				cfg.eventHandlers, retainedGoroutinesPerEventHandler)
 		}
 		if perDeparture > budget {
-			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f this shape may retain (%s)",
-				perDeparture, budget, why)
-			// The stacks, not just the number. This assertion has now failed
-			// three times reporting 2.0 and 3.0 with nothing to say about
-			// what those goroutines were, and each time the answer was
-			// guessed at from the shape of the number rather than read. A
-			// profile written here says what is still running, and a run that
-			// prints it settles in one CI cycle what argument settles in
-			// none.
-			dumpGoroutines(t, "retention budget exceeded")
+			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f this shape may retain (%s); measured across %d departure(s), comparing %q with %q",
+				perDeparture, budget, why, retention.Departed, retention.Up.Label, retention.Down.Label)
+			// The stacks that grew between the two samples the figure came
+			// from — not a profile of the end state.
+			//
+			// The first attempt at this dumped the profile here, where "here"
+			// is after the whole sweep with every workspace gone, and the
+			// resulting 227 lines described a process nobody was asking
+			// about. What names the culprit is the difference between the two
+			// samples that were subtracted, so that is what is printed.
+			t.Log(sweep.FormatStacksGrown(retention.Up, retention.Down, grownStacksLogged))
 		}
 	}
 

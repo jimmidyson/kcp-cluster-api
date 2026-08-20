@@ -100,9 +100,19 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		// Smaller defaults than the core sweep's: every workspace here runs a
 		// control plane to completion, which is the slowest thing this
 		// repository measures.
+		//
+		// Three rather than two, though, because two is the one count at which
+		// the retention figure cannot be checked against itself. Retention is
+		// measured by comparing a teardown sample with the sample taken at the
+		// same workspace count on the way up, so two workspaces give exactly
+		// one such pair and the figure is a single subtraction of two
+		// integers — which is how a transient at either end came to be
+		// reported as retention three times over. Three gives two independent
+		// pairs, and a shape that genuinely retains per departure retains it
+		// in both.
 		workspacesEnv:     "SWEEP_FLEET_WORKSPACES",
 		objectsEnv:        "SWEEP_FLEET_OBJECTS",
-		defaultWorkspaces: 2,
+		defaultWorkspaces: 3,
 		defaultObjects:    1,
 
 		watchedTypes:  fleetWatchedTypes,
