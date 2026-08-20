@@ -82,6 +82,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/sweep"
@@ -449,8 +450,15 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 	// it makes per shard are reachable: the fleet-wide watches have to be
 	// registered on the cache their reconcilers read through, and through
 	// apiexport.New that cache cannot be got at.
+	// The gates before the provider, because the provider is handed the indexes
+	// and which indexes there are depends on them. A deployment has the same
+	// ordering for the same reason: gates are parsed before main builds
+	// anything.
+	must(t, coremanager.SetFeatureGateDefaults())
+
 	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
-	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry)
+	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry,
+		providerwiring.WithCacheIndexes(ctx, coremanager.FleetCacheIndexes()...))
 	must(t, err)
 
 	// The manager's local cluster. Per-workspace wiring wants the workspace

@@ -110,6 +110,10 @@ func initFlags(fs *pflag.FlagSet) {
 
 	// The core reconcilers this provider shares watches with are gated the
 	// same way core-manager's are; see its equivalent comment.
+	// This project's defaults, set before the flag is defined so that
+	// --feature-gates overrides them rather than the other way round. See
+	// coremanager.SetFeatureGateDefaults for what differs from upstream.
+	coremanager.MustSetFeatureGateDefaults()
 	feature.MutableGates.AddFlag(fs)
 }
 

@@ -78,7 +78,6 @@ import (
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1beta1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta1"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
@@ -109,10 +108,18 @@ const (
 var (
 	coreCRDs = []string{
 		"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
+		// Watched by the ClusterClass controller, which the core provider wires
+		// whenever ClusterTopology is on - this project's default. This test
+		// creates no ClusterClass; publishing the type is what lets the
+		// controller start at all.
+		"core/config/crd/bases/cluster.x-k8s.io_clusterclasses.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
+		// As above: read by the topology reconciler whatever the MachinePool
+		// gate says.
+		"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
 	}
 	dockerCRDs = []string{
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
@@ -161,14 +168,12 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	}
 	ensureKindDockerNetwork(t)
 
-	// MachinePool defaults to enabled upstream, and cluster.Reconciler/
-	// machine.Reconciler unconditionally watch it as an event source when
-	// it's on - which would stall those controllers' cache sync here, since
-	// this Phase 1 skeleton doesn't publish or bind the MachinePool CRD (out
-	// of ADR-0001's D3 scope). See kcp/cmd/core-manager/main.go's
-	// feature.MutableGates.AddFlag comment.
-	if err := feature.MutableGates.Set("MachinePool=false"); err != nil {
-		t.Fatalf("failed to disable MachinePool feature gate: %v", err)
+	// The gates a deployment runs with: ClusterTopology on, MachinePool off.
+	// The second is the one this test would hang without - the core reconcilers
+	// watch MachinePool when it is on, and this fixture publishes no
+	// MachinePool CRD, so their cache sync would never complete.
+	if err := coremanager.SetFeatureGateDefaults(); err != nil {
+		t.Fatalf("failed to set feature gate defaults: %v", err)
 	}
 
 	// Installs the process-wide contract-metadata and conversion resolvers -
@@ -273,7 +278,8 @@ func TestCoreManagerClusterToMachine(t *testing.T) {
 	must(t, infrav1.AddToScheme(mgrScheme))
 
 	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
-	provider, err := providerwiring.NewAPIExportProvider(rootCfg, exportName, mgrScheme, wildcardRegistry)
+	provider, err := providerwiring.NewAPIExportProvider(rootCfg, exportName, mgrScheme, wildcardRegistry,
+		providerwiring.WithCacheIndexes(ctx, coremanager.FleetCacheIndexes()...))
 	if err != nil {
 		t.Fatalf("failed to construct kcp APIExport provider: %v", err)
 	}

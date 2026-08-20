@@ -11,8 +11,8 @@ task demo
 That starts a single-shard kcp server, publishes **one `APIExport` per
 provider** out of its `root` workspace, creates two workspaces bound to all of
 them, runs each provider's controllers — the same wiring each provider's own
-deployment runs — and builds a cluster in each workspace, printing what they
-are doing until they are all ready:
+deployment runs — and builds a cluster in each workspace **from a
+`ClusterClass`**, printing what they are doing until they are all ready:
 
 ```
 WORKSPACE         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
@@ -37,8 +37,17 @@ milestone on the way there, reported alongside rather than mistaken for the
 destination. A control plane whose machines never go Ready is provisioned, and
 is not a cluster.
 
+Each workspace gets its own `ClusterClass` called `demo` and the five templates
+it refers to, and the only object the demo writes per cluster is a `Cluster`
+naming that class. The infrastructure cluster, the control plane, the worker
+`MachineDeployment` and the per-cluster templates are all created by the core
+provider's topology controller — which is why the names above are the names
+they are: the class pins them, so that a `kubectl get` after the run is
+predictable.
+
 Both clusters are called `demo-00`, in both workspaces, on purpose: identical
 names are what makes a cross-workspace confusion visible rather than plausible.
+So are both classes.
 One shard, one manager per provider, every workspace served by all of them —
 and each workspace's objects stay its own.
 
@@ -157,7 +166,9 @@ configuration.
 
 It does not serve webhooks: those are single-workspace by construction until
 the webhook dispatch layer (G4) lands, so every object the demo creates is
-fully specified rather than defaulted.
+fully specified rather than defaulted. That is why its `ClusterClass` spells
+out a rollout strategy for its worker class, and why the class declares no
+variables — variable defaulting is a webhook's job.
 
 The same run is an integration test — `test/integration/demo`, part of
 `task verify` — which additionally asserts the isolation the table cannot show:

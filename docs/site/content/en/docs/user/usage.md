@@ -18,8 +18,56 @@ exception costs and why it is there.
 
 [`task demo`](demo.md) brings up a cluster in each of several workspaces from
 one manager, and waits for them to be ready, in about a minute — starting its
-own kcp server. It is the fastest way to see what the rest of this page
-describes.
+own kcp server. It builds them from a `ClusterClass`, and it is the fastest way
+to see what the rest of this page describes.
+
+## A cluster is a ClusterClass based cluster
+
+A workspace holds one or more `ClusterClass`es and the templates they refer to,
+and a `Cluster` names a class, a version and a shape:
+
+```yaml
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: demo-00
+  namespace: default
+spec:
+  topology:
+    classRef:
+      name: demo
+    version: v1.34.0
+    controlPlane:
+      replicas: 1
+    workers:
+      machineDeployments:
+        - class: default-worker
+          name: md
+          replicas: 1
+```
+
+Everything under it — the infrastructure cluster, the control plane, the worker
+`MachineDeployment`, and the per-cluster templates each is stamped from — is
+created by the topology controller in that workspace, from that workspace's
+class. Nothing is shared between workspaces, including a class of the same
+name.
+
+Writing the objects out by hand still works: `spec.infrastructureRef` and
+`spec.controlPlaneRef` are unchanged, and the reconcilers that act on them do
+not know how the objects got there. But the class is the supported shape, and
+it is the one this project's demo, integration tests and measurements are built
+on.
+
+Two things a single-tenant installation gets from a webhook and this one does
+not, until the webhook dispatch layer lands:
+
+- **Class variables are not defaulted.** A `Cluster` must state every variable
+  its class declares, because the defaulting is done by an admission webhook.
+  Prefer a class with no variables until then.
+- **Nothing else is defaulted either.** A worker class must spell out its
+  rollout strategy; an infrastructure template for a container-backed cluster
+  must spell out its control plane port. See
+  [The demo](../design/demo.md).
 
 ## What is different, and what is not
 
@@ -92,8 +140,11 @@ Delete the clusters yourself first if you want to watch that happen separately.
   manifest must spell out what a webhook would otherwise fill in
 - `WorkspaceType` with `defaultAPIBindings`, so a tenant workspace binds each
   provider's export by hand
-- MachineHealthCheck, ClusterClass and topology: the core deployment wires
-  `Cluster`, `Machine`, `MachineSet` and `MachineDeployment`, and no more
+- Class variables, patches and runtime extensions: the machinery is wired and
+  the `RuntimeSDK` gate is off, so a class that declares variables or patches
+  is not served the way a single-tenant installation would serve it
+- MachineHealthCheck and MachinePool: `MachinePool` is published so that a
+  managed topology can be reconciled at all, but nothing acts on one
 - `clusterctl`, published manifests, or any installation flow other than
   building and running the managers yourself
 

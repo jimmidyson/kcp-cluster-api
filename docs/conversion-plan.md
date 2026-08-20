@@ -16,6 +16,31 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **A cluster is a ClusterClass based cluster.** The core deployment wires the
+  four topology reconcilers — `clusterclass`, `topology/cluster`,
+  `topology/machinedeployment`, `topology/machineset` — as fleet-wide
+  controllers, and the `ClusterTopology` gate is on by default here where
+  upstream defaults it off. The demo, `test/integration/demo`, the fleet sweep
+  shape and the user documentation all build a `Cluster` that names a
+  `ClusterClass` and let the topology controller create everything under it.
+  Four new patches in the fork, recorded in [`DRIFT.md`](../DRIFT.md); spec in
+  [`specs/20260820-152056-clusterclass-based-clusters`](../specs/20260820-152056-clusterclass-based-clusters/spec.md).
+
+  Three things had to be true for it that are worth carrying forward. A
+  fleet-wide watch on a kind the server does not serve **hangs** the
+  controller's startup, so every type a wired reconciler watches has to be
+  published — `clusterclasses` and `devclustertemplates` join the exports for
+  that reason. A feature gate guards watches and reconcilers but not reads:
+  the topology reconciler lists `MachinePool`s on every reconcile whatever the
+  gate says, so `machinepools` is published and the gate stays off. And the
+  topology reconciler needs `delete` on `Secret`s for the cluster shim it owns
+  its work through — without it a cluster comes up completely and then reports
+  `TopologyReconciled=False` forever.
+
+  What is deliberately not done: class variables and patches, which need G4
+  because variable defaulting is a webhook's job; runtime extensions, which
+  stay behind `RuntimeSDK`; and upgrade-through-the-class, which is its own
+  feature with its own measurements.
 - **Providers are separate deployments with separate APIExports.** One export
   per provider (`internal/capiexports`), one binary each, and the claims
   between them resolved at run time because an identity hash is per kcp

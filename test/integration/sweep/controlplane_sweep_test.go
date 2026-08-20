@@ -46,7 +46,6 @@ import (
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
@@ -134,7 +133,6 @@ func TestControlPlaneDeploymentWorkspaceSweep(t *testing.T) {
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 			coremanager.SetupProcessGlobals()
 
 			fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{
@@ -152,11 +150,11 @@ func TestControlPlaneDeploymentWorkspaceSweep(t *testing.T) {
 				name := objectName(tn, n)
 
 				// The template the control plane stamps its machines from.
-				if err := tn.directClient.Create(ctx, demo.NewDevMachineTemplate(name, demo.BackendInMemory)); err != nil && !apierrors.IsAlreadyExists(err) {
-					t.Fatalf("creating DevMachineTemplate %s in workspace %s: %v", name, tn.name, err)
+				if err := tn.directClient.Create(ctx, demo.NewDevMachineTemplate(demo.ControlPlaneMachineTemplateName, demo.BackendInMemory)); err != nil && !apierrors.IsAlreadyExists(err) {
+					t.Fatalf("creating DevMachineTemplate %s in workspace %s: %v", demo.ControlPlaneMachineTemplateName, tn.name, err)
 				}
 
-				kcp := demo.NewKubeadmControlPlane(name, 1, demo.DefaultKubernetesVersion)
+				kcp := newKubeadmControlPlane(name, 1, demo.DefaultKubernetesVersion)
 				if err := tn.directClient.Create(ctx, kcp); err != nil && !apierrors.IsAlreadyExists(err) {
 					t.Fatalf("creating KubeadmControlPlane %s in workspace %s: %v", kcp.Name, tn.name, err)
 				}
@@ -165,7 +163,7 @@ func TestControlPlaneDeploymentWorkspaceSweep(t *testing.T) {
 				// pointing at that control plane. Both the endpoint and the
 				// provisioned status are what core and the infrastructure
 				// provider would have written.
-				cluster := demo.NewCluster(name, demo.BackendInMemory, true)
+				cluster := clusterWithControlPlane(name)
 				cluster.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: "127.0.0.1", Port: 6443}
 				if err := tn.directClient.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
 					t.Fatalf("creating Cluster %s in workspace %s: %v", name, tn.name, err)

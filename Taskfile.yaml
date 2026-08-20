@@ -193,7 +193,7 @@ tasks:
         CORE=$(go list -m -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api)
         DOCKER=$(go list -f '{{`{{.Dir}}`}}' sigs.k8s.io/cluster-api/test/infrastructure/docker/reconcilers)
         case "{{.SCOPE}}" in
-          wired)  ROOTS="$CORE/core/reconcilers/cluster,$CORE/core/reconcilers/machine,$CORE/controllers/clustercache,$DOCKER" ;;
+          wired)  ROOTS="$CORE/core/reconcilers/cluster,$CORE/core/reconcilers/machine,$CORE/core/reconcilers/machineset,$CORE/core/reconcilers/machinedeployment,$CORE/core/reconcilers/clusterclass,$CORE/core/reconcilers/topology/cluster,$CORE/core/reconcilers/topology/machinedeployment,$CORE/core/reconcilers/topology/machineset,$CORE/controllers/clustercache,$DOCKER" ;;
           parity) ROOTS="$CORE/core/reconcilers,$CORE/controllers/clustercache" ;;
           *)      ROOTS="{{.SCOPE}}" ;;
         esac

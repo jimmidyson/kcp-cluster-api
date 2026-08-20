@@ -222,12 +222,12 @@ github.com/huandu/xstrings v1.5.0/go.mod h1:y5/lhBue+AyNmUVz9RLU9xbLR0o4KIIExikq
 github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/jimmidyson/cluster-api v1.15.0-kcp.11 h1:PwDe5r94A4nBOjwfZn4l9U8ITXDBKb2aLIvAoNa0YVA=
-github.com/jimmidyson/cluster-api v1.15.0-kcp.11/go.mod h1:qlMd8Ygs29ELGubs9Bx52V18+N1CKH2vDGKXfEOy2Os=
-github.com/jimmidyson/cluster-api/api v1.15.0-kcp.11 h1:8eM7SWDa3/POfA7Ii3ire2QJ+6+SAWXz1Mb9b/C4kZI=
-github.com/jimmidyson/cluster-api/api v1.15.0-kcp.11/go.mod h1:LJ/5hdS9tqTBi9YqyLRnd1t53Sn/cXsa7rEVaY0bBms=
-github.com/jimmidyson/cluster-api/test v1.15.0-kcp.11 h1:6kQg0MqmGRbHzoNcA/bGIyLveq9maKG6S2NimWw/atE=
-github.com/jimmidyson/cluster-api/test v1.15.0-kcp.11/go.mod h1:GxQ3mZ7i5A86qlYHzqoUuJ5xetXyl56UmOAyo86kwWU=
+github.com/jimmidyson/cluster-api v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2 h1:MMID5V/gGx1IiOAcxeLStLFyywAXxKOW+BPn1fkKhO4=
+github.com/jimmidyson/cluster-api v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2/go.mod h1:qlMd8Ygs29ELGubs9Bx52V18+N1CKH2vDGKXfEOy2Os=
+github.com/jimmidyson/cluster-api/api v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2 h1:4iZh6+0G63Kf9W7F0TnKjsWMkOloAmbBHhRJ9g51Y/U=
+github.com/jimmidyson/cluster-api/api v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2/go.mod h1:LJ/5hdS9tqTBi9YqyLRnd1t53Sn/cXsa7rEVaY0bBms=
+github.com/jimmidyson/cluster-api/test v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2 h1:B5eU834CswZqlWuKlcg5gnu3gxwyWmmokzVp5/IQidk=
+github.com/jimmidyson/cluster-api/test v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2/go.mod h1:GxQ3mZ7i5A86qlYHzqoUuJ5xetXyl56UmOAyo86kwWU=
 github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8/go.mod h1:Nht3zPeWKUH0NzdCt2Blrr5ys8VGpn0CEB0cQHVjt7k=
 github.com/jonboulle/clockwork v0.5.0 h1:Hyh9A8u51kptdkR+cqRpT1EebBwTn1oK9YfGYbdFz6I=
 github.com/jonboulle/clockwork v0.5.0/go.mod h1:3mZlmanh0g2NDKO5TWZVJAfofYk64M7XN3SzBPjZF60=
@@ -340,6 +340,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75 h1:6fotK7otjonDflCTK0BCfls4SPy3NcCVb5dqqmbRknE=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20220101234140-673ab2c3ae75/go.mod h1:KO6IkyS8Y3j8OdNO85qEYBsRPuteD+YciPomcXdrMnk=
+github.com/valyala/fastjson v1.6.10 h1:/yjJg8jaVQdYR3arGxPE2X5z89xrlhS0eGXdv+ADTh4=
+github.com/valyala/fastjson v1.6.10/go.mod h1:e6FubmQouUNP73jtMLmcbxS6ydWIpOfhz34TSfO3JaE=
 github.com/vincent-petithory/dataurl v1.0.0 h1:cXw+kPto8NLuJtlMsI152irrVw9fRDX8AbShPRpg2CI=
 github.com/vincent-petithory/dataurl v1.0.0/go.mod h1:FHafX5vmDzyP+1CQATJn7WFKc9CvnvxyvZy6I1MrG/U=
 github.com/vmware/vmw-guestinfo v0.0.0-20170707015358-25eff159a728/go.mod h1:x9oS4Wk2s2u4tS29nEaDLdzvuHdB19CvSGJjPgkZJNk=

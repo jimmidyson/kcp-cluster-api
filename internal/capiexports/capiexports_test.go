@@ -51,6 +51,7 @@ func TestClaimsCarryTheOtherExportsIdentity(t *testing.T) {
 		"kubeadmcontrolplanes":         "controlplane-hash",
 		"kubeadmcontrolplanetemplates": "controlplane-hash",
 		"devclusters":                  "infra-hash",
+		"devclustertemplates":          "infra-hash",
 		"devmachines":                  "infra-hash",
 		"devmachinetemplates":          "infra-hash",
 		"secrets":                      "",

@@ -140,10 +140,10 @@ Each export publishes the CRDs for its own types:
 
 | Export | Publishes |
 |---|---|
-| `cluster-api-core` | `Cluster`, `Machine`, `MachineSet`, `MachineDeployment`, `MachineHealthCheck` |
+| `cluster-api-core` | `Cluster`, `ClusterClass`, `Machine`, `MachineSet`, `MachineDeployment`, `MachineHealthCheck`, `MachinePool` |
 | `cluster-api-bootstrap-kubeadm` | `KubeadmConfig`, `KubeadmConfigTemplate` |
 | `cluster-api-controlplane-kubeadm` | `KubeadmControlPlane`, `KubeadmControlPlaneTemplate` |
-| `cluster-api-dev-infrastructure` | `DevCluster`, `DevMachine`, `DevMachineTemplate` |
+| `cluster-api-dev-infrastructure` | `DevCluster`, `DevClusterTemplate`, `DevMachine`, `DevMachineTemplate` |
 
 ## 4. Identity: why an API has a fingerprint
 
@@ -244,9 +244,35 @@ default     demo-00-md-vg6q5-4cfjr   demo-00   Running   v1.34.0
 
 Nothing here is kcp-specific — this is ordinary Cluster API, and it behaves as
 the [upstream documentation](https://cluster-api.sigs.k8s.io/user/quick-start)
-describes. The point of the exercise is that it is unchanged:
+describes. The point of the exercise is that it is unchanged.
+
+The demo asked for a cluster by naming a **`ClusterClass`**, so the only object
+it wrote is the `Cluster` itself:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
+  get cluster demo-00 -o jsonpath='{.spec.topology}{"\n"}'
+```
+
+```json
+{"classRef":{"name":"demo"},"controlPlane":{"replicas":1},"version":"v1.34.0",
+ "workers":{"machineDeployments":[{"class":"default-worker","name":"md","replicas":1}]}}
+```
+
+The class and the five templates it refers to are in the workspace too, and
+they are what everything under the `Cluster` was stamped from:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
+  get clusterclasses,devclustertemplates,devmachinetemplates,\
+kubeadmcontrolplanetemplates,kubeadmconfigtemplates
+```
+
+So the tree below was written by the core provider's topology controller, not
+by the demo:
 
 ```
+ClusterClass demo  ← Cluster demo-00 names it
 Cluster demo-00
 ├── infrastructureRef  → DevCluster demo-00           (dev infrastructure provider)
 └── controlPlaneRef    → KubeadmControlPlane demo-00-cp  (control plane provider)
@@ -258,6 +284,10 @@ MachineDeployment demo-00-md → worker Machine demo-00-md-vg6q5-4cfjr
 
 Four providers, each watching its own types and writing to the others' through
 the claims from step 5.
+
+Both workspaces hold a `ClusterClass` called `demo`, and they are two different
+objects — the same point the two `demo-00` clusters make, one level further up.
+Change one workspace's class and only that workspace's clusters roll.
 
 ### DevCluster and its backends
 

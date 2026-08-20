@@ -25,8 +25,8 @@ overdue if nothing has been filed by its date. A deliberate one is never
 overdue, and the corresponding cost is that it must be rebased forever — so
 the thing to watch is not a deadline but how much upstream code each entry
 touches. A new file rebases cleanly; a modified one does not. Of the
-forty-one deliberate entries below, eighteen are new files and twenty-three
-modify existing ones — and the twenty-three are the number that matters.
+forty-nine deliberate entries below, twenty-five are new files and twenty-four
+modify existing ones — and the twenty-four are the number that matters.
 
 ## Where the check runs, and why not on every pull request
 
@@ -57,7 +57,21 @@ is the honest mechanism, not a workflow the fork has to carry.
 
 Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.11`
 
-> All three modules are at `v1.15.0-kcp.11`. `api/` was left behind at
+> **The pin is not a tag right now, and that is a defect with a fix rather
+> than a decision.** The ClusterClass and topology patches below are on the
+> fork's `claude/clusterclass-based-clusters-uketqw` branch and `go.mod` pins
+> the pseudo-version of that branch's head, because the tag this project pins
+> to has to be a signed annotated tag on `kcp/v1.15` and cutting one is not
+> something a session can do for somebody: `git tag -s` signs with a key, and
+> the key is the point.
+>
+> What has to happen before this merges: replay the three commits onto
+> `kcp/v1.15`, tag all three modules `v1.15.0-kcp.12` with `git tag -s`, and
+> repin. Until then `task drift` reports against a ref that will be rewritten,
+> and a build resolves a name anybody with push access can move — which is
+> exactly what the signed-tag rule exists to prevent.
+
+> All three modules are at the same version. `api/` was left behind at
 > `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
 > have pointed a new version at an unchanged tree; it is tagged along with the
 > others again now, which costs nothing and removes a version skew that had to
@@ -117,6 +131,14 @@ cannot build without them. See the feature's research notes (R2).
 | `core/reconcilers/machineset/machineset_controller.go` | **Modified.** The `controller` field narrows to the two methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine and KubeadmControlPlane reconcilers carry, for the same reason. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machinedeployment/machinedeployment_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the MachineDeployment reconciler. | None — carried deliberately, ADR-0003 |
 | `core/reconcilers/machinedeployment/machinedeployment_controller.go` | **Modified.** As the MachineSet reconciler above: the `controller` field narrows to the two methods the reconcile path calls. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/cluster/cluster_controller.go` | **Modified.** A Cluster that is being deleted proceeds when the ClusterClass its topology names is already gone, instead of failing the whole reconcile before it reaches the deletion path — which left the Cluster holding its finalizer, and everything owning it holding theirs, forever. The class is read there only for the availability gates the Available condition summarises, and that consumer already accepts none. A live Cluster still fails. | **Bug fix, upstreamable** — a deleted namespace tears a class down alongside its clusters the same way a deleted APIBinding does |
+| `core/reconcilers/cluster/cluster_controller_test.go` | **Modified.** Both halves of the above: a deleting Cluster is not blocked by a missing ClusterClass, and a live one still is. | **Bug fix, upstreamable** — with the change it covers |
+| `core/reconcilers/clusterclass/clusterclass_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the ClusterClass reconciler. One difference from its single-cluster twin: the ExtensionConfig watch is behind the RuntimeSDK gate. Everything that watch can feed is gated on RuntimeSDK anyway, and a fleet-wide watch on a kind the server does not serve hangs the controller's startup on a cache sync that never comes rather than skipping it. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/topology/cluster/cluster_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the Cluster topology reconciler. Its desired state generator is built from the reconciler's cluster-aware client, so a ClusterClass and its templates resolve in the cluster being reconciled; its external tracker registers runtime watches fleet-wide, with no Cache. Its MachinePool watch is behind the MachinePool gate, which is where the single-cluster setup disagrees with the core Cluster reconciler's — that one is already gated. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/topology/cluster/cluster_controller.go` | **Modified.** The `controller` field narrows to the two methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine, MachineSet, MachineDeployment and KubeadmControlPlane reconcilers carry, for the same reason. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/topology/machinedeployment/machinedeployment_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the topology MachineDeployment reconciler, which deletes the templates a topology-owned MachineDeployment was stamped from. Its Cluster mapper is built against the reconciler's cluster-aware client. | None — carried deliberately, ADR-0003 |
+| `core/reconcilers/topology/machineset/machineset_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the topology MachineSet reconciler. As above. | None — carried deliberately, ADR-0003 |
+| `util/controller/builder_workspace_test.go` | New file. That a predicate given to `MulticlusterBuilder.For` survives into the watch registered against the shared cache, and that a caller passing none gets none. In wildcard mode that builder is never built, so a dropped predicate fails nothing — it widens the primary watch to every object of its type in the shard, silently. The topology controllers are the first callers to pass any. | None — carried deliberately, ADR-0003 |
 | `bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmConfig reconciler. One substantive difference from its single-cluster twin: `KubeadmInitLock` defaults to a mutex over the reconciler's own cluster-aware client rather than the manager's, because the lock is a ConfigMap in the cluster being reconciled and the manager's client addresses no cluster in particular. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmControlPlane reconciler. One behavioural difference: the Machine client that returns the deleted object is built from the reconciler's cluster-aware client rather than from the manager's config, which addresses no cluster in particular here. The cost is the cache-consistency optimisation it enabled; both call sites already handle a nil result. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller.go` | **Modified.** The `controller` field narrows to the three methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine reconciler carries, for the same reason. | None — carried deliberately, ADR-0003 |
@@ -144,8 +166,8 @@ moves.
 
 ### What to watch on the deliberate entries
 
-Fifteen are new files and rebase for free. Twenty modify upstream files, and
-those are the real recurring cost:
+Twenty-five are new files and rebase for free. Twenty-four modify upstream
+files, and those are the real recurring cost:
 
 - `util/controller/controller.go` and `builder.go` — the largest, and the
   one that would conflict with any upstream change to the builder.
@@ -155,9 +177,11 @@ those are the real recurring cost:
   logical cluster.
 - `controllers/external/tracker.go` — one field and one branch.
 - `core/reconcilers/machine/machine_controller.go` — one seam, one field
-  type. This is the only reconciler touched, and its *reconcile logic* is
-  unchanged: `watchClusterNodes` names the same watch with the same
-  arguments and no longer decides how it is built.
+  type. Its *reconcile logic* is unchanged: `watchClusterNodes` names the
+  same watch with the same arguments and no longer decides how it is built.
+- the five reconcilers whose `controller` field is narrowed to the methods
+  their reconcile path calls — Machine, MachineSet, MachineDeployment,
+  KubeadmControlPlane and topology/cluster. One field type each, no logic.
 - the three test files and `go.mod`/`go.sum` — mechanical.
 
 ADR-0003's premise is "unmodified upstream reconcile logic", not

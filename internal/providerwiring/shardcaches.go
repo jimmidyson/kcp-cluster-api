@@ -17,11 +17,13 @@ limitations under the License.
 package providerwiring
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/kcp-dev/logicalcluster/v3"
@@ -73,13 +75,16 @@ import (
 // Not verified against a real multi-shard installation: the test fixture runs a
 // single shard, so the multi-cache path is exercised by unit tests and by the
 // ordering it shares with the single-shard case, and nothing more.
-func NewAPIExportProvider(cfg *rest.Config, endpointSliceName string, scheme *runtime.Scheme, registry *capicontrollerutil.WildcardRegistry) (*mcpprovider.Provider, error) {
+func NewAPIExportProvider(cfg *rest.Config, endpointSliceName string, scheme *runtime.Scheme, registry *capicontrollerutil.WildcardRegistry, opts ...ProviderOption) (*mcpprovider.Provider, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("a WildcardRegistry is required: it is how the fleet-wide watches reach the caches this provider builds")
 	}
 
 	logger := log.Log.WithName("kcp-apiexport-cluster-provider")
 	caches := &shardCaches{registry: registry}
+	for _, opt := range opts {
+		opt(caches)
+	}
 
 	return mcpprovider.NewProvider(cfg, endpointSliceName, mcpprovider.Options{
 		Scheme:                       scheme,
@@ -102,6 +107,17 @@ func NewAPIExportProvider(cfg *rest.Config, endpointSliceName string, scheme *ru
 type shardCaches struct {
 	registry *capicontrollerutil.WildcardRegistry
 
+	// indexes are registered on each shard's cache before its watches are,
+	// and indexCtx is the context they are registered with. See
+	// WithCacheIndexes.
+	indexes  []CacheIndex
+	indexCtx context.Context
+
+	// indexed records the shards whose indexes are already registered.
+	// controller-runtime rejects a second indexer on the same field, and this
+	// callback fires once per workspace rather than once per shard.
+	indexed map[string]struct{}
+
 	// mu guards nothing the registry does not already guard, and exists for the
 	// error: a registration that failed once will fail the same way for every
 	// subsequent workspace on that shard, and reporting it per workspace would
@@ -118,6 +134,16 @@ func (s *shardCaches) newCluster(cfg *rest.Config, clusterName logicalcluster.Na
 	// A registration failure fails the engagement rather than being logged,
 	// because a half-wired shard is worse than a workspace that visibly did not
 	// join — the first is silent.
+	// Indexes before watches, and for the same reason watches come before the
+	// engagement: a field index has to exist before the informer it belongs to
+	// starts, and registering the shard's watches is what starts them.
+	// controller-runtime does not fall back to a scan for a selector it has no
+	// index for - it fails the List - so a reconciler that lists by one against
+	// an unindexed cache never gets an answer.
+	if err := s.addIndexes(cfg.Host, wildcard); err != nil {
+		return nil, err
+	}
+
 	if err := s.registry.AddCache(cfg.Host, wildcard); err != nil {
 		s.mu.Lock()
 		if s.reported == nil {
@@ -133,4 +159,68 @@ func (s *shardCaches) newCluster(cfg *rest.Config, clusterName logicalcluster.Na
 	}
 
 	return mcpcache.NewScopedCluster(cfg, clusterName, wildcard, scheme, recorder)
+}
+
+// CacheIndex is a field index to register on every shard's fleet-spanning
+// cache.
+//
+// It is the same triple client.FieldIndexer takes, held as data because the
+// cache it goes on does not exist when a manager is wired: the provider builds
+// one per endpoint as it sees one, which is after every controller has been
+// declared. Cluster API registers its own indexes against a manager
+// (index.AddDefaultIndexes), and that manager is the local one here - whose
+// cache no reconciler reads through.
+type CacheIndex struct {
+	// Object is the type being indexed.
+	Object client.Object
+	// Field is the field selector the index answers, e.g.
+	// index.ClusterClassRefPath.
+	Field string
+	// Extract returns the values an object is indexed under.
+	Extract client.IndexerFunc
+}
+
+// ProviderOption configures the APIExport provider.
+type ProviderOption func(*shardCaches)
+
+// WithCacheIndexes registers field indexes on each shard's fleet-spanning cache
+// before that shard's watches are registered and before any workspace on it is
+// engaged.
+//
+// The context is the one the indexes are registered with, and outlives the
+// registration: controller-runtime uses it to start the informer being indexed.
+func WithCacheIndexes(ctx context.Context, indexes ...CacheIndex) ProviderOption {
+	return func(s *shardCaches) {
+		s.indexCtx = ctx
+		s.indexes = append(s.indexes, indexes...)
+	}
+}
+
+// addIndexes registers the declared indexes on one shard's cache, once.
+func (s *shardCaches) addIndexes(host string, wildcard mcpcache.WildcardCache) error {
+	if len(s.indexes) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	if s.indexed == nil {
+		s.indexed = map[string]struct{}{}
+	}
+	_, done := s.indexed[host]
+	s.indexed[host] = struct{}{}
+	s.mu.Unlock()
+	if done {
+		return nil
+	}
+
+	ctx := s.indexCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, idx := range s.indexes {
+		if err := wildcard.IndexField(ctx, idx.Object, idx.Field, idx.Extract); err != nil {
+			return fmt.Errorf("indexing %T by %s on the cache for %s: %w", idx.Object, idx.Field, host, err)
+		}
+	}
+	return nil
 }

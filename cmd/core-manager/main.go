@@ -148,6 +148,10 @@ func initFlags(fs *pflag.FlagSet) {
 	// (see test/integration/dockerbackend's crdPaths comment). Exposing
 	// these flags lets an operator disable a gate instead of also having to
 	// publish and bind that type's CRD.
+	// This project's defaults, set before the flag is defined so that
+	// --feature-gates overrides them rather than the other way round. See
+	// coremanager.SetFeatureGateDefaults for what differs from upstream.
+	coremanager.MustSetFeatureGateDefaults()
 	feature.MutableGates.AddFlag(fs)
 }
 
@@ -184,7 +188,11 @@ func main() {
 	// a registry rather than a value passed one way.
 	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
 
-	provider, err := providerwiring.NewAPIExportProvider(cfg, endpointSliceName, scheme, wildcardRegistry)
+	provider, err := providerwiring.NewAPIExportProvider(cfg, endpointSliceName, scheme, wildcardRegistry,
+		// The indexes this process's controllers list through, registered on
+		// each shard's cache before its watches are. See
+		// coremanager.FleetCacheIndexes.
+		providerwiring.WithCacheIndexes(ctx, coremanager.FleetCacheIndexes()...))
 	if err != nil {
 		setupLog.Error(err, "Unable to construct kcp APIExport cluster provider")
 		os.Exit(1)

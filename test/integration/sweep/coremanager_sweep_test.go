@@ -47,7 +47,6 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
@@ -62,14 +61,26 @@ import (
 var (
 	coreReconcilerCoreCRDs = []string{
 		"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
+		// The ClusterClass controller is wired whenever ClusterTopology is on,
+		// which is this project's default, and it watches this type. Publishing
+		// it is not optional for the same reason the rest of this list is not:
+		// an unserved watched type hangs the controller rather than skipping it.
+		"core/config/crd/bases/cluster.x-k8s.io_clusterclasses.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
 		"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
+		// Read by the topology reconciler on every reconcile of a managed
+		// topology, whatever the MachinePool gate says. Published, not enabled.
+		"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
 	}
 	coreReconcilerDevCRDs = []string{
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
+		// Both templates, because a ClusterClass names one of each: nothing
+		// watches or reconciles them, and the topology controller reads them to
+		// stamp the DevCluster and each Machine's DevMachine.
+		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclustertemplates.yaml",
 		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
 	}
 	coreReconcilerBootstrapCRDs = []string{
@@ -194,12 +205,6 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
-
-			// MachinePool defaults to enabled upstream, and the core
-			// reconcilers watch it as an event source when it is on — which
-			// would stall their cache sync here, because this sweep publishes
-			// the ADR-0001 D3 scope and MachinePool is not in it.
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 
 			// Process-global, installed once: the contract-metadata and
 			// conversion resolvers the core reconcilers need to resolve

@@ -44,7 +44,6 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/feature"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
@@ -131,7 +130,6 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
-			must(t, feature.MutableGates.Set("MachinePool=false"))
 			coremanager.SetupProcessGlobals()
 
 			debugPort, minPort, maxPort := muxPorts(t)
@@ -158,7 +156,7 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 			for n := range objects {
 				name := objectName(tn, n)
 
-				cluster := demo.NewCluster(name, demo.BackendInMemory, false)
+				cluster := bareCluster(name)
 				if err := tn.directClient.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
 					t.Fatalf("creating Cluster %s in workspace %s: %v", name, tn.name, err)
 				}
@@ -169,7 +167,7 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 					t.Fatalf("reading back Cluster %s in workspace %s: %v", name, tn.name, err)
 				}
 
-				devCluster := demo.NewDevCluster(name, demo.BackendInMemory)
+				devCluster := newDevCluster(name)
 				devCluster.OwnerReferences = []metav1.OwnerReference{{
 					APIVersion: clusterv1.GroupVersion.String(),
 					Kind:       "Cluster",

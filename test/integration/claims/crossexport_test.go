@@ -154,7 +154,7 @@ func TestCoreCanReachAnotherExportsTypes(t *testing.T) {
 
 	// A DevCluster in the workspace, created the ordinary way through the
 	// infrastructure provider's own API.
-	devCluster := demo.NewDevCluster("split-00", demo.BackendInMemory)
+	devCluster := newDevCluster("split-00")
 	if err := wsClient.Create(ctx, devCluster); err != nil {
 		t.Fatalf("creating the DevCluster: %v", err)
 	}
@@ -288,7 +288,7 @@ func assertWildcardWatchSeesClaimedType(
 
 	// Created after the watch is established, so what arrives is an event
 	// rather than a replay.
-	watched := demo.NewDevCluster("split-watched", demo.BackendInMemory)
+	watched := newDevCluster("split-watched")
 	if err := wsClient.Create(ctx, watched); err != nil {
 		t.Fatalf("creating the watched DevCluster: %v", err)
 	}
@@ -334,4 +334,20 @@ func waitForIdentityHash(t *testing.T, ctx context.Context, cl client.Client, na
 		t.Fatalf("APIExport %s never got an identity hash: %v", name, err)
 	}
 	return hash
+}
+
+// newDevCluster builds a bare in-memory DevCluster.
+//
+// Local rather than from internal/demo, because what this test needs is an
+// object of another export to reach across at, not a cluster. A demo cluster is
+// a ClusterClass based cluster and its DevCluster is stamped by the topology
+// controller from a template - which is the wrong shape entirely for a test
+// that creates one object and asks who can see it.
+func newDevCluster(name string) *infrav1.DevCluster {
+	return &infrav1.DevCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: demo.Namespace},
+		Spec: infrav1.DevClusterSpec{
+			Backend: infrav1.DevClusterBackendSpec{InMemory: &infrav1.InMemoryClusterBackendSpec{}},
+		},
+	}
 }

@@ -47,7 +47,9 @@ each export claims what its own controllers touch:
 
 ```
 core        ──claims kubeadmconfigs, kubeadmcontrolplanes──► bootstrap, controlplane
+core        ──claims their templates too ─────────────────► bootstrap, controlplane
 core        ──claims devclusters, devmachines─────────────► dev-infrastructure
+core        ──claims their templates too ─────────────────► dev-infrastructure
 bootstrap   ──claims clusters, machines───────────────────► core
 bootstrap   ──claims kubeadmcontrolplanes─────────────────► controlplane
 controlplane──claims machines (writes them) ──────────────► core
@@ -63,6 +65,17 @@ does not only watch other providers' types, it **authors** them: a
 KubeadmControlPlane creates the Machines its control plane is made of, the
 KubeadmConfigs that bootstrap them, and a DevMachine per Machine from the
 infrastructure template. Three of its claims are writes.
+
+Core became the second such provider when it started serving ClusterClass based
+clusters. Its topology controller does not merely dereference the templates a
+class names — it **creates** the object stamped from each one: the
+infrastructure cluster from a `DevClusterTemplate`, the control plane from a
+`KubeadmControlPlaneTemplate`, and a MachineDeployment's bootstrap and
+infrastructure templates per worker class. So every template a class can name
+is claimed alongside the object stamped from it. It also claims `delete` on
+`Secret`s, which the rest of core does not need: the topology controller owns
+its work through a *cluster shim* Secret until the Cluster can own it, and then
+deletes it.
 
 Each of those was found by running the thing, not by reading the code: a
 missing claim does not fail at startup, it fails at the first reconcile that

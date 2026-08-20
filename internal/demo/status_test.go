@@ -25,16 +25,27 @@ import (
 
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 )
 
+// devClusterFor stands in for the infrastructure cluster the topology
+// controller stamps from the class, which is what the status table reads. Its
+// contents do not matter here; that it exists, and is named after its Cluster,
+// does.
+func devClusterFor(cluster string) *infrav1.DevCluster {
+	return &infrav1.DevCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: InfraClusterName(cluster), Namespace: Namespace},
+	}
+}
+
 func provisionedCluster() *clusterv1.Cluster {
-	cluster := NewCluster(ClusterName(0), BackendInMemory, false)
+	cluster := NewCluster(ClusterName(0), 1, 1, DefaultKubernetesVersion)
 	cluster.Status.Initialization.InfrastructureProvisioned = ptr.To(true)
 	return cluster
 }
 
 func TestSummariseProvisioned(t *testing.T) {
-	got := Summarise("root:demo-1", "abcdef", provisionedCluster(), NewDevCluster(ClusterName(0), BackendInMemory))
+	got := Summarise("root:demo-1", "abcdef", provisionedCluster(), devClusterFor(ClusterName(0)))
 	if !got.Provisioned {
 		t.Errorf("Summarise(...).Provisioned = false, want true")
 	}
@@ -46,7 +57,7 @@ func TestSummariseProvisioned(t *testing.T) {
 // What a cluster is waiting on is the whole value of the table while a demo
 // is still running, so the condition's reason has to reach the row.
 func TestSummariseReportsWhatItIsWaitingOn(t *testing.T) {
-	cluster := NewCluster(ClusterName(0), BackendInMemory, false)
+	cluster := NewCluster(ClusterName(0), 1, 1, DefaultKubernetesVersion)
 	cluster.Status.Conditions = []metav1.Condition{{
 		Type:    string(clusterv1.ClusterInfrastructureReadyCondition),
 		Status:  metav1.ConditionFalse,
@@ -54,7 +65,7 @@ func TestSummariseReportsWhatItIsWaitingOn(t *testing.T) {
 		Message: "waiting for the load balancer",
 	}}
 
-	got := Summarise("root:demo-1", "abcdef", cluster, NewDevCluster(ClusterName(0), BackendInMemory))
+	got := Summarise("root:demo-1", "abcdef", cluster, devClusterFor(ClusterName(0)))
 	if got.Provisioned {
 		t.Error("Summarise(...).Provisioned = true for a cluster whose infrastructure is not ready")
 	}
@@ -64,7 +75,7 @@ func TestSummariseReportsWhatItIsWaitingOn(t *testing.T) {
 }
 
 func TestSummariseMissingDevCluster(t *testing.T) {
-	got := Summarise("root:demo-1", "abcdef", NewCluster(ClusterName(0), BackendInMemory, false), nil)
+	got := Summarise("root:demo-1", "abcdef", NewCluster(ClusterName(0), 1, 1, DefaultKubernetesVersion), nil)
 	if got.Provisioned {
 		t.Error("Summarise(...).Provisioned = true with no DevCluster")
 	}
@@ -123,7 +134,7 @@ func TestSummariseReady(t *testing.T) {
 		Reason: clusterv1.ClusterAvailableReason,
 	}}
 
-	got := Summarise("root:demo-1", "abcdef", cluster, NewDevCluster(ClusterName(0), BackendInMemory))
+	got := Summarise("root:demo-1", "abcdef", cluster, devClusterFor(ClusterName(0)))
 	if !got.Ready {
 		t.Errorf("Summarise(...).Ready = false for an Available cluster, detail %q", got.Detail)
 	}
@@ -141,7 +152,7 @@ func TestSummariseProvisionedIsNotReady(t *testing.T) {
 		Message: "control plane is not available",
 	}}
 
-	got := Summarise("root:demo-1", "abcdef", cluster, NewDevCluster(ClusterName(0), BackendInMemory))
+	got := Summarise("root:demo-1", "abcdef", cluster, devClusterFor(ClusterName(0)))
 	if got.Ready {
 		t.Error("Summarise(...).Ready = true for a cluster whose Available condition is false")
 	}
