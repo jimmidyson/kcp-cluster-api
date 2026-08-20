@@ -54,29 +54,39 @@ having to reconstruct the answer from the commit log.
   because variable defaulting is a webhook's job; runtime extensions, which
   stay behind `RuntimeSDK`; and upgrade-through-the-class, which is its own
   feature with its own measurements.
-- **The fork model has a decided shape for more than one provider, and none of
-  it is built yet.**
+- **The fork model is two layers, not three: the CAPX port retired the third.**
   [ADR-0004](adr-0004-scaling-to-many-provider-forks.md) settles that the
-  two-repository split stays — neither merge is available — and that the
-  boundary becomes three layers: shared multicluster plumbing as its own
-  module, one thin patch-carrier fork per upstream repository, and per-provider
-  integration as modules in this repository rather than separate repositories.
-  Per Principle VIII nothing is built for a set of one, so the triggers are
-  named instead, and the second provider is named with them: **CAPX**
-  (`cluster-api-provider-nutanix`). Reading CAPX before porting it already
-  changed the ADR — its reconcilers are public, so a fork can be cut from a
-  release tag rather than a `main` commit; it is one Go module, so the
-  three-tag rule turns out to be a Cluster API fact rather than a general one;
-  and it carries two name-collision faults of the class the dev provider
-  needed patching for, which a CAPX fork under this project's ownership
-  (`jimmidyson/cluster-api-provider-nutanix`) will carry — a provider is
-  pinned at a fork this project controls, never at an upstream repository.
+  two-repository split stays — neither merge is available — and that a provider
+  is a patch-carrier fork under this project's ownership plus an integration
+  module here. It originally proposed a third layer, shared multicluster
+  plumbing extracted to its own module, deferred behind the named trigger "the
+  CAPX fork needing any of the five sources".
 
-  What the ADR changes today is the fork's admission rule — a new file
-  justifies itself against the shared layer before being carried — and two
-  corrections: the design site and `go.mod` described a single-patch fork that
-  ADR-0003 replaced, and the `replace` directives are now recorded as
-  non-propagating.
+  **That trigger fired and the layer was not needed.** CAPX is forked at
+  [`kcp/v1.11`](https://github.com/jimmidyson/cluster-api-provider-nutanix/tree/kcp/v1.11)
+  with both reconcilers wired fleet-wide, and it imports nothing from
+  `util/multicluster` — it reaches the lifting machinery through
+  `util/controller`, which it already depends on because it depends on Cluster
+  API. The "strange edge" the ADR worried about is the dependency every
+  infrastructure provider already has. L1 is retired; what would revive it is a
+  consumer needing those files without depending on Cluster API, which an
+  infrastructure provider cannot be.
+
+  The other blocker went the other way and was **confirmed**: CAPX's `go.mod`
+  had to restate all three `replace` directives to resolve the fork at all,
+  which is the pin-propagation hazard observed on the first consumer that is
+  not this repository.
+
+  The forward-port cost far less than predicted — six paths so far against the
+  dev provider's 17, and the version skew cost one dead-code deletion rather
+  than a rewrite. **That figure is partial**: the integration module is
+  unbuilt and none of the three name collisions is fixed, and each fix adds to
+  it.
+
+  **Next on CAPX:** fix the collisions on the fork, then build the integration
+  module — which is where the untested claim now lives, that L3 modules can
+  share one `Taskfile` and verification contract across differing dependency
+  graphs.
 
 - **Providers are separate deployments with separate APIExports.** One export
   per provider (`internal/capiexports`), one binary each, and the claims
