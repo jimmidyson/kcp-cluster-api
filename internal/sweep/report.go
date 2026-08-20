@@ -153,6 +153,52 @@ func Take(phase Phase, label string, workspaces int, counter *Counter) Sample {
 // It returns whether the count actually settled. A caller that gets false has
 // measured a process still in motion and should say so rather than quietly
 // reporting the number.
+// SettleReleased waits for a shrinking process to stop shrinking.
+//
+// [Settle] waits for the goroutine count to stop *changing*, which is the
+// right question while a process is starting up and the wrong one while it is
+// tearing down. A teardown does not descend smoothly: it releases a batch,
+// pauses while something with its own timeout gives up, then releases another.
+// A pause is indistinguishable from an ending as far as Settle can tell, so on
+// a loaded machine it returns in the middle of one and the sample counts
+// goroutines that were always going to go.
+//
+// That is not a hypothetical. It is the flake that failed the fleet sweep's
+// retention assertion twice on commits that had passed before, at 2.0 and then
+// 3.0 goroutines per departed workspace against a budget of zero — a number
+// that moved run to run because it was measuring where the pause fell, not
+// what the process kept.
+//
+// So this waits for a different thing: no *new low* for quiet. A count that
+// jitters upward - a timer, a keepalive, the runtime's own bookkeeping - does
+// not reset it, because that is noise on top of a teardown that has finished.
+// A count that reaches a value it has not reached before does, because that is
+// the teardown still going.
+//
+// It returns whether the process stopped shrinking. False means the caller has
+// measured something still in motion, exactly as with Settle.
+func SettleReleased(quiet time.Duration, timeout time.Duration) bool {
+	const interval = 100 * time.Millisecond
+
+	deadline := time.Now().Add(timeout)
+	quietFor := time.Duration(0)
+	lowest := runtime.NumGoroutine()
+
+	for time.Now().Before(deadline) {
+		time.Sleep(interval)
+		if current := runtime.NumGoroutine(); current < lowest {
+			lowest = current
+			quietFor = 0
+			continue
+		}
+		quietFor += interval
+		if quietFor >= quiet {
+			return true
+		}
+	}
+	return false
+}
+
 func Settle(quiet time.Duration, timeout time.Duration) bool {
 	const interval = 100 * time.Millisecond
 

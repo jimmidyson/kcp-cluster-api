@@ -103,6 +103,14 @@ const (
 	settleQuiet   = 2 * time.Second
 	settleTimeout = 120 * time.Second
 
+	// releaseQuiet is the same idea for the teardown samples, and longer.
+	// Those wait on things giving up rather than on things starting - a
+	// connection closing, a workqueue draining, an informer being told to
+	// stop - and on a loaded runner those arrive in batches with pauses
+	// between them. Two seconds is comfortably inside such a pause; see
+	// sweep.SettleReleased for the flake that established it.
+	releaseQuiet = 8 * time.Second
+
 	// retainedGoroutinesPerEventHandler is what one event-handler registration
 	// costs after the workspace that made it has gone: the processorListener
 	// run/pop pair kcp's informers start per handler. Measured rather than
@@ -314,6 +322,16 @@ func settle(t *testing.T, what string) {
 	t.Helper()
 	if !sweep.Settle(settleQuiet, settleTimeout) {
 		t.Fatalf("the goroutine count never settled %s: a sample taken now would measure work in flight rather than what the process costs", what)
+	}
+}
+
+// settleReleased is settle for a teardown sample, where the question is
+// whether everything that is going to be given back has been rather than
+// whether the count is momentarily still. See sweep.SettleReleased.
+func settleReleased(t *testing.T, what string) {
+	t.Helper()
+	if !sweep.SettleReleased(releaseQuiet, settleTimeout) {
+		t.Fatalf("the process was still releasing %s: a sample taken now would count goroutines that were about to go, and report them as retained", what)
 	}
 }
 
@@ -563,7 +581,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 				cfg.diagnose(t, ctx, tn, objectCount)
 			}
 		})
-		settle(t, fmt.Sprintf("with %d workspaces left", remaining))
+		settleReleased(t, fmt.Sprintf("with %d workspaces left", remaining))
 		sample(t, report, counter, sweep.PhaseDisengaged, fmt.Sprintf("%d left", remaining), remaining)
 	}
 
