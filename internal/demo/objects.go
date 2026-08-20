@@ -59,14 +59,35 @@ func (b Backend) Validate() error {
 // demonstrated is the workspace, not the namespace.
 const Namespace = "default"
 
+// defaultAPIServerPort is what the DevCluster admission webhook defaults a
+// docker-backed cluster's control plane port to. Repeated here because the
+// demo does not run that webhook; see NewDevCluster.
+const defaultAPIServerPort = 6443
+
 // NewDevCluster builds the infrastructure object for one demo cluster.
 func NewDevCluster(name string, backend Backend) *infrav1.DevCluster {
-	spec := infrav1.DevClusterBackendSpec{}
+	spec := infrav1.DevClusterSpec{}
 	switch backend {
 	case BackendDocker:
-		spec.Docker = &infrav1.DockerClusterBackendSpec{}
+		spec.Backend.Docker = &infrav1.DockerClusterBackendSpec{}
+		// The port the admission webhook would have defaulted.
+		//
+		// The demo serves no webhooks - they are single-workspace by
+		// construction until G4 lands - so everything it creates has to be
+		// fully specified. That is stated in the design doc and was not true
+		// here: the docker backend takes the control plane port from the spec
+		// and only sets the host itself, so without this the endpoint is
+		// {host, 0}, which APIEndpoint.IsValid rejects. The control plane
+		// provider then returns early from initControlPlaneScope on every
+		// reconcile and never creates a Machine, forever, with the DevCluster
+		// reporting itself provisioned throughout.
+		//
+		// The in-memory backend does not need it because it assigns the port
+		// of the listener it started, which is why only the docker path was
+		// affected.
+		spec.ControlPlaneEndpoint.Port = defaultAPIServerPort
 	default:
-		spec.InMemory = &infrav1.InMemoryClusterBackendSpec{}
+		spec.Backend.InMemory = &infrav1.InMemoryClusterBackendSpec{}
 	}
 
 	return &infrav1.DevCluster{
@@ -75,7 +96,7 @@ func NewDevCluster(name string, backend Backend) *infrav1.DevCluster {
 			Namespace: Namespace,
 			Labels:    map[string]string{DemoLabel: name},
 		},
-		Spec: infrav1.DevClusterSpec{Backend: spec},
+		Spec: spec,
 	}
 }
 
