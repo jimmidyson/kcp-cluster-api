@@ -163,3 +163,10 @@ The same run is an integration test — `test/integration/demo`, part of
 `task verify` — which additionally asserts the isolation the table cannot show:
 that each workspace sees exactly its own cluster, and that the status written
 into it was written for that workspace.
+
+## Going through it a piece at a time
+
+[The walkthrough](walkthrough.md) runs this same demo and then stops at each
+part — workspaces, exports, bindings, permission claims, and the virtual
+workspace one manager watches — with the `kubectl` commands to see each of them
+for yourself. It assumes no kcp knowledge.

@@ -20,3 +20,11 @@ go.work.sum
 
 # `task demo` keeps its kcp server's state and log here.
 .demo/
+
+# Documentation site build output. `npm install` and `npm run build` under
+# docs/site are what the documentation policy tells contributors to run, and
+# they leave all of this behind; CI builds the site from a clean checkout.
+docs/site/node_modules/
+docs/site/public/
+docs/site/resources/
+docs/site/.hugo_build.lock
