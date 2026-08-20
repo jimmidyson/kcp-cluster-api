@@ -492,13 +492,13 @@ Ask it for every `Cluster` on the shard, using `*` as the logical cluster:
 ```sh
 export VW=$KCP/services/apiexport/root/cluster-api-core
 kubectl --context base --server "$VW/clusters/*" get clusters -A \
-  -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAME:.metadata.name,PHASE:.status.phase'
+  -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAMESPACE:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase'
 ```
 
 ```
-LOGICAL CLUSTER    NAME      PHASE
-2pes8qc13ri2fa4y   demo-00   Provisioned
-2yqfrtuq4cjeh3n5   demo-00   Provisioned
+LOGICAL CLUSTER    NAMESPACE   NAME      PHASE
+2pes8qc13ri2fa4y   default     demo-00   Provisioned
+2yqfrtuq4cjeh3n5   default     demo-00   Provisioned
 ```
 
 Two clusters, same name, from two workspaces, in **one request over one watch
