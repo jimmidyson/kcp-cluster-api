@@ -100,8 +100,101 @@ kubectl --context base --server $KCP/clusters/root:capi-demo-1 get namespaces
 kubectl --context base --server $KCP/clusters/2yqfrtuq4cjeh3n5 get namespaces
 ```
 
-Objects carry the logical cluster, not the path — which is why the status
-table prints both.
+### What a logical cluster actually is
+
+Creating a `Workspace` does two things. kcp allocates a **logical cluster** —
+the partition on a shard that objects will really be stored in — and gives it an
+opaque identifier. The `Workspace` object you created stays behind in the
+*parent* workspace as the handle that names that partition and manages its
+lifecycle. It is not the workspace's contents; nothing you create inside the
+workspace is stored anywhere near it.
+
+So the two rows above are different kinds of thing, not two spellings of one:
+
+- The **path** is a lookup key. `root:capi-demo-1` says where the handle sits in
+  the tree, and kcp resolves it to a logical cluster on every request. Rename the
+  workspace or move it under a different parent and the path changes with it.
+- The **logical cluster** is what is being addressed. Its identifier is assigned
+  once, when the workspace is created, and is never reused or changed — it
+  survives any renaming above it. It is not the `Workspace` object's
+  `metadata.uid`, which identifies the handle rather than the partition.
+
+Inside every logical cluster sits exactly one object describing it — a
+`LogicalCluster` named `cluster` — and every other object stored there carries
+the identifier in a `kcp.io/cluster` annotation. That annotation is what the
+fleet-wide query in [step 8](#8-the-multicluster-part) prints, and it is how a
+manager knows which workspace an object it is reconciling came from.
+
+Anything that has to survive a rename therefore names the logical cluster rather
+than the path: those object annotations, the wildcard view, and flags such as
+`--webhook-workspace-cluster-name` in [Installation](installation.md).
+
+### Getting a workspace's logical cluster ID
+
+Three ways, all returning the same string. Which one you want depends on what
+you are holding: the parent, the workspace itself, or an object out of it.
+
+**From the parent.** A `Workspace`'s `spec.cluster` is the logical cluster it
+points at, so the parent lists the whole mapping:
+
+```sh
+kubectl --context base --server $KCP/clusters/root get workspaces \
+  -o custom-columns='PATH:.metadata.name,LOGICAL CLUSTER:.spec.cluster,PHASE:.status.phase'
+```
+
+```
+PATH          LOGICAL CLUSTER    PHASE
+capi-demo-1   2yqfrtuq4cjeh3n5   Ready
+capi-demo-2   2pes8qc13ri2fa4y   Ready
+```
+
+Those are the two identifiers the status table in step 1 printed — the demo
+reads them from the same field. For a single workspace:
+
+```sh
+kubectl --context base --server $KCP/clusters/root \
+  get workspace capi-demo-1 -o jsonpath='{.spec.cluster}{"\n"}'
+```
+
+**From inside the workspace**, where there is no parent to ask — the
+`LogicalCluster` object is the partition describing itself, and its URL ends in
+the identifier:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 get logicalcluster
+```
+
+```
+NAME      PHASE   URL                                                 AGE
+cluster   Ready   https://localhost:33799/clusters/2yqfrtuq4cjeh3n5   3m
+```
+
+Its annotations carry both names, so this is also how you go the other way —
+from an identifier you found in a log line or a wildcard query back to a path a
+human will recognise:
+
+```sh
+kubectl --context base --server $KCP/clusters/2yqfrtuq4cjeh3n5 \
+  get logicalcluster cluster \
+  -o jsonpath='{.metadata.annotations.kcp\.io/path}{"\n"}'
+```
+
+```
+root:capi-demo-1
+```
+
+**From any object in it**, which is the one that works when all you have is a
+dumped object:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 \
+  get namespace default \
+  -o jsonpath='{.metadata.annotations.kcp\.io/cluster}{"\n"}'
+```
+
+`root` is the exception to the opaque identifiers: its own logical cluster is
+called `root`, so there — and nowhere else — the path and the identifier are the
+same string.
 
 ## 3. APIExport: publishing an API for others to use
 
