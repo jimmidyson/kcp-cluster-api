@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -219,5 +220,43 @@ func TestSettleReleasedWaitsForAFallingCount(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < time.Duration(held)*100*time.Millisecond {
 		t.Errorf("SettleReleased returned after %s, before the %d releases spaced 120ms apart could finish: it sampled mid-teardown",
 			elapsed, held)
+	}
+}
+
+// TestTakeLowestKeepsTheLowestGoroutineCount is the hole the first attempt at
+// this left open: settling says the process stopped giving things back, but
+// the very next instant can be two goroutines above its own settled low, and
+// sampling that instant reports those two as retained by every workspace that
+// departed.
+func TestTakeLowestKeepsTheLowestGoroutineCount(t *testing.T) {
+	// Two goroutines that exist for the first sample and not the rest — the
+	// shape of a transient that inflates whichever read lands on it.
+	release := make(chan struct{})
+	for range 2 {
+		go func() { <-release }()
+	}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		close(release)
+	}()
+
+	baseline := runtime.NumGoroutine()
+	s := TakeLowest(6, 100*time.Millisecond, PhaseDisengaged, "teardown", 1, nil)
+
+	if s.Goroutines >= baseline {
+		t.Errorf("TakeLowest kept %d goroutines with %d live at the start, so it sampled while the transients were still up",
+			s.Goroutines, baseline)
+	}
+	if s.Phase != PhaseDisengaged || s.Workspaces != 1 || s.Label != "teardown" {
+		t.Errorf("TakeLowest lost the sample's identity: %+v", s)
+	}
+}
+
+// TestTakeLowestTakesOneSampleWhenAskedFor is the degenerate case, so the
+// helper cannot be a hidden minimum of some other number of reads.
+func TestTakeLowestTakesOneSampleWhenAskedFor(t *testing.T) {
+	s := TakeLowest(1, time.Millisecond, PhaseActive, "single", 3, nil)
+	if s.Workspaces != 3 || s.Phase != PhaseActive {
+		t.Errorf("TakeLowest(1, ...) returned %+v", s)
 	}
 }
