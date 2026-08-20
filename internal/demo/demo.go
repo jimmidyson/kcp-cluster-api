@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package demo stands the whole system up against one kcp shard and drives it
-// until every workspace has a provisioned cluster.
+// until every workspace has a ready cluster.
 //
 // It exists because the project's own end-to-end behaviour was only reachable
 // by reading a test: the wiring worked, and the only way to watch it work was
@@ -90,8 +90,19 @@ const (
 	DefaultWorkspacePrefix = "capi-demo"
 	DefaultWorkspaces      = 2
 	DefaultClusters        = 1
-	DefaultTimeout         = 5 * time.Minute
-	DefaultPollInterval    = 2 * time.Second
+
+	// What cmd/demo asks for when nothing says otherwise. One of each is the
+	// smallest cluster that can reach ready: a control plane to be available
+	// and connected to, and a worker to show that a machine nobody named came
+	// up too.
+	//
+	// Constants rather than flag literals so the demo and the tests that drive
+	// internal/demo agree on what "the default demo" is.
+	DefaultControlPlaneMachines = 1
+	DefaultWorkerMachines       = 1
+
+	DefaultTimeout      = 5 * time.Minute
+	DefaultPollInterval = 2 * time.Second
 )
 
 // coreCRDs and devCRDs are the types the demo publishes, per ADR-0001's D3
@@ -165,13 +176,15 @@ type Options struct {
 	ClustersPerWorkspace int
 
 	// ControlPlaneMachines is how many control plane machines each cluster
-	// gets. Zero means none, and none is the default: a machine needs the
-	// bootstrap provider, which is wired only when some are asked for.
+	// gets, as a KubeadmControlPlane the Cluster points at. Asking for any
+	// wires the kubeadm bootstrap and control plane providers, which create
+	// each machine's Machine, KubeadmConfig and DevMachine themselves.
 	//
-	// Each one is a Machine, a KubeadmConfig and a DevMachine. They are
-	// standalone control plane machines - the Cluster has no controlPlaneRef -
-	// because the control plane provider is the conversion plan's P2 and is
-	// not wired.
+	// Zero means none, and a run with none cannot reach ready - there is no
+	// control plane for the Cluster's Available condition to summarise - so it
+	// waits for provisioned instead. See Result.Ready. cmd/demo asks for one
+	// by default, because a demo that stops short of a cluster is not showing
+	// the thing it exists to show.
 	ControlPlaneMachines int
 
 	// WorkerMachines is how many worker machines each cluster gets, as a
@@ -196,7 +209,7 @@ type Options struct {
 	// the caller to look at or assert on.
 	RunManager bool
 
-	// Timeout bounds waiting for every cluster to be provisioned. Zero means
+	// Timeout bounds waiting for every cluster to be ready. Zero means
 	// DefaultTimeout.
 	Timeout time.Duration
 
@@ -409,8 +422,7 @@ func ManagerScheme() (*runtime.Scheme, error) {
 
 // Run publishes the APIExport, creates and binds the workspaces, starts the
 // manager (unless told not to), creates a cluster in every workspace, and
-// waits for all of them to be provisioned - printing the status table as it
-// goes.
+// waits for all of them to be ready - printing the status table as it goes.
 //
 // It returns the last snapshot whether or not every cluster made it, so a
 // caller can report what did happen rather than only that something did not.

@@ -437,15 +437,15 @@ this process wires that provider. See
 [The bootstrap provider](site/content/en/docs/design/bootstrap-provider.md).
 
 **P8**: `test/integration/demo` now does both at once. Two workspaces reconcile
-a Cluster→DevCluster to provisioned concurrently, under one manager, and the
-test asserts what nothing did before — each workspace sees exactly its own
-Cluster, and each DevCluster is owned by the Cluster in its own workspace. It
-runs in `task verify`, and `task demo` is the same code with a person watching.
+a Cluster→DevCluster to ready concurrently, under one manager, and the test
+asserts what nothing did before — each workspace sees exactly its own Cluster,
+and each DevCluster is owned by the Cluster in its own workspace. It runs in
+`task verify`, and `task demo` is the same code with a person watching.
 
-What is left of P8 is the Machine half: the demo stops at cluster
-infrastructure because a Machine reaching Ready needs a bootstrap provider and
-a control-plane provider (P1 and P2). Creating Machines that could only sit
-unprovisioned would not extend the proof.
+The Machine half of P8 is done too. It waited on P1 and P2, and with both wired
+the demo's done-condition is readiness rather than provisioned infrastructure:
+the Cluster's `Available` condition, every control plane replica it was asked
+for, and every Machine Ready, control plane and worker alike.
 
 **Unsettled:** this table lists G3 as a dependency of P1–P3, while Phase 2
 records G3's trigger as P5 alone — i.e. that a ported provider binary needs
