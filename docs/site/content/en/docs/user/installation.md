@@ -109,7 +109,9 @@ bin/core-manager \
 
 - `--webhook-workspace-cluster-name` is the *internal logical cluster name* —
   not the human-readable workspace path — of the one workspace whose
-  admission and conversion webhooks this process serves. Getting it wrong
+  admission and conversion webhooks this process serves. It is the workspace's
+  `spec.cluster` as its parent reports it; [the walkthrough](walkthrough.md#getting-a-workspaces-logical-cluster-id)
+  covers what that identifier is and the three ways to read it. Getting it wrong
   looks like a manager that starts cleanly, reconciles normally, and then
   exits after waiting for a workspace that never appears
   (`--engage-timeout`, 5 minutes by default).
