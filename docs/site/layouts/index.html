@@ -1,0 +1,26 @@
+{{/*
+  The site has no landing page of its own: "/" is a redirect straight into
+  the user docs, which is what anyone arriving at the site is after. Docsy's
+  home template is deliberately not used.
+
+  This is a client-side redirect because GitHub Pages serves static files
+  only — there is no server-side rewrite to configure. Belt and braces:
+  the refresh covers script-less clients, the script avoids leaving a
+  history entry, and rel=canonical keeps search engines pointed at the real
+  page rather than this stub.
+*/}}
+{{- $target := "docs/user/" | relURL -}}
+<!doctype html>
+<html lang="{{ .Site.Language.Lang }}">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="refresh" content="0; url={{ $target }}">
+    <meta name="robots" content="noindex">
+    <link rel="canonical" href="{{ "docs/user/" | absURL }}">
+    <title>{{ .Site.Title }}</title>
+    <script>window.location.replace({{ $target }});</script>
+  </head>
+  <body>
+    <p>Redirecting to the <a href="{{ $target }}">kcp-cluster-api user docs</a>.</p>
+  </body>
+</html>
