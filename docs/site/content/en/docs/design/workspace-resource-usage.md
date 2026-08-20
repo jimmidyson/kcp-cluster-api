@@ -323,6 +323,29 @@ empties the `APIExportEndpointSlice` when the last `APIBinding` goes, the
 provider stops watching that endpoint, and the shared cache goes with it. That
 is the large drop at the last departure in every sweep.
 
+### How the figure is arrived at
+
+Retention is a difference between two samples: a teardown sample and the one
+taken at the same workspace count on the way up. Both describe a process
+serving *k* workspaces, so what separates them is what the workspaces that left
+did not give back.
+
+Two things stop that difference from being a coin flip. **Every workspace count
+with both ends contributes an estimate**, and the lowest is taken — a goroutine
+that has not gone yet inflates an estimate and a transient inflates it, while
+nothing pushes one below what is genuinely still held, so a shape that really
+retains per departure retains it in every pair while a one-off survives in
+none. And **the fleet sweep runs three workspaces rather than two**, because
+two give exactly one pair and therefore nothing to check that pair against.
+That is not hypothetical: the assertion failed three times at 2.0 and 3.0 on a
+single pair whose two ends differed by a handful of goroutines, on a process
+whose heap had grown by half between them.
+
+When the budget is exceeded the run prints the stacks that grew between the two
+samples the figure came from, which is the same subtraction that found the
+deadlock above — done by CI on the failing run rather than by hand on a later
+one.
+
 **What fixing the per-workspace seam would take**, for a provider that still
 needs one: the per-workspace manager handed to a `SetupFunc` would have to hand
 out a cache that records the handler registrations made through it and removes
