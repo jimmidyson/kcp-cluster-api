@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths: ['docs/site/**', '.github/workflows/docs.yaml']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ['docs/site/**', '.github/workflows/docs.yaml']
 
 permissions:

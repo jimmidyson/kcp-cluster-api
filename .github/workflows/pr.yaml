@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege by default; jobs that need more say so.
 permissions:
@@ -15,6 +16,13 @@ concurrency:
 
 # The pull request title check lives in `pr-title.yaml`, because it needs to
 # fire on `edited` and nothing in this workflow should.
+#
+# The types are spelled out rather than left to the `pull_request:` default so
+# that `ready_for_review` can be added to them. Drafts do fire `opened` and
+# `synchronize`, so this is not the only run a draft ever gets; it is here
+# because `cancel-in-progress` below kills a draft's in-flight run on the next
+# push, and without `ready_for_review` the pull request can become reviewable
+# with the cancelled run as the last word on its head commit.
 
 jobs:
   verify:
