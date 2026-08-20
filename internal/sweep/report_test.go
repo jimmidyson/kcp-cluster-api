@@ -159,3 +159,65 @@ func TestReportWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestSettleReleasedIgnoresJitterUpward is the difference between the two
+// settles, stated as a test: a count that rises is a teardown that has
+// finished plus noise, and must not restart the clock.
+func TestSettleReleasedIgnoresJitterUpward(t *testing.T) {
+	// Goroutines that come and go while nothing is being released. Settle's
+	// rule - the count must be *equal* - is disturbed by these; SettleReleased
+	// only cares about new lows.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			done := make(chan struct{})
+			go func() { <-done }()
+			time.Sleep(20 * time.Millisecond)
+			close(done)
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	if !SettleReleased(300*time.Millisecond, 20*time.Second) {
+		t.Error("SettleReleased did not return while the count only jittered upward, so a teardown sample would never be taken")
+	}
+}
+
+// TestSettleReleasedWaitsForAFallingCount is the other half: while new lows
+// keep arriving, the process is still giving things back and a sample would
+// count what is about to go.
+func TestSettleReleasedWaitsForAFallingCount(t *testing.T) {
+	// A pool of goroutines released one at a time, with a gap longer than the
+	// quiet period between batches - the shape of a real teardown, and the
+	// shape Settle mistakes for an ending.
+	const held = 12
+	release := make(chan struct{})
+	for range held {
+		go func() { <-release }()
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	go func() {
+		for range held {
+			release <- struct{}{}
+			time.Sleep(120 * time.Millisecond)
+		}
+	}()
+
+	start := time.Now()
+	if !SettleReleased(300*time.Millisecond, 20*time.Second) {
+		t.Fatal("SettleReleased timed out")
+	}
+	// It must have waited out the releases rather than returning during the
+	// first gap between them.
+	if elapsed := time.Since(start); elapsed < time.Duration(held)*100*time.Millisecond {
+		t.Errorf("SettleReleased returned after %s, before the %d releases spaced 120ms apart could finish: it sampled mid-teardown",
+			elapsed, held)
+	}
+}
