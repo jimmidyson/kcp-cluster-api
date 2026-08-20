@@ -75,8 +75,9 @@ root                     the four APIExports
 ```
 
 Two grants per user, and nothing else: `access` plus workspace reads in their
-own home, and full use of the Cluster API groups in the workspaces they own.
-Everything a tenant cannot do is something nothing granted them.
+own home, and read of the Cluster API groups plus write of one type — the
+`Cluster` — in the workspaces they own. Everything a tenant cannot do is
+something nothing granted them.
 
 **The org workspace is the part that is not decoration.** Two facts about kcp
 put it there:
@@ -130,6 +131,41 @@ carry the rule.
 
 The second binding is the ordinary one: `demo-home-owner` in a home,
 `demo-workspace-owner` in a workspace, resolved by ordinary RBAC.
+
+## One writable type, because the cluster is a topology
+
+`demo-workspace-owner` grants `get`/`list`/`watch` across all four Cluster API
+groups and `create`/`update`/`patch`/`delete` on `clusters` alone.
+
+That is a consequence of clusters being ClusterClass based. A tenant's `Cluster`
+names a class and a shape; the `DevCluster`, the `KubeadmControlPlane`, the
+worker `MachineDeployment` and the templates each is stamped from are created by
+the topology controller under the **manager's** identity, never the tenant's.
+Scaling and version changes do not reopen the question either — both are fields
+of `spec.topology`, which write on `clusters` already carries. A tenant who
+could write the objects underneath would be holding the grant the hand-built
+model needed, against a demo that no longer builds clusters that way.
+
+The blueprint is the other half. The `ClusterClass` and its five templates are
+seeded into each workspace by whoever runs the demo, the way a platform operator
+seeds a tenant's, and are read-only once there: writing a class decides what a
+cluster in this installation is made of, which is not the tenant's answer to
+give. Because they cannot create one either, the only class a tenant can point
+`spec.topology.classRef` at is the one they were given — RBAC cannot narrow a
+write by field, but here it does not need to.
+
+Two things are deliberately absent. Write on `clusterclasses`, for the reason
+above. And `delete` on `machines` — a real operation and a real temptation, but
+it is remediation, which is the platform's job here, and a `Machine` deleted
+underneath the topology controller is a change it did not make.
+
+The role reads the whole four groups by wildcard rather than naming each type,
+so that an export publishing a new type does not silently fall outside what an
+owner may watch. The write rule names one resource, because that is the whole
+claim and it should be readable as such.
+
+Unit tests hold both halves: every type the four exports publish is readable,
+and none but `clusters` is writable.
 
 ## Why impersonation rather than credentials
 

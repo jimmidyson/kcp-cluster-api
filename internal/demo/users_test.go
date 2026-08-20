@@ -115,6 +115,79 @@ func TestWorkspaceRoleGrantsClusterAPIButNotTenancy(t *testing.T) {
 	}
 }
 
+// A ClusterClass based cluster has exactly one object its owner writes: the
+// Cluster. Everything below it - the DevCluster, the KubeadmControlPlane, the
+// worker MachineDeployment and the templates each is stamped from - is created
+// by the topology controller under the manager's identity, never the tenant's,
+// so a tenant who could write them would be holding the grant the hand-built
+// model needed and this demo no longer has.
+//
+// Scaling and version changes do not reopen it. Both are fields of
+// spec.topology, so write on clusters already carries them.
+func TestWorkspaceRoleWritesNothingButClusters(t *testing.T) {
+	// Every type the four provider APIExports publish - see
+	// internal/capiexports. A type missing from this table is a type this
+	// test says nothing about.
+	published := map[string][]string{
+		"cluster.x-k8s.io":                {"clusters", "clusterclasses", "machines", "machinesets", "machinedeployments"},
+		"bootstrap.cluster.x-k8s.io":      {"kubeadmconfigs", "kubeadmconfigtemplates"},
+		"controlplane.cluster.x-k8s.io":   {"kubeadmcontrolplanes", "kubeadmcontrolplanetemplates"},
+		"infrastructure.cluster.x-k8s.io": {"devclusters", "devclustertemplates", "devmachines", "devmachinetemplates"},
+	}
+
+	role := NewWorkspaceRole()
+	for group, resources := range published {
+		for _, resource := range resources {
+			// Read on everything: an owner watches what their cluster became,
+			// which is most of what a tenant does with these types at all.
+			for _, verb := range []string{"get", "list", "watch"} {
+				if !grants(role.Rules, group, resource, verb) {
+					t.Errorf("workspace role does not grant %s on %s/%s, so an owner cannot watch what their cluster became: %+v",
+						verb, group, resource, role.Rules)
+				}
+			}
+
+			writable := group == "cluster.x-k8s.io" && resource == "clusters"
+			for _, verb := range []string{"create", "update", "patch", "delete"} {
+				got := grants(role.Rules, group, resource, verb)
+				if got && !writable {
+					t.Errorf("workspace role grants %s on %s/%s, which the topology controller writes and a tenant does not: %+v",
+						verb, group, resource, role.Rules)
+				}
+				if !got && writable {
+					t.Errorf("workspace role does not grant %s on %s/%s, so an owner cannot manage their own cluster: %+v",
+						verb, group, resource, role.Rules)
+				}
+			}
+		}
+	}
+}
+
+// The two writes most likely to be added back, and the reason neither belongs
+// to a tenant. Both are covered by the table above; they are named here so
+// that the answer is findable by whoever is about to ask the question.
+func TestWorkspaceRoleWithholdsTheTemptingWrites(t *testing.T) {
+	role := NewWorkspaceRole()
+
+	// Writing a ClusterClass is authoring the blueprint rather than using it:
+	// it decides what a cluster in this installation is made of. That answer
+	// is the platform's, which is why the class and its templates are seeded
+	// into the workspace for the tenant and read-only once there.
+	for _, verb := range []string{"create", "update", "patch", "delete"} {
+		if grants(role.Rules, "cluster.x-k8s.io", "clusterclasses", verb) {
+			t.Errorf("workspace role grants %s on clusterclasses, so a tenant could author the blueprint: %+v", verb, role.Rules)
+		}
+	}
+
+	// Deleting a Machine to force a replacement is a real operation and a real
+	// temptation. It is remediation, which is the platform's job here; a
+	// tenant changes their cluster through spec.topology, and a Machine
+	// deleted underneath the topology controller is a change it did not make.
+	if grants(role.Rules, "cluster.x-k8s.io", "machines", "delete") {
+		t.Errorf("workspace role grants delete on machines, which is remediation rather than a tenant's own change: %+v", role.Rules)
+	}
+}
+
 // Entry into a workspace is kcp's built-in role, bound rather than reproduced.
 // Writing the rule out - verb "access" on the non-resource URL "/" - would work
 // today and would be a copy of kcp's own policy, drifting silently the day kcp
