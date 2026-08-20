@@ -1,6 +1,6 @@
 # ADR-0004: Scaling the fork model to many providers
 
-Status: **proposed**, 2026-08-20
+Status: **accepted**, decided 2026-08-20
 
 This project supports one infrastructure provider today, and that provider is
 upstream's *test* one. Supporting a real one means a second patched fork, and
@@ -224,6 +224,15 @@ took that decision for the Cluster API wiring. Whether to *also* propose these
 two upstream in CAPX is a separate call, deliberately not made here: being
 upstreamable changes what a `DRIFT.md` entry says about itself, not where the
 patch lives.
+
+That classification is not optional, though, and this ADR being accepted does
+not pre-authorise skipping it. Principle I gives a carried patch two lawful
+states: **pending**, with a filing date no more than 90 days out, or
+**deliberate**, carried under a decision that says so. Every entry in a CAPX
+drift record picks one when it is written. What this ADR settles is only that
+the patch lives in the fork either way; it does not make a CAPX record's
+entries deliberate by default, and an undated pending entry is the same defect
+there as here.
 
 ### Three structural facts that change this ADR's own conclusions
 
