@@ -158,6 +158,24 @@ were written. Every future provider fork needs them, and would reach them by
 depending on this project's Cluster API fork — which is a strange edge for a
 CAPA fork to have.
 
+A throwaway module confirms it rather than leaving it at an import check.
+The five sources above, plus the two unit tests that belong to them
+(`recorder_test.go`, `wildcard_registry_test.go`), compile as a standalone
+module against controller-runtime, multicluster-runtime and `k8s.io/*` alone;
+`go list -m all` shows **no Cluster API module anywhere in the transitive
+graph**, and both test packages pass. So the files are free of Cluster API
+*assumptions*, not merely of Cluster API *imports*.
+
+One file does not come along, and finding it is why the spike was worth
+running. `util/multicluster/fleet_test.go` imports
+`sigs.k8s.io/cluster-api/util/controller` and drives the primitives through
+`capicontrollerutil.NewMulticlusterControllerManagedBy` — the CAPI-coupled
+builder. It is an integration test of L1 *through* L2, not an L1 unit test, so
+it stays with the fork unless rewritten against a plain controller-runtime
+builder. The extractable set is therefore **five sources and two unit tests**,
+and L1 starts life with one less test than the drift record's `util/multicluster`
+entries suggest.
+
 `util/controller/builder_workspace.go` is the counter-example and marks the
 boundary: it imports `cluster-api/feature`, `cluster-api/util/cache` and
 `cluster-api/util/predicates`, and belongs where it is.
@@ -268,8 +286,9 @@ silently forces the others forward.
 ## The decision: three layers
 
 **L1 — shared multicluster plumbing.** A module of its own, depending on
-controller-runtime and multicluster-runtime and *not* on Cluster API. The six
-files above, plus whichever parts of `internal/` prove to have a second caller.
+controller-runtime and multicluster-runtime and *not* on Cluster API. The five
+sources and two unit tests above, plus whichever parts of `internal/` prove to
+have a second caller.
 Every fork and every integration imports it. This is the layer that must not
 exist four times.
 
@@ -322,13 +341,13 @@ is the thing that principle exists to stop. So:
 
 | Layer | State | Trigger to build |
 |---|---|---|
-| L1 | not built | the CAPX fork needing any of the six files |
+| L1 | not built | the CAPX fork needing any of the five sources |
 | L2 | exists, one instance | the tightened admission rule applies from now; the second instance is the CAPX fork |
 | L3 | exists, one instance, not yet a module boundary | the CAPX integration |
 
 Naming CAPX rather than "a second provider" is the difference between a
 deferral and a plan. It also makes each trigger falsifiable: if the CAPX port
-turns out to need none of the six L1 files, L1 is not built and this ADR was
+turns out to need none of the five L1 sources, L1 is not built and this ADR was
 wrong about what is shared.
 
 Principle VIII also requires that deferral be recorded as a decision naming its
@@ -361,7 +380,7 @@ graph. Generalising it means passing the module path alongside the record path
 
 - The fork's contract gains a rule it did not have: new files justify
   themselves against L1 before being carried. This applies to the next patch,
-  not retroactively — the six files stay where they are until L1's trigger
+  not retroactively — they stay where they are until L1's trigger
   fires.
 - Adding a provider becomes: fork it into this project's ownership (L2),
   integrate it as a module here (L3), and — from the second one — import
@@ -404,9 +423,11 @@ graph. Generalising it means passing the module path alongside the record path
   may need fewer.
 - Whether the two collisions are accepted upstream in CAPX is unknown, and
   nothing has been filed. If they are, they never become drift.
-- The six L1 files are shown free of Cluster API *imports*. That they are free
-  of Cluster API *assumptions* is likely but unverified; extraction is the
-  test, and it has not been run.
+- The L1 sources are now shown free of Cluster API *assumptions*, not merely
+  imports — a standalone module compiles and tests them with no Cluster API in
+  its module graph. What that does **not** establish is that the API shape
+  survives a second caller with different needs; only CAPX tests that. An
+  extraction that compiles is a necessary condition, not a sufficient one.
 - Whether L3's modules can share a `Taskfile` and verification contract across
   differing dependency graphs is untested. It is the main risk in preferring a
   multi-module repository to four repositories, and it is cheap to test at
