@@ -115,6 +115,15 @@ func TestClusterTopologyCarriesTheRequestedShape(t *testing.T) {
 	if len(none.Spec.Topology.Workers.MachineDeployments) != 0 {
 		t.Errorf("a cluster asking for no workers declares %d machine deployments", len(none.Spec.Topology.Workers.MachineDeployments))
 	}
+
+	// Zero control plane machines is still a stated zero, not an absent field.
+	// A class always names a control plane template, so the cluster gets a
+	// control plane object either way - and left unstated its replica count
+	// would be waiting for a webhook this project does not serve.
+	noControlPlane := NewCluster(ClusterName(0), 0, 0, DefaultKubernetesVersion)
+	if got := noControlPlane.Spec.Topology.ControlPlane.Replicas; got == nil || *got != 0 {
+		t.Errorf("topology.controlPlane.replicas = %v for a cluster asking for no control plane machines, want a stated 0", got)
+	}
 }
 
 // TestClusterClassRefersOnlyToTemplatesTheBlueprintCreates is the invariant a

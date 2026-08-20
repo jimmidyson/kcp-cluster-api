@@ -76,7 +76,7 @@ func main() {
 		workspaces      = flag.Int("workspaces", demo.DefaultWorkspaces, "How many workspaces to create, bind and provision a cluster in.")
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
 		workers         = flag.Int("worker-machines", demo.DefaultWorkerMachines, "Worker machines per cluster, as a MachineDeployment. Needs --control-plane-machines: a worker has no control plane to join otherwise.")
-		machines        = flag.Int("control-plane-machines", demo.DefaultControlPlaneMachines, "Control plane replicas per cluster. Asking for any creates a KubeadmControlPlane and wires the kubeadm bootstrap and control plane providers, which create the Machines themselves. Zero stops the run at provisioned infrastructure, because a cluster with no control plane has no readiness to reach.")
+		machines        = flag.Int("control-plane-machines", demo.DefaultControlPlaneMachines, "Control plane replicas per cluster. The ClusterClass always names a control plane, so a cluster always gets one; this is how many machines it is asked for. Zero stops the run at provisioned infrastructure, because a control plane with no machines has no readiness to reach.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
 		workspacePrefix = flag.String("workspace-prefix", demo.DefaultWorkspacePrefix, "Prefix for the created workspace names.")

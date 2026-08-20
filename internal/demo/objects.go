@@ -356,10 +356,14 @@ func NewCluster(name string, controlPlaneMachines, workerMachines int, version s
 		Version:  version,
 	}
 
-	if controlPlaneMachines > 0 {
-		topology.ControlPlane = clusterv1.ControlPlaneTopology{
-			Replicas: ptr.To(int32(controlPlaneMachines)), //nolint:gosec // a replica count from a flag, not arithmetic on untrusted input.
-		}
+	// Always stated, zero included. A ClusterClass names a control plane
+	// template, so a cluster built from one always has a control plane object
+	// - and a topology that left the replica count out would have the control
+	// plane provider waiting for a webhook to default it, which this project
+	// does not serve. Zero replicas is a control plane with no machines, which
+	// is what asking for none now means.
+	topology.ControlPlane = clusterv1.ControlPlaneTopology{
+		Replicas: ptr.To(int32(controlPlaneMachines)), //nolint:gosec // a replica count from a flag, not arithmetic on untrusted input.
 	}
 
 	// Workers need a control plane to join, so a run that asks for them asks
