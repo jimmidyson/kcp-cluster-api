@@ -443,7 +443,7 @@ different binary/concern."
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
 | P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
 | P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation. The container-runtime suite (`test/integration/dockerbackend`) still drives one workspace to Machine and only engages a second | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation. On a real container runtime the same shape reaches ready Clusters, initialized control planes and bootstrapped Machines, and stops at Node readiness for want of a CNI nothing here installs (see below) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
 | P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
@@ -494,10 +494,62 @@ the Cluster's `Available` condition, every control plane replica it was asked
 for, and every Machine Ready, control plane and worker alike.
 
 What is left of P8 is the backend rather than the shape. That proof runs on the
-dev provider's in-memory backend; `test/integration/dockerbackend` is the one
-that uses a real container runtime, and it still takes a single workspace to
-Machine and does no more than engage a second. Taking two of those to ready
-concurrently needs no new wiring — only the runtime budget to do it.
+dev provider's in-memory backend, where the workload cluster is a process, its
+API server is a fake and its Node objects are written rather than joined.
+`test/integration/dockerbackend` is the one that uses a real container runtime.
+
+### What two container-backed workspaces reach, and where they stop
+
+Measured, on a branch that takes two workspaces to ready on the docker backend
+concurrently. It is not merged, and the paragraph below is why.
+
+The wiring works against a real API server. Both Clusters reach ready, both
+control planes initialize and report `Available`, and both Machines bootstrap
+and reach `Running` with their own data secret, in two workspaces whose objects
+share names and stay separate. That is the whole chain P8 exists to prove, and
+it took a defect to get there: `NewDevCluster` gave a docker-backed cluster a
+control plane endpoint host and no port, so nothing could dial the workload
+cluster. The in-memory backend assigns its own port and never exercised that
+path, which is the argument for this suite in one sentence.
+
+**It stops at Node readiness, and the reason is not a defect.** Both Machines
+sit at:
+
+```
+Node.Ready: container runtime network not ready: NetworkReady=false
+reason:NetworkPluginNotReady message:Network plugin returns error:
+cni plugin not initialized
+```
+
+A kubeadm cluster's Node stays `NotReady` until a CNI is applied, and nothing in
+this repository applies one — the string `cni` does not appear in it. The
+in-memory backend never raised the question because it writes its Nodes rather
+than joining them. So "two container-backed workspaces reach ready" is not a
+budget away; it needs a CNI installed into each workload cluster, with a
+manifest to apply and images the runner can pull.
+
+Two routes, neither taken yet: install a CNI and keep the readiness assertion,
+or assert what a container runtime proves without one — ready Clusters,
+initialized control planes, bootstrapped Machines — which is already more than
+any in-memory suite establishes.
+
+**Unexplained, and recorded rather than guessed at:** throughout that run the
+KubeadmControlPlane's etcd health check failed to connect, for twelve minutes
+rather than transiently:
+
+```
+grpc: addrConn.createTransport failed to connect to {Addr: "etcd-demo-00-cp-…"}
+… error upgrading connection: tls: failed to verify certificate:
+x509: certificate signed by unknown authority (… candidate authority
+certificate "kubernetes")
+```
+
+That is a port-forward upgrade against the workload API server whose CA does not
+verify — while the `ClusterCache`'s own connection to the same cluster works,
+since `RemoteConnectionProbe` passes and the Clusters report ready. Two clients
+resolving the workload CA differently is the shape of it; which one is wrong,
+and whether this gates control plane readiness independently of the CNI, is not
+yet established.
 
 **Settled: G3 is not a dependency of P1–P3.** This table listed it as one,
 while Phase 2 recorded G3's trigger as P5 alone — i.e. that a ported provider
