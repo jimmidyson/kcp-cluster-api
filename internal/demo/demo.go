@@ -171,6 +171,22 @@ type Options struct {
 	// DefaultWorkspaces.
 	Workspaces int
 
+	// Users are the tenants the workspaces are shared out between, one home
+	// workspace each under an org workspace the demo owns. Asking for any
+	// turns the run into a multi-tenant one: every workspace gets an owner,
+	// each owner is granted only their own, and the run reports what each of
+	// them can and cannot read of the others (Result.Access).
+	//
+	// Empty means no users at all: every workspace sits directly under Parent
+	// and only the demo's own credentials ever touch it. That is what the
+	// sweeps and the scale harness drive, because what they measure is the
+	// controllers rather than the tenancy. cmd/demo asks for DefaultUsers,
+	// because a demo of a multi-tenant system with one tenant is not one.
+	//
+	// There must be at least as many workspaces as users; a tenant with no
+	// workspace is a row of nothing in every table.
+	Users []string
+
 	// ClustersPerWorkspace is how many Cluster/DevCluster pairs each
 	// workspace gets. Zero means DefaultClusters.
 	ClustersPerWorkspace int
@@ -297,6 +313,13 @@ func (o Options) validate() error {
 	if o.WorkerMachines > 0 && o.ControlPlaneMachines == 0 {
 		return errors.New("WorkerMachines without ControlPlaneMachines: a worker has no control plane to join")
 	}
+	if err := validateUsers(o.Users); err != nil {
+		return err
+	}
+	if len(o.Users) > o.Workspaces {
+		return fmt.Errorf("%d users and %d workspaces: a user with no workspace owns nothing to be isolated from",
+			len(o.Users), o.Workspaces)
+	}
 	return o.Backend.Validate()
 }
 
@@ -305,6 +328,11 @@ func (o Options) validate() error {
 type Workspace struct {
 	Path           string
 	LogicalCluster string
+
+	// Owner is the user this workspace belongs to, or empty when the run has
+	// no users. It is the demo's own record of who was granted what, and it is
+	// what the access checks compare kcp's answers against.
+	Owner string
 
 	// Client is scoped to this workspace and bypasses the manager's caches
 	// entirely, so what it reads is what the shard holds for this workspace
@@ -317,6 +345,23 @@ type Workspace struct {
 type Result struct {
 	Workspaces []Workspace
 	Statuses   []ClusterStatus
+
+	// Users is every tenant the run created, or empty when it had none.
+	Users []User
+
+	// Org is the workspace holding every user's home. Empty when the run had
+	// no users.
+	Org string
+
+	// Parent is the workspace the exports were published in and the org
+	// workspace was created under. It is reported because it is the top of the
+	// tree a tenant can see anything of at all - see AccessCheck.
+	Parent string
+
+	// Access is what each user could and could not read of every other user's
+	// workspaces, as kcp answered it. Empty when the run had no users, and
+	// when the run did not get far enough to ask.
+	Access []AccessCheck
 
 	// Machines is every Machine the workspaces hold - created by the control
 	// plane provider, not by the demo.
@@ -397,6 +442,18 @@ func (r Result) Ready() bool {
 		AllMachinesReady(r.Machines)
 }
 
+// Isolated reports whether every access check came out as intended: each user
+// read their own workspaces, and none of them read anybody else's or the org
+// workspace holding every home. The parent workspace is reported rather than
+// asserted and does not count either way - see AccessCheck.Reported.
+//
+// A run with no users is not isolated, for the reason an empty check set is
+// not: it demonstrated nothing about tenancy, which is a different answer from
+// demonstrating that tenancy holds.
+func (r Result) Isolated() bool {
+	return Isolated(r.Access)
+}
+
 func fixtureScheme() (*runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
@@ -470,22 +527,38 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	// 2. Create the workspaces and bind each to the export. The endpoint
+	// 2. The tenants, when the run has any: an org workspace holding one home
+	// workspace per user, each readable only by its own user. Everything a
+	// user owns is created inside their home, so the isolation the run reports
+	// is a property of where the workspaces are and who was granted what -
+	// not of anything the demo does at read time.
+	users, err := ensureUsers(ctx, opts, parentClient, scheme, log)
+	if err != nil {
+		return Result{}, err
+	}
+
+	// 3. Create the workspaces and bind each to the export. The endpoint
 	// slice stays empty until at least one binding consumes the export, so
 	// this has to happen before anything waits on it.
-	workspaces := make([]Workspace, 0, opts.Workspaces)
-	for i := 1; i <= opts.Workspaces; i++ {
-		name := fmt.Sprintf("%s-%d", opts.WorkspacePrefix, i)
-		clusterName, err := kcpfixtures.EnsureWorkspace(ctx, parentClient, name, time.Minute)
+	plans := PlanWorkspaces(opts.Parent, opts.WorkspacePrefix, opts.Users, opts.Workspaces)
+	workspaces := make([]Workspace, 0, len(plans))
+	for _, plan := range plans {
+		planParent := parentClient
+		if plan.Parent != opts.Parent {
+			planParent, err = clientFor(opts.BaseConfig, plan.Parent, scheme)
+			if err != nil {
+				return Result{}, err
+			}
+		}
+		clusterName, err := kcpfixtures.EnsureWorkspace(ctx, planParent, plan.Name, time.Minute)
 		if err != nil {
 			return Result{}, err
 		}
 
-		wsPath := parentPath.Join(name)
-		wsCfg := kcpclient.SetCluster(rest.CopyConfig(opts.BaseConfig), wsPath)
-		wsClient, err := client.New(wsCfg, client.Options{Scheme: scheme})
+		wsPath := logicalcluster.NewPath(plan.Path)
+		wsClient, err := clientFor(opts.BaseConfig, plan.Path, scheme)
 		if err != nil {
-			return Result{}, fmt.Errorf("building a client for workspace %s: %w", wsPath, err)
+			return Result{}, err
 		}
 
 		// One binding per export, each accepting that export's claims. A
@@ -504,10 +577,19 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 		}
 
-		log.Info("Workspace bound", "workspace", wsPath.String(), "logicalCluster", clusterName)
+		// The owner's grant last, so that a workspace a tenant can enter is
+		// one that already serves the types they were granted use of.
+		if plan.Owner != "" {
+			if err := GrantOwner(ctx, wsClient, NewWorkspaceRole(), plan.Owner); err != nil {
+				return Result{}, fmt.Errorf("granting %s their workspace %s: %w", plan.Owner, plan.Path, err)
+			}
+		}
+
+		log.Info("Workspace bound", "workspace", wsPath.String(), "logicalCluster", clusterName, "owner", plan.Owner)
 		workspaces = append(workspaces, Workspace{
 			Path:           wsPath.String(),
 			LogicalCluster: clusterName,
+			Owner:          plan.Owner,
 			Client:         wsClient,
 		})
 	}
@@ -518,7 +600,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	// 3. The manager: the same wiring cmd/core-manager runs, serving every
+	// 4. The manager: the same wiring cmd/core-manager runs, serving every
 	// workspace bound to the export from one set of controllers.
 	var manager mcmanager.Manager
 	var byExport map[string]mcmanager.Manager
@@ -546,7 +628,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	// 4. A cluster in every workspace, all with the same names.
+	// 5. A cluster in every workspace, all with the same names.
 	for _, ws := range workspaces {
 		for n := range opts.ClustersPerWorkspace {
 			name := ClusterName(n)
@@ -593,17 +675,97 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			"workerMachines", opts.ClustersPerWorkspace*opts.WorkerMachines)
 	}
 
-	// 5. Anything the caller has to do while they come up, in parallel with
+	// 6. Anything the caller has to do while they come up, in parallel with
 	// watching. See Options.WhileProvisioning.
 	if opts.WhileProvisioning != nil {
 		go opts.WhileProvisioning(ctx, workspaces)
 	}
 
-	// 6. Watch them come up.
-	result, err := waitForReady(ctx, opts, workspaces)
+	// 7. Watch them come up.
+	result, waitErr := waitForReady(ctx, opts, workspaces)
 	result.Manager = manager
 	result.Managers = byExport
-	return result, err
+	result.Users = users
+	result.Org = OrgPath(opts.Parent, opts.WorkspacePrefix)
+	result.Parent = opts.Parent
+	if waitErr != nil {
+		return result, waitErr
+	}
+
+	// 8. Ask kcp, as each user in turn, what it will let them read of the
+	// others. Last, because a check that ran before the clusters existed
+	// would report an empty list where it means to report a leak.
+	//
+	// Returned rather than printed: unlike the status tables there is nothing
+	// to watch here, so it belongs with the run's final report rather than in
+	// the poll loop. cmd/demo renders it there.
+	if len(users) > 0 {
+		access, err := CheckAccess(ctx, opts.BaseConfig, opts.Parent, result.Org, users, workspaces)
+		if err != nil {
+			return result, fmt.Errorf("checking what each user can read: %w", err)
+		}
+		result.Access = access
+	}
+	return result, nil
+}
+
+// clientFor builds a client scoped to one workspace path.
+func clientFor(base *rest.Config, path string, scheme *runtime.Scheme) (client.Client, error) {
+	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(path))
+	cl, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, fmt.Errorf("building a client for workspace %s: %w", path, err)
+	}
+	return cl, nil
+}
+
+// ensureUsers creates the org workspace and one home workspace per user, and
+// grants each user their own home and nothing else.
+//
+// The org workspace is what makes the demonstration mean anything. kcp's root
+// workspace grants every authenticated user tenancy reads by default, so homes
+// created directly under root would be listable by everybody; under an org
+// workspace nothing grants, a user can read their own home and is refused
+// every other, including the org itself. A run with no users creates none of
+// this.
+func ensureUsers(
+	ctx context.Context,
+	opts Options,
+	parentClient client.Client,
+	scheme *runtime.Scheme,
+	log logr.Logger,
+) ([]User, error) {
+	if len(opts.Users) == 0 {
+		return nil, nil
+	}
+
+	orgPath := OrgPath(opts.Parent, opts.WorkspacePrefix)
+	if _, err := kcpfixtures.EnsureWorkspace(ctx, parentClient, opts.WorkspacePrefix, time.Minute); err != nil {
+		return nil, fmt.Errorf("creating the org workspace %s: %w", orgPath, err)
+	}
+	orgClient, err := clientFor(opts.BaseConfig, orgPath, scheme)
+	if err != nil {
+		return nil, err
+	}
+
+	users := make([]User, 0, len(opts.Users))
+	for _, name := range opts.Users {
+		if _, err := kcpfixtures.EnsureWorkspace(ctx, orgClient, name, time.Minute); err != nil {
+			return nil, fmt.Errorf("creating %s's home workspace: %w", name, err)
+		}
+		homePath := HomePath(opts.Parent, opts.WorkspacePrefix, name)
+		homeClient, err := clientFor(opts.BaseConfig, homePath, scheme)
+		if err != nil {
+			return nil, err
+		}
+		if err := GrantOwner(ctx, homeClient, NewHomeRole(), name); err != nil {
+			return nil, fmt.Errorf("granting %s their home workspace: %w", name, err)
+		}
+
+		log.Info("User home workspace ready", "user", name, "workspace", homePath)
+		users = append(users, User{Name: name, Home: homePath})
+	}
+	return users, nil
 }
 
 func create(ctx context.Context, cl client.Client, obj client.Object) error {

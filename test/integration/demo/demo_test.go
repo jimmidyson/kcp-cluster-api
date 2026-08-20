@@ -17,8 +17,9 @@ limitations under the License.
 */
 
 // Package demo_test runs the demo against a real kcp server and asserts the
-// two things it exists to show: every workspace's cluster is provisioned by
-// one manager, and no workspace's objects are another's.
+// three things it exists to show: every workspace's cluster is provisioned by
+// one manager, no workspace's objects are another's, and no tenant can read
+// another tenant's workspaces or what is in them.
 //
 // This is the conversion plan's P8 in the shape P8 was missing - many
 // workspaces and a full infrastructure reconcile at the same time, with
@@ -49,6 +50,12 @@ import (
 // anything; a third would cost a minute of test time to demonstrate it again.
 const workspaces = 2
 
+// users is one per workspace, so that every workspace has an owner and every
+// owner has something to be isolated from. Two is what makes "the other one"
+// mean anything; a third would pay another minute of test time to say it
+// again.
+var users = []string{"alice", "bob"}
+
 func TestDemoBringsEveryWorkspaceToAReadyCluster(t *testing.T) {
 	ctrl.SetLogger(testr.New(t))
 	ctx := t.Context()
@@ -58,6 +65,10 @@ func TestDemoBringsEveryWorkspaceToAReadyCluster(t *testing.T) {
 	result, err := demo.Run(ctx, demo.Options{
 		BaseConfig: server.BaseConfig(t),
 		Workspaces: workspaces,
+		// One tenant per workspace, each granted their own and nothing else.
+		// The run reports what kcp let each of them read of the others, which
+		// is asserted below.
+		Users: users,
 		// The in-memory backend, so this needs no container runtime and pulls
 		// no images. The docker backend is the same reconcilers over a real
 		// container runtime, and is exercised by
@@ -114,6 +125,65 @@ func TestDemoBringsEveryWorkspaceToAReadyCluster(t *testing.T) {
 	}
 
 	assertWorkspacesAreIsolated(t, result)
+	assertUsersAreIsolated(t, result)
+}
+
+// assertUsersAreIsolated is the tenancy question asked of kcp rather than of
+// the objects: not "does each workspace hold only its own cluster" but "can
+// the person who owns one workspace see anything of another's".
+//
+// Both halves are asserted, because a run where every check was refused would
+// satisfy "no user read another's" while demonstrating nothing at all - it is
+// what a broken grant looks like, and it is the failure mode a check that only
+// counted denials would report as a pass.
+func assertUsersAreIsolated(t *testing.T, result demo.Result) {
+	t.Helper()
+
+	if len(result.Users) != len(users) {
+		t.Fatalf("run created %d users, want %d", len(result.Users), len(users))
+	}
+	if len(result.Access) == 0 {
+		t.Fatal("the run reported no access checks, so it asserted nothing about tenancy")
+	}
+
+	var allowed, denied int
+	for _, check := range result.Access {
+		if check.Owner == check.User && check.Allowed {
+			allowed++
+		}
+		if check.Owner != check.User && !check.Allowed {
+			denied++
+		}
+	}
+	if allowed == 0 {
+		t.Errorf("no user could read their own workspaces:\n%s", accessTable(result))
+	}
+	if denied == 0 {
+		t.Errorf("no user was refused another's workspaces:\n%s", accessTable(result))
+	}
+	if !result.Isolated() {
+		t.Errorf("the users are not isolated from each other:\n%s", accessTable(result))
+	}
+
+	// Every workspace has exactly one owner and the owners differ, which is
+	// what makes the checks above about two tenants rather than one.
+	owners := map[string]string{}
+	for _, ws := range result.Workspaces {
+		if ws.Owner == "" {
+			t.Errorf("workspace %s has no owner", ws.Path)
+			continue
+		}
+		if other, ok := owners[ws.Owner]; ok {
+			t.Errorf("workspaces %s and %s share the owner %s, so neither is another tenant's", other, ws.Path, ws.Owner)
+		}
+		owners[ws.Owner] = ws.Path
+	}
+}
+
+func accessTable(result demo.Result) string {
+	var sb strings.Builder
+	_ = demo.RenderAccessTable(&sb, result.Access)
+	return sb.String()
 }
 
 // assertWorkspacesAreIsolated is the property a multi-workspace demo exists to
