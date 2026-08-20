@@ -50,7 +50,7 @@ root:capi-demo-2  2pes8qc13ri2fa4y  demo-00  yes          yes    cluster ready
 
 Leave that terminal alone and open a second one. Everything below runs there.
 
-### A shorthand for the rest of the page
+### Pointing kubectl at kcp
 
 kcp is a Kubernetes API server, so `kubectl` talks to it. The one unusual part
 is that *which workspace you are in* is a URL path, so you re-point `--server`
@@ -60,15 +60,16 @@ run, it is random:
 ```sh
 cd /path/to/kcp-cluster-api
 export KCP=https://localhost:33799          # yours will differ
-alias k='kubectl --kubeconfig .demo/kcp/admin.kubeconfig --context base'
+export KUBECONFIG=$PWD/.demo/kcp/admin.kubeconfig
 ```
 
-The `base` context is deliberately *cluster-unaware*: it points at the server
-without choosing a workspace, so the `--server` you pass decides. Check it
-works:
+Every command below then spells `kubectl` out in full and passes
+`--context base`. The `base` context is deliberately *cluster-unaware*: it
+points at the server without choosing a workspace, so the `--server` you pass
+decides. Check it works:
 
 ```sh
-k --server $KCP/clusters/root get workspaces
+kubectl --context base --server $KCP/clusters/root get workspaces
 ```
 
 ```
@@ -95,8 +96,8 @@ first thing that confuses people:
 Both work in a URL. These are the same workspace:
 
 ```sh
-k --server $KCP/clusters/root:capi-demo-1 get namespaces
-k --server $KCP/clusters/2yqfrtuq4cjeh3n5 get namespaces
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 get namespaces
+kubectl --context base --server $KCP/clusters/2yqfrtuq4cjeh3n5 get namespaces
 ```
 
 Objects carry the logical cluster, not the path — which is why the status
@@ -114,7 +115,7 @@ Nothing is installed anywhere until a workspace asks. Look at what the demo
 published:
 
 ```sh
-k --server $KCP/clusters/root get apiexports
+kubectl --context base --server $KCP/clusters/root get apiexports
 ```
 
 ```
@@ -149,7 +150,8 @@ Each export publishes the CRDs for its own types:
 Every `APIExport` gets an **identity hash** when the server accepts it:
 
 ```sh
-k --server $KCP/clusters/root get apiexport cluster-api-core \
+kubectl --context base --server $KCP/clusters/root \
+  get apiexport cluster-api-core \
   -o jsonpath='{.status.identityHash}{"\n"}'
 ```
 
@@ -174,7 +176,8 @@ a binding *accepting* those claims is the workspace agreeing. Look at what core
 asks for:
 
 ```sh
-k --server $KCP/clusters/root get apiexport cluster-api-core \
+kubectl --context base --server $KCP/clusters/root \
+  get apiexport cluster-api-core \
   -o jsonpath='{range .spec.permissionClaims[*]}{.group}/{.resource}  verbs={.verbs}  identity={.identityHash}{"\n"}{end}'
 ```
 
@@ -206,7 +209,7 @@ Three things worth noticing:
 Now look at the other side:
 
 ```sh
-k --server $KCP/clusters/root:capi-demo-1 get apibindings
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 get apibindings
 ```
 
 ```
@@ -222,7 +225,8 @@ were accepted. That is what makes the next command work at all — before the
 binding, `kubectl get clusters` here would have said the type does not exist:
 
 ```sh
-k --server $KCP/clusters/root:capi-demo-1 get clusters,machines -A
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 \
+  get clusters,machines -A
 ```
 
 ```
@@ -261,7 +265,8 @@ the claims from step 5.
 development and testing. It has two backends:
 
 ```sh
-k --server $KCP/clusters/root:capi-demo-1 -n default get devcluster demo-00 \
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
+  get devcluster demo-00 \
   -o jsonpath='{.spec}{"\n"}'
 ```
 
@@ -295,7 +300,7 @@ This is the piece the whole project exists for, and it is worth doing slowly.
 
 ```sh
 for w in 1 2; do
-  k --server $KCP/clusters/root:capi-demo-$w -n default \
+  kubectl --context base --server $KCP/clusters/root:capi-demo-$w -n default \
     get cluster demo-00 -o jsonpath='{.metadata.uid}{"\n"}'
 done
 ```
@@ -314,7 +319,8 @@ cannot hide behind names that happen not to collide.
 that serves every workspace bound to that export:
 
 ```sh
-k --server $KCP/clusters/root get apiexportendpointslice cluster-api-core \
+kubectl --context base --server $KCP/clusters/root \
+  get apiexportendpointslice cluster-api-core \
   -o jsonpath='{.status.endpoints[0].url}{"\n"}'
 ```
 
@@ -326,7 +332,7 @@ Ask it for every `Cluster` on the shard, using `*` as the logical cluster:
 
 ```sh
 export VW=$KCP/services/apiexport/root/cluster-api-core
-k --server "$VW/clusters/*" get clusters -A \
+kubectl --context base --server "$VW/clusters/*" get clusters -A \
   -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAME:.metadata.name,PHASE:.status.phase'
 ```
 
@@ -343,7 +349,7 @@ carrying the workspace it came from. It works for anything the export
 publishes:
 
 ```sh
-k --server "$VW/clusters/*" get machines -A \
+kubectl --context base --server "$VW/clusters/*" get machines -A \
   -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAME:.metadata.name,PHASE:.status.phase'
 ```
 
@@ -363,7 +369,7 @@ Each cluster's admin kubeconfig is a Secret in its own workspace, written by the
 control plane provider:
 
 ```sh
-k --server $KCP/clusters/root:capi-demo-1 -n default \
+kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
   get secret demo-00-kubeconfig -o jsonpath='{.data.value}' | base64 -d > /tmp/demo-00.kubeconfig
 
 kubectl --kubeconfig /tmp/demo-00.kubeconfig get nodes
