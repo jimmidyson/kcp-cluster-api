@@ -12,6 +12,23 @@ for what's expected of new pages, and the root
 [`kcp/README.md`](../../README.md) for how this fits into the rest of the
 fork.
 
+## Publishing
+
+The site is published at <https://jimmidyson.github.io/kcp-cluster-api/> by
+the `docs` workflow. It builds on every pull request touching `docs/site/`,
+and on a merge to `main` deploys that same build to GitHub Pages — there is
+no `gh-pages` branch and no published artefact to update by hand.
+
+Two settings this depends on, neither of which the workflow can set for
+itself:
+
+- **Settings -> Pages -> Source** must be **GitHub Actions**. Enabling Pages
+  over the API needs `administration: write`, which `GITHUB_TOKEN` cannot be
+  granted, so this is a one-off a repository admin does.
+- `baseURL` in `hugo.toml` is the project-site URL, so a fork or a rename
+  needs it changed to match, or every link on the published site points at
+  this repository.
+
 ## Local development
 
 Requires Node.js 18+ and internet access to fetch the Hugo module (Docsy
