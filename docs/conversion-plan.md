@@ -42,12 +42,17 @@ having to reconstruct the answer from the commit log.
   `test/integration/bootstrap` asserts it. The kubeconfig and the worker
   `MachineDeployment` that were the remaining gap to a usable cluster have
   landed too.
-- **The demo reaches ready clusters.** `task demo` builds a cluster with a
-  control plane machine and a worker in each of several workspaces from one
-  manager, starting its own single-shard kcp server, and waits for the
-  `Cluster`'s `Available` condition, every control plane replica and every
-  Machine. `test/integration/demo` asserts the same run under `task verify`,
-  including the tenancy isolation P8 existed to prove.
+- **The demo reaches ready clusters, in workspaces two tenants cannot see each
+  other's.** `task demo` builds a cluster with a control plane machine and a
+  worker in each of several workspaces from one manager, starting its own
+  single-shard kcp server, and waits for the `Cluster`'s `Available` condition,
+  every control plane replica and every Machine. The workspaces belong to
+  users — `alice` and `bob` by default — one home workspace each under an org
+  workspace granting nobody anything, and the run finishes by asking kcp, as
+  each user, what it will let them read of the other's. It exits non-zero if
+  the answer is anything but "their own and nothing else".
+  `test/integration/demo` asserts the same run under `task verify`, both halves
+  of the tenancy isolation P8 existed to prove.
 
   Getting there took two defects that only a readiness done-condition could
   surface, because provisioned infrastructure was true throughout both. The
@@ -443,7 +448,7 @@ different binary/concern."
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
 | P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
 | P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation. On a real container runtime the same shape reaches ready Clusters, initialized control planes and bootstrapped Machines, and stops at Node readiness for want of a CNI nothing here installs (see below) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation, both between the workspaces' objects and between the two tenants who own them. On a real container runtime the same shape reaches ready Clusters, initialized control planes and bootstrapped Machines, and stops at Node readiness for want of a CNI nothing here installs (see below) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
 | P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
@@ -487,6 +492,22 @@ a Cluster→DevCluster to ready concurrently, under one manager, and the test
 asserts what nothing did before — each workspace sees exactly its own Cluster,
 and each DevCluster is owned by the Cluster in its own workspace. It runs in
 `task verify`, and `task demo` is the same code with a person watching.
+
+Tenancy is now asserted from the tenant's side as well as the object's. The
+workspaces belong to two users, granted their own home and their own workspaces
+and nothing else; the run asks kcp, impersonating each of them, what it will
+serve. Each reads their own and is refused the other's home, the other's
+Clusters, and the org workspace holding both homes. Both directions are
+asserted: "no user read another's" is satisfied completely by an RBAC bug that
+refuses everybody everything, so an allowed read is required as well as a
+refused one. See [The demo](site/content/en/docs/design/demo.md).
+
+The shape of the tree is load-bearing and was not obvious. kcp's `root`
+binds `system:kcp:tenancy:reader` to `system:authenticated`, and a `Workspace`
+list is neither recursive nor filtered by what the caller can enter — so homes
+placed directly under `root` would have their names listable by every
+authenticated user on the shard. The org workspace in between is what makes the
+refusal complete.
 
 The Machine half of P8 is done too. It waited on P1 and P2, and with both wired
 the demo's done-condition is readiness rather than provisioned infrastructure:
