@@ -1,6 +1,10 @@
 # ADR-0004: Scaling the fork model to many providers
 
-Status: **accepted**, decided 2026-08-20
+Status: **accepted**, decided 2026-08-20. **Amended 2026-08-20: L1 is
+retired** — the CAPX port fired its trigger and the layer turned out not to be
+needed. See [What the CAPX port settled](#what-the-capx-port-settled). The
+reasoning below is kept as it was written, so what the decision was taken
+against stays legible.
 
 This project supports one infrastructure provider today, and that provider is
 upstream's *test* one. Supporting a real one means a second patched fork, and
@@ -283,14 +287,85 @@ modules: one module per provider means one version negotiation per provider,
 each visible and each owned, instead of one graph in which the newest provider
 silently forces the others forward.
 
+## What the CAPX port settled
+
+This section is later than the rest. It records what happened when the CAPX
+fork was actually cut and wired, which is the event the triggers below were
+waiting for.
+
+### L1's trigger fired, and the layer was not needed
+
+The trigger was "the CAPX fork needing any of the five sources". The fork was
+cut, both reconcilers were given fleet-wide wiring, and CAPX imports **nothing**
+from `util/multicluster`. It reaches the lifting machinery transitively,
+through `util/controller` — the CAPI-coupled builder, which stays in the fork
+by this ADR's own rule, and which CAPX already depends on because it depends on
+Cluster API.
+
+The prediction this ADR made was that every provider fork would need the five
+sources and would reach them "by depending on this project's Cluster API fork —
+which is a strange edge for a CAPA fork to have". The edge is not strange. It
+is the dependency every Cluster API infrastructure provider already has, and
+the five sources are an implementation detail of the fork's builder rather than
+a library a provider imports.
+
+So the architecture is **two layers, not three**: patch-carrier forks, and
+per-provider integration modules. The shared plumbing stays where it is.
+
+What would revive L1 is a consumer that needs those five files *without*
+depending on Cluster API. No such consumer exists, and by construction an
+infrastructure provider cannot be one.
+
+### The other blocker was confirmed rather than dissolved
+
+The two blockers were independent, and they did not fare the same way. CAPX's
+`go.mod` had to restate all three `replace` directives at matching versions to
+resolve the fork at all — which is the pin-propagation hazard, observed rather
+than predicted, on the first consumer that was not this repository. That
+finding stands and gets more expensive per fork, exactly as recorded.
+
+### The forward-port cost, so far, is far below the prediction
+
+The ADR predicted a real provider would cost "at least" the dev provider's 17
+paths. The CAPX fork currently carries six: `go.mod` and `go.sum`, the two
+files touched by removing a dead workload-cluster client cache, and two new
+`*_workspace.go` files.
+
+**This is a partial figure and must not be read as the final one.** The port is
+not finished: the integration module is not built, and none of the three
+name collisions is fixed. Each fix adds paths. What the figure does establish
+is that the dependency skew — a minor behind on cluster-api, controller-runtime
+and k8s.io alike — cost one dead-code deletion rather than a rewrite, because
+`api/core/v1beta1`, `controllers/remote` and `util/deprecated/v1beta1` all
+survive in v1.15.
+
+### A third collision, latent rather than live
+
+Alongside the two found by reading, the port found a third by compiling.
+`pkg/context.RemoteClientCache` is a package-level map keyed on `ObjectKey`, so
+two workspaces each holding a cluster of the same namespace and name would
+share one workload-cluster client — one tenant handed a client for another
+tenant's cluster.
+
+It is **latent, not live**: `GetRemoteClient` is the only writer and has no
+callers, so nothing populates the map. It was removed as dead code rather than
+ported, which is also what fixed the one compile error the version bump caused.
+Unlike the other two it is kcp-specific — `ObjectKey` carries a namespace, so
+it does not collide within a single management cluster.
+
 ## The decision: three layers
 
-**L1 — shared multicluster plumbing.** A module of its own, depending on
+**L1 — shared multicluster plumbing.** ~~A module of its own, depending on
 controller-runtime and multicluster-runtime and *not* on Cluster API. The five
 sources and two unit tests above, plus whichever parts of `internal/` prove to
-have a second caller.
-Every fork and every integration imports it. This is the layer that must not
-exist four times.
+have a second caller. Every fork and every integration imports it. This is the
+layer that must not exist four times.~~
+
+**Retired.** The CAPX port fired this layer's trigger and did not need it: a
+provider fork reaches the plumbing through `util/controller`, which it already
+depends on. The five sources stay in the fork as an implementation detail of
+its builder. See [What the CAPX port settled](#what-the-capx-port-settled).
+The two layers below are the architecture.
 
 **L2 — one thin patch-carrier fork per upstream repository**, under this
 project's own ownership: `jimmidyson/cluster-api` today,
@@ -304,10 +379,15 @@ from the upstream commit built against, one commit per carried patch, and
 Cluster API, one for CAPX — and nothing else. The existing rule says "three",
 which is a fact about Cluster API's `api/` and `test/` submodules rather than
 about forks. The admission rule tightens: **a fork may carry in-place
-modifications to upstream files, and seams that cannot be expressed from
-outside the module. Anything expressible as a new file belongs in L1.** That
-rule is what keeps `git diff upstream..kcp/vX.Y` meaningful when there are four
-of them.
+modifications to upstream files, and code that cannot be expressed from outside
+the module.** That rule is what keeps `git diff upstream..kcp/vX.Y` meaningful
+when there are four of them.
+
+~~Anything expressible as a new file belongs in L1.~~ Void with L1: a new file
+that could only live in the fork — because it implements a seam against
+upstream's own types — is carried on the same terms as a modification. The
+`*_workspace.go` setups and the builder they call are exactly that, which is
+why they stay.
 
 **L3 — per-provider integration, as modules rather than repositories.**
 `providers/aws/go.mod`, `providers/azure/go.mod` and so on, in this repository.
@@ -328,27 +408,31 @@ as four sets of CI, four `AGENTS.md` and four release pipelines instead. This
 ADR takes the multi-module repository, and records the trade rather than
 claiming it away.
 
-## What is built now: none of it
+## What was built, and what the triggers did
 
 Constitution Principle VIII: abstraction layers must not be built ahead of a
 concrete need, and the trigger is a second real caller, a measured constraint
-or a stated requirement — not an anticipated one. There is no second caller.
-There is one fork, one integration, and no forked provider outside
-`sigs.k8s.io/cluster-api`.
+or a stated requirement — not an anticipated one. When this ADR was written
+there was no second caller, so nothing was built and the triggers were named
+instead.
 
-Extracting L1 today would be building a shared library for a set of one, which
-is the thing that principle exists to stop. So:
+The table below is the amended state. Principle VIII is the reason L1 was never
+extracted, and it is why that turned out to cost nothing: the layer was named,
+deferred behind a falsifiable trigger, and retired when the trigger fired and
+the need did not appear. Building it first would have produced a module with
+no importer.
 
 | Layer | State | Trigger to build |
 |---|---|---|
-| L1 | not built | the CAPX fork needing any of the five sources |
-| L2 | exists, one instance | the tightened admission rule applies from now; the second instance is the CAPX fork |
-| L3 | exists, one instance, not yet a module boundary | the CAPX integration |
+| L1 | **retired** — trigger fired, layer not needed | would revive only for a consumer needing the five sources without depending on Cluster API; an infrastructure provider cannot be one |
+| L2 | exists, two instances | the CAPX fork is cut at `kcp/v1.11` and carries the wiring |
+| L3 | exists, one instance, not yet a module boundary | the CAPX integration, still unbuilt |
 
 Naming CAPX rather than "a second provider" is the difference between a
-deferral and a plan. It also makes each trigger falsifiable: if the CAPX port
-turns out to need none of the five L1 sources, L1 is not built and this ADR was
-wrong about what is shared.
+deferral and a plan. It also made each trigger falsifiable — and one was
+falsified: the CAPX port needed none of the five L1 sources, so L1 is not built
+and this ADR was wrong about what is shared. That is the intended behaviour of
+a named trigger, not a failure of it.
 
 Principle VIII also requires that deferral be recorded as a decision naming its
 trigger, "because silent omission and deliberate deferral look identical
@@ -378,13 +462,12 @@ graph. Generalising it means passing the module path alongside the record path
 
 ## Consequences
 
-- The fork's contract gains a rule it did not have: new files justify
-  themselves against L1 before being carried. This applies to the next patch,
-  not retroactively — they stay where they are until L1's trigger
-  fires.
-- Adding a provider becomes: fork it into this project's ownership (L2),
-  integrate it as a module here (L3), and — from the second one — import
-  shared plumbing rather than copy it (L1).
+- ~~The fork's contract gains a rule it did not have: new files justify
+  themselves against L1 before being carried.~~ **Void with L1.** A new file
+  in a fork is judged on the L2 admission rule alone: it is carried if it
+  cannot be expressed from outside the module.
+- Adding a provider becomes: fork it into this project's ownership (L2), and
+  integrate it as a module here (L3). There is no third step.
 - The fork count tracks the provider count, and each fork is a repository this
   project maintains: a branch per release line, tags, and a drift record. That
   is the standing cost of the model, and it is the reason L2's admission rule
@@ -404,31 +487,30 @@ graph. Generalising it means passing the module path alongside the record path
   group.
 - **A provider that needs no in-place modification.** Then it needs no fork,
   only an L3 module, and the fork count stops tracking the provider count.
-  CAPX is the test, and it starts out better placed than the dev provider: its
-  reconcilers are already public, so the wiring may be layerable from outside.
-  The two collisions above still force in-place changes, so a CAPX fork is
-  expected rather than hoped against; what is open is how many paths it
-  carries.
-- **Real providers costing far less than 17 paths.** The prediction above is
-  the load-bearing input to "four forks is a thing worth designing for". If
-  CAPX costs three paths, this is over-built and L3 alone suffices.
+  CAPX was the test and it does need one: even before the collisions are
+  fixed, it carries a dependency pin and a dead-code removal that cannot be
+  expressed from outside the module.
+- **Real providers costing far less than 17 paths.** Partly answered, and in
+  the direction that would weaken this ADR: CAPX carries six paths so far
+  against the dev provider's 17. If it finishes well below 17, "four forks is
+  a thing worth designing for" is a weaker claim than it looked, and L3 alone
+  carries more of the weight.
 
 ## What is not established
 
-- No forked provider exists. CAPX has been read, not ported, not built and not
-  run against kcp. The two collisions are shown in its source; that they behave
-  under kcp as described is a prediction.
-- The path count a CAPX fork costs is unknown. The 17 paths the dev provider
-  costs is the only figure of its kind, and a provider with public reconcilers
-  may need fewer.
-- Whether the two collisions are accepted upstream in CAPX is unknown, and
-  nothing has been filed. If they are, they never become drift.
-- The L1 sources are now shown free of Cluster API *assumptions*, not merely
-  imports — a standalone module compiles and tests them with no Cluster API in
-  its module graph. What that does **not** establish is that the API shape
-  survives a second caller with different needs; only CAPX tests that. An
-  extraction that compiles is a necessary condition, not a sufficient one.
+- **CAPX is forked and wired, not integrated and not run.** It builds against
+  the fork's stack and its unit tests pass under envtest. Nothing has run it
+  against kcp: the integration module is unbuilt, and the e2e suite needs a
+  live Prism Central this project cannot reach.
+- **The three collisions are unfixed**, and that they behave under kcp as
+  described remains a prediction. Two are visible in CAPX's source and collide
+  across plain namespaces without kcp; the third is dead code and so latent.
+- Whether any of them is accepted upstream in CAPX is unknown, and nothing has
+  been filed.
+- **The six-path figure is partial.** Each collision fix and the integration
+  module add to it. It is not comparable to the dev provider's 17 until the
+  port is finished.
 - Whether L3's modules can share a `Taskfile` and verification contract across
-  differing dependency graphs is untested. It is the main risk in preferring a
-  multi-module repository to four repositories, and it is cheap to test at
-  CAPX and expensive to discover at the fourth provider.
+  differing dependency graphs is untested. It is now the main open risk in
+  this ADR, since it is the only structural claim the CAPX port has not
+  touched.
