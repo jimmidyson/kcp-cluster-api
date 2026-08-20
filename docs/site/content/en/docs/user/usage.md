@@ -100,17 +100,22 @@ workspaces each:
 
 | Deployment | Goroutines/ws | Discovery/ws | Requests/ws | Streams held |
 |---|--:|--:|--:|--:|
-| `core-manager` | 2 | 3 | 7 | 6 |
+| `core-manager` | 2 | 3 | 7 | 8 |
 | `dev-infrastructure-manager` | 2 | 3 | 8 | 6 |
 | `kubeadm-bootstrap-manager` | 2 | 4 | 16 | 7 |
 | `kubeadm-control-plane-manager` | 2 | 7 | 72 | 7 |
-| **All four** | **8** | **17** | **103** | **26** |
+| **All four** | **8** | **17** | **103** | **28** |
 
 Engaging a workspace costs the same two goroutines in every deployment, flat
 from one workspace to twenty, with **no watch connections to the shard** added
 by a workspace: reads come from one shared wildcard cache per deployment, so
-the shard sees the same 26 streams whether the installation serves one
+the shard sees the same 28 streams whether the installation serves one
 workspace or twenty. A departing workspace gives all of it back.
+
+Serving ClusterClass based clusters is visible in exactly one cell of that
+table: `core-manager` holds eight streams where it held six, for the
+`ClusterClass` and `MachinePool` its topology controllers watch. Four more
+controllers in the process, and a workspace costs what it did.
 
 What differs between deployments is what they then do. The kubeadm control
 plane provider costs an order of magnitude more per workspace than core,
@@ -120,8 +125,10 @@ workspace count.
 
 One thing the table does not include: **the clusters in a workspace cost more
 than the workspace does.** A workspace holding a running control plane costs
-about 45 goroutines in the process that runs its infrastructure provider,
-against the 8 that serving the workspace costs across all four.
+about 57 goroutines in the process that runs its infrastructure provider,
+against the 8 that serving the workspace costs across all four — and about 484
+reconcile requests, against 103. Size the infrastructure deployment against
+your cluster count, not your workspace count.
 
 `task test:sweep` is the instrument, and it needs no container runtime. See
 [Workspace resource usage](../design/workspace-resource-usage.md) for the

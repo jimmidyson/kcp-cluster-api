@@ -52,12 +52,23 @@ import (
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
-// What one workspace's worth of every provider's controllers watches. Declared
-// rather than inferred, so a shape whose wiring changed underneath the number
-// fails rather than reporting the new shape under the old label.
+// What every provider's controllers watch when they share one process, and how
+// many handlers they register to do it. Declared rather than inferred, so a
+// shape whose wiring changed underneath the number fails rather than reporting
+// the new shape under the old label.
+//
+// Derived the same two ways as the core deployment's pair, and documented
+// there: the types are the Cluster API rows of a run's own stream inventory,
+// and the handlers are what `task scale:census` counts in the wired setup
+// functions.
+//
+// Eleven types rather than the core deployment's six, because three more
+// providers watch three more groups — and because MachineHealthCheck, which
+// nothing in the core deployment watches, is watched here by the control plane
+// provider.
 const (
-	fleetWatchedTypes  = 8
-	fleetEventHandlers = 27
+	fleetWatchedTypes  = 11
+	fleetEventHandlers = 41
 )
 
 // TestFleetWorkspaceSweep measures what every provider's controllers together

@@ -93,20 +93,32 @@ var (
 	}
 )
 
-// What one workspace's worth of the core deployment watches, measured from a
-// run's own stream inventory and handler accounting rather than counted off
-// the source by eye.
+// What the core deployment watches, and how many handlers it registers to do
+// it. Declared rather than inferred, so a shape whose wiring changed
+// underneath the number fails rather than reporting the new shape under the
+// old label.
 //
-// The two numbers differ, and the difference is the point. Four published
-// types are watched — Cluster, Machine, MachineSet and MachineDeployment;
-// MachineHealthCheck is published because it must be bound for the controllers
-// to start, but nothing here watches it. More handlers than types are
-// registered against those informers, because five controllers each register
-// their own and several watch the same type. It is the registrations, not the
-// types, that decide what a departing workspace fails to give back.
+// The two are derived differently, and each says which:
+//
+//   - The types are **measured**: they are the `cluster.x-k8s.io` rows of a
+//     run's own stream inventory, printed at the bottom of
+//     `bin/sweep-report-core.md`. Six of the seven published types are watched
+//     — Cluster, ClusterClass, Machine, MachineSet, MachineDeployment and
+//     MachinePool. MachineHealthCheck is the seventh: published because it must
+//     be bound for the controllers to start, and watched by nobody here.
+//   - The handlers are **derived**, by the AST census `task scale:census`
+//     parses out of the wired setup functions. It counts what they declare,
+//     including two registrations behind feature gates this project turns off
+//     — the core Cluster reconciler's MachinePool watch, and the ClusterClass
+//     reconciler's ExtensionConfig watch.
+//
+// The two numbers differ, and the difference is the point: more handlers than
+// types are registered against those informers, because nine controllers each
+// register their own and several watch the same type. It is the registrations,
+// not the types, that decide what a departing workspace fails to give back.
 const (
-	coreReconcilerWatchedTypes  = 4
-	coreReconcilerEventHandlers = 12
+	coreReconcilerWatchedTypes  = 6
+	coreReconcilerEventHandlers = 28
 )
 
 // TestCoreDeploymentWorkspaceSweep measures what one deployment pays per
@@ -176,7 +188,7 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 		watchedTypes:  coreReconcilerWatchedTypes,
 		eventHandlers: coreReconcilerEventHandlers,
 		facts: map[string]string{
-			"shape":           "coremanager.SetupCoreControllers: ClusterCache, Cluster, Machine, MachineSet, MachineDeployment — one controller each for the whole shard",
+			"shape":           "coremanager.SetupCoreControllers: ClusterCache, Cluster, Machine, MachineSet, MachineDeployment, ClusterClass and the three topology controllers — one controller each for the whole shard",
 			"deploymentName":  "core-manager",
 			"deployment":      "core-manager, one of four provider deployments",
 			"reconciledTypes": "cluster.x-k8s.io/clusters",

@@ -24,7 +24,7 @@ are in `test/integration/sweep`, against a real kcp server.
 |---|---|---|
 | The floor | **Single type** — one controller *per workspace*, watching `Cluster`, whose reconciler does nothing but record that it ran | what this project's own per-workspace seam costs |
 | One per deployment | **core-manager**, **kubeadm-bootstrap-manager**, **kubeadm-control-plane-manager**, **dev-infrastructure-manager** — each wiring only its own controllers against its own `APIExport` | what a workspace costs each deployment, and what it costs the installation once they are added up |
-| The ceiling | **The whole fleet** — all four providers in one process, taken to an initialized control plane | what a workspace with a *running cluster* in it costs |
+| The ceiling | **The whole fleet** — all four providers in one process, building a ClusterClass based cluster in each workspace and taking it to an initialized control plane | what a workspace with a *running cluster* in it costs |
 
 All of them go through the same harness: same instrument, same settling rules,
 same assertions, different workload. The difference between them is therefore
@@ -123,21 +123,34 @@ One object set per workspace, twenty workspaces, `GOMAXPROCS=4`, Go 1.26.3.
 
 | Deployment | Goroutines/ws | Watch streams/ws | Discovery/ws | Requests/ws | Streams held | Retained/departure |
 |---|--:|--:|--:|--:|--:|--:|
-| `core-manager` | 2 | 0 | 3 | 7 | 6 | 0 |
+| `core-manager` | 2 | 0 | 3 | 7 | 8 | 0 |
 | `dev-infrastructure-manager` | 2 | 0 | 3 | 8 | 6 | 0 |
 | `kubeadm-bootstrap-manager` | 2 | 0 | 4 | 16 | 7 | 0 |
 | `kubeadm-control-plane-manager` | 2 | 0 | 7 | 72 | 7 | 0 |
-| **An installation of all four** | **8** | **0** | **17** | **103** | **26** | **0** |
+| **An installation of all four** | **8** | **0** | **17** | **103** | **28** | **0** |
 
 `bin/sweep-report-total.md` is this table, regenerated from the four reports by
 `cmd/sweeptotals` on every sweep run.
 
 **Streams held** is the one column that is per deployment rather than per
 workspace: it is what that process holds open on the shard whether it serves
-one workspace or twenty. Twenty-six is therefore what the shard sees from an
-installation at rest, and it is the cost of the export split — `Cluster` is
-watched by all four, once each through its own virtual workspace, where a
+one workspace or twenty. Twenty-eight is therefore what the shard sees from an
+installation at rest, and most of it is the cost of the export split — `Cluster`
+is watched by all four, once each through its own virtual workspace, where a
 single export would have watched it once.
+
+Two of the twenty-eight are what serving ClusterClass based clusters costs, and
+they are the *whole* of what it costs at this level: the core deployment holds
+eight streams where it held six, for the `ClusterClass` and `MachinePool` its
+topology controllers watch. Every per-workspace column is unchanged — the same
+2 goroutines, the same 3 discovery requests, the same 7 reconcile requests, the
+same nothing retained on departure. Four more controllers in the process, and a
+workspace costs what it did.
+
+That is the fleet-wide wiring behaving as designed rather than a happy result:
+a controller here is registered once for the shard, so adding one adds a fixed
+term and no per-workspace term at all. What a managed topology does cost shows
+up a level down, where the clusters are — see the fleet shape below.
 
 ### Engagement is uniform; reconciling is not
 
@@ -169,8 +182,8 @@ What the deployments do *not* share is what they then do with a workspace:
 
 Every one of them is exactly linear in workspaces, and none of them adds a
 watch stream or a LIST per workspace. The control plane deployment went from 71
-requests at one workspace to 1,429 at twenty — seventy-two per workspace with
-no bend — and from 148 goroutines to 187.
+requests at one workspace to 1,431 at twenty — seventy-two per workspace with
+no bend — and from 149 goroutines to 187.
 
 Discovery is the term worth re-reading if a provider grows: it is the
 `RESTMapper` `multicluster-provider` builds per engaged workspace, paid once at
@@ -179,28 +192,61 @@ for core and the dev provider, four for bootstrap, seven for the control plane.
 An earlier wiring saw this grow *faster* than the workspace count; with
 fleet-wide controllers it does not, in any of the four.
 
-## The whole fleet: 4 workspaces
+## The whole fleet: 3 workspaces, each with a ClusterClass based cluster
 
-All four providers in one process, one cluster per workspace, each taken to an
-initialized control plane on the in-memory backend.
+All four providers in one process, one `ClusterClass` and one `Cluster` naming
+it per workspace, each taken to an initialized control plane on the in-memory
+backend.
 
-| Workspaces | 1 | 2 | 3 | 4 |
-|---|--:|--:|--:|--:|
-| Goroutines | 465 | 510 | 555 | 600 |
-| Watch streams | 12 | 12 | 12 | 12 |
-| Discovery, cumulative | 23 | 30 | 37 | 44 |
-| Requests, cumulative | 266 | 512 | 748 | 983 |
+| Workspaces | 1 | 2 | 3 |
+|---|--:|--:|--:|
+| Goroutines | 624 | 681 | 738 |
+| Watch streams | 15 | 15 | 15 |
+| Discovery, cumulative | 23 | 30 | 37 |
+| Requests, cumulative | 472 | 967 | 1,440 |
 
 | Per active workspace | All four deployments, added up | The same four co-located, with a cluster running |
 |---|--:|--:|
-| Goroutines | 8 | **45** |
+| Goroutines | 8 | **57** |
 | Watch streams | 0 | **0** |
 | Retained after departure | 0 | **0** |
 | Discovery requests | 17 | **7** |
-| Reconcile requests | ~103 | **~236** |
+| Reconcile requests | ~103 | **~484** |
 
-**45 goroutines per workspace**, to the goroutine, at all four points. Twelve
+**57 goroutines per workspace**, to the goroutine, at all three points. Fifteen
 watch streams throughout, none of them addressed to a tenant's logical cluster.
+
+### What changed when clusters became ClusterClass based
+
+This shape is where it shows, because this is the shape that has clusters in
+it. What this page reported before, for the same instrument at four workspaces:
+
+| Per active workspace | Previously reported | Now |
+|---|--:|--:|
+| Goroutines | 45 | **57** |
+| Watch streams | 0 | **0** |
+| Retained after departure | 0 | **0** |
+| Discovery requests | 7 | **7** |
+| Reconcile requests | ~236 | **~484** |
+
+**Read the two columns as before-and-after of one change, not as an experiment
+isolating the topology.** Two things moved together: the process now wires four
+more controllers, and the cluster it builds is a `Cluster` naming a class
+rather than six objects written out by hand. Separating them would need a sweep
+of the hand-built shape under the new wiring, and that has not been run — so
+"the managed topology costs twelve goroutines" is a reading this measurement
+does not support, however plausible it is.
+
+What the measurement does say: a workspace that holds a ClusterClass based
+cluster costs twelve more goroutines and roughly twice the reconcile requests
+than a workspace holding a hand-built one did under the previous wiring. The
+requests are unsurprising — a managed topology server-side applies every object
+under the `Cluster` on every reconcile — and they are the term to watch as
+clusters per workspace grows.
+
+What did **not** move is the part that decides whether this scales: no watch
+stream per workspace, and nothing retained when a workspace leaves. The cost is
+per *cluster*, and it is paid where the clusters are.
 
 The gap is not four engagements: co-locating them pays *one*, which is why this
 shape's discovery per workspace is 7 where the four deployments together pay
@@ -217,8 +263,9 @@ Read against the per-deployment total, the two bracket a real installation:
 
 - **Serving a workspace**: 8 goroutines and 17 discovery requests, spread
   across four processes, before any cluster exists in it.
-- **Running a cluster in it**: 45 goroutines in one process — and that term
-  lands wherever the infrastructure provider runs, not spread across four.
+- **Running a ClusterClass based cluster in it**: 57 goroutines in one process
+  — and that term lands wherever the infrastructure provider runs, not spread
+  across four.
 
 Neither is a capacity model. What they establish is that the *workspace* term
 is small and flat everywhere, and that what actually scales a process is how
@@ -230,9 +277,10 @@ three against workspaces.
 ## The claims, settled
 
 **Watches are O(types), not O(types × workspaces) — holds, in every shape.**
-Three streams served a hundred single-type workspaces; six served core's and
-the dev provider's twenty; seven served the bootstrap and control plane
-deployments' twenty; the full fleet's twelve did not move either. Not
+Three streams served a hundred single-type workspaces; six served the dev
+provider's twenty and eight served core's; seven served the bootstrap and
+control plane deployments' twenty; the full fleet's fifteen did not move
+either. Not
 one stream in any sweep was addressed to a tenant's own logical cluster, which
 is the sharper form of the claim: a flat count would also be produced by a
 process that opened every per-tenant watch up front, and that is not what this
@@ -243,6 +291,7 @@ LISTs in any shape, and no new connections. The per-workspace `RESTMapper` is
 the one duplicated thing, and its cost is discovery traffic rather than a
 cache: nothing in the single-type shape, and three to seven requests per
 workspace in a deployment depending on how many types that provider resolves.
+Wiring the four topology controllers did not move it — core still pays three.
 
 **Per-workspace controller overhead — quantified, and mostly gone.** 12
 goroutines for one controller *per workspace* on one type, measured to a

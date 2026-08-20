@@ -1,0 +1,250 @@
+{
+  "title": "Active workspace sweep (one controller, one type)",
+  "facts": {
+    "discoveryRequestsPerWorkspace": "0.0",
+    "eventHandlersPerWorkspace": "1",
+    "goMaxProcs": "4",
+    "goVersion": "go1.26.3",
+    "goroutinesPerWorkspace": "12.0",
+    "goroutinesReclaimedPerWorkspace": "-18.7",
+    "goroutinesRetainedPerDepartedWorkspace": "2.0",
+    "heapBytesPerWorkspace": "105114",
+    "objectsPerWorkspace": "5",
+    "reconciledTypes": "cluster.x-k8s.io/clusters",
+    "secondsPerWorkspaceEngagement": "-0.6",
+    "shape": "one controller watching cluster.x-k8s.io/clusters",
+    "watchStreamsPerWorkspace": "0.00",
+    "watchedTypesPerWorkspace": "1",
+    "workspaces": "4"
+  },
+  "samples": [
+    {
+      "phase": "baseline",
+      "label": "baseline (manager not started)",
+      "workspaces": 0,
+      "goroutines": 18,
+      "heapBytes": 20278232,
+      "traffic": {
+        "watchStreams": 0,
+        "wildcardWatchStreams": 0,
+        "scopedWatchStreams": 0,
+        "lists": 0,
+        "discovery": 3,
+        "total": 3
+      },
+      "stepSeconds": 0
+    },
+    {
+      "phase": "engaged",
+      "label": "1 bound, idle",
+      "workspaces": 1,
+      "goroutines": 74,
+      "heapBytes": 20444664,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 8.606763269
+    },
+    {
+      "phase": "active",
+      "label": "1 active",
+      "workspaces": 1,
+      "goroutines": 74,
+      "heapBytes": 20448240,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 4.26935004
+    },
+    {
+      "phase": "engaged",
+      "label": "2 bound, idle",
+      "workspaces": 2,
+      "goroutines": 86,
+      "heapBytes": 20536744,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 2.549463229
+    },
+    {
+      "phase": "active",
+      "label": "2 active",
+      "workspaces": 2,
+      "goroutines": 86,
+      "heapBytes": 20589456,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 2.510286812
+    },
+    {
+      "phase": "engaged",
+      "label": "3 bound, idle",
+      "workspaces": 3,
+      "goroutines": 98,
+      "heapBytes": 20657824,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 3.553310766
+    },
+    {
+      "phase": "active",
+      "label": "3 active",
+      "workspaces": 3,
+      "goroutines": 98,
+      "heapBytes": 20700136,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 2.50223466
+    },
+    {
+      "phase": "engaged",
+      "label": "4 bound, idle",
+      "workspaces": 4,
+      "goroutines": 110,
+      "heapBytes": 20728728,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 2.549999981
+    },
+    {
+      "phase": "active",
+      "label": "4 active",
+      "workspaces": 4,
+      "goroutines": 110,
+      "heapBytes": 20761728,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 2.26300368
+    },
+    {
+      "phase": "disengaged",
+      "label": "3 left",
+      "workspaces": 3,
+      "goroutines": 100,
+      "heapBytes": 20751096,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 9.99577409
+    },
+    {
+      "phase": "disengaged",
+      "label": "2 left",
+      "workspaces": 2,
+      "goroutines": 90,
+      "heapBytes": 20694784,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 10.010478045
+    },
+    {
+      "phase": "disengaged",
+      "label": "1 left",
+      "workspaces": 1,
+      "goroutines": 80,
+      "heapBytes": 20710312,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 10.022326898
+    },
+    {
+      "phase": "disengaged",
+      "label": "0 left",
+      "workspaces": 0,
+      "goroutines": 41,
+      "heapBytes": 20572400,
+      "traffic": {
+        "watchStreams": 3,
+        "wildcardWatchStreams": 2,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 7,
+        "total": 10
+      },
+      "stepSeconds": 9.987165188
+    }
+  ],
+  "streams": [
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "apis.kcp.io/apibindings",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "root",
+      "resource": "apis.kcp.io/apiexportendpointslices",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/clusters",
+      "count": 1
+    }
+  ]
+}

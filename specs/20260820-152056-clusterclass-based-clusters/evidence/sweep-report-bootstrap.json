@@ -1,0 +1,1045 @@
+{
+  "title": "Active workspace sweep (the kubeadm bootstrap provider's deployment)",
+  "facts": {
+    "deployment": "kubeadm-bootstrap-manager, one of four provider deployments",
+    "deploymentName": "kubeadm-bootstrap-manager",
+    "discoveryRequestsPerWorkspace": "4.0",
+    "endState": "bootstrap data secret written",
+    "eventHandlersPerWorkspace": "3",
+    "goMaxProcs": "4",
+    "goVersion": "go1.26.3",
+    "goroutinesPerWorkspace": "2.0",
+    "goroutinesReclaimedPerWorkspace": "-2.9",
+    "goroutinesRetainedPerDepartedWorkspace": "0.0",
+    "heapBytesPerWorkspace": "1155611",
+    "objectsPerWorkspace": "1",
+    "reconciledTypes": "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
+    "secondsPerWorkspaceEngagement": "-0.0",
+    "shape": "bootstrapmanager.SetupFleetControllers: KubeadmConfig — one controller for the whole shard",
+    "watchStreamsPerWorkspace": "0.00",
+    "watchedTypesPerWorkspace": "3",
+    "workspaces": "20"
+  },
+  "samples": [
+    {
+      "phase": "baseline",
+      "label": "baseline (manager not started)",
+      "workspaces": 0,
+      "goroutines": 13,
+      "heapBytes": 19309440,
+      "traffic": {
+        "watchStreams": 0,
+        "wildcardWatchStreams": 0,
+        "scopedWatchStreams": 0,
+        "lists": 0,
+        "discovery": 3,
+        "total": 3
+      },
+      "stepSeconds": 0
+    },
+    {
+      "phase": "engaged",
+      "label": "1 bound, idle",
+      "workspaces": 1,
+      "goroutines": 120,
+      "heapBytes": 20022152,
+      "traffic": {
+        "watchStreams": 5,
+        "wildcardWatchStreams": 4,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 8,
+        "total": 13
+      },
+      "stepSeconds": 9.049015858
+    },
+    {
+      "phase": "active",
+      "label": "1 active",
+      "workspaces": 1,
+      "goroutines": 138,
+      "heapBytes": 20701424,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 13,
+        "total": 32
+      },
+      "stepSeconds": 5.769382186
+    },
+    {
+      "phase": "engaged",
+      "label": "2 bound, idle",
+      "workspaces": 2,
+      "goroutines": 140,
+      "heapBytes": 20767808,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 13,
+        "total": 32
+      },
+      "stepSeconds": 2.547661958
+    },
+    {
+      "phase": "active",
+      "label": "2 active",
+      "workspaces": 2,
+      "goroutines": 140,
+      "heapBytes": 20913360,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 17,
+        "total": 48
+      },
+      "stepSeconds": 7.901433755
+    },
+    {
+      "phase": "engaged",
+      "label": "3 bound, idle",
+      "workspaces": 3,
+      "goroutines": 142,
+      "heapBytes": 20980768,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 17,
+        "total": 48
+      },
+      "stepSeconds": 2.553673371
+    },
+    {
+      "phase": "active",
+      "label": "3 active",
+      "workspaces": 3,
+      "goroutines": 142,
+      "heapBytes": 21133760,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 21,
+        "total": 64
+      },
+      "stepSeconds": 4.81380546
+    },
+    {
+      "phase": "engaged",
+      "label": "4 bound, idle",
+      "workspaces": 4,
+      "goroutines": 144,
+      "heapBytes": 21202960,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 21,
+        "total": 64
+      },
+      "stepSeconds": 2.549334157
+    },
+    {
+      "phase": "active",
+      "label": "4 active",
+      "workspaces": 4,
+      "goroutines": 144,
+      "heapBytes": 21342632,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 25,
+        "total": 80
+      },
+      "stepSeconds": 4.806329041
+    },
+    {
+      "phase": "engaged",
+      "label": "5 bound, idle",
+      "workspaces": 5,
+      "goroutines": 146,
+      "heapBytes": 21410056,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 25,
+        "total": 80
+      },
+      "stepSeconds": 2.546738985
+    },
+    {
+      "phase": "active",
+      "label": "5 active",
+      "workspaces": 5,
+      "goroutines": 146,
+      "heapBytes": 21550496,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 29,
+        "total": 96
+      },
+      "stepSeconds": 4.837518616
+    },
+    {
+      "phase": "engaged",
+      "label": "6 bound, idle",
+      "workspaces": 6,
+      "goroutines": 148,
+      "heapBytes": 21620208,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 29,
+        "total": 96
+      },
+      "stepSeconds": 2.5471862400000003
+    },
+    {
+      "phase": "active",
+      "label": "6 active",
+      "workspaces": 6,
+      "goroutines": 148,
+      "heapBytes": 21762664,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 33,
+        "total": 112
+      },
+      "stepSeconds": 4.808696728
+    },
+    {
+      "phase": "engaged",
+      "label": "7 bound, idle",
+      "workspaces": 7,
+      "goroutines": 150,
+      "heapBytes": 21831320,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 33,
+        "total": 112
+      },
+      "stepSeconds": 2.552566741
+    },
+    {
+      "phase": "active",
+      "label": "7 active",
+      "workspaces": 7,
+      "goroutines": 150,
+      "heapBytes": 21973024,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 128
+      },
+      "stepSeconds": 5.376445659
+    },
+    {
+      "phase": "engaged",
+      "label": "8 bound, idle",
+      "workspaces": 8,
+      "goroutines": 152,
+      "heapBytes": 22044472,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 37,
+        "total": 128
+      },
+      "stepSeconds": 2.551214506
+    },
+    {
+      "phase": "active",
+      "label": "8 active",
+      "workspaces": 8,
+      "goroutines": 152,
+      "heapBytes": 22194912,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 41,
+        "total": 144
+      },
+      "stepSeconds": 4.800914947
+    },
+    {
+      "phase": "engaged",
+      "label": "9 bound, idle",
+      "workspaces": 9,
+      "goroutines": 154,
+      "heapBytes": 22271648,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 41,
+        "total": 144
+      },
+      "stepSeconds": 2.544432954
+    },
+    {
+      "phase": "active",
+      "label": "9 active",
+      "workspaces": 9,
+      "goroutines": 154,
+      "heapBytes": 22411416,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 45,
+        "total": 160
+      },
+      "stepSeconds": 5.354958003
+    },
+    {
+      "phase": "engaged",
+      "label": "10 bound, idle",
+      "workspaces": 10,
+      "goroutines": 156,
+      "heapBytes": 22486296,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 45,
+        "total": 160
+      },
+      "stepSeconds": 2.548325916
+    },
+    {
+      "phase": "active",
+      "label": "10 active",
+      "workspaces": 10,
+      "goroutines": 156,
+      "heapBytes": 22630416,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 49,
+        "total": 176
+      },
+      "stepSeconds": 4.805809889
+    },
+    {
+      "phase": "engaged",
+      "label": "11 bound, idle",
+      "workspaces": 11,
+      "goroutines": 158,
+      "heapBytes": 22694656,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 49,
+        "total": 176
+      },
+      "stepSeconds": 5.385985289
+    },
+    {
+      "phase": "active",
+      "label": "11 active",
+      "workspaces": 11,
+      "goroutines": 158,
+      "heapBytes": 22836920,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 53,
+        "total": 192
+      },
+      "stepSeconds": 4.8098080979999995
+    },
+    {
+      "phase": "engaged",
+      "label": "12 bound, idle",
+      "workspaces": 12,
+      "goroutines": 160,
+      "heapBytes": 22911944,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 53,
+        "total": 192
+      },
+      "stepSeconds": 2.549689736
+    },
+    {
+      "phase": "active",
+      "label": "12 active",
+      "workspaces": 12,
+      "goroutines": 160,
+      "heapBytes": 35646480,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 57,
+        "total": 208
+      },
+      "stepSeconds": 5.379308134
+    },
+    {
+      "phase": "engaged",
+      "label": "13 bound, idle",
+      "workspaces": 13,
+      "goroutines": 162,
+      "heapBytes": 35720320,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 57,
+        "total": 208
+      },
+      "stepSeconds": 2.554689627
+    },
+    {
+      "phase": "active",
+      "label": "13 active",
+      "workspaces": 13,
+      "goroutines": 162,
+      "heapBytes": 35875464,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 61,
+        "total": 224
+      },
+      "stepSeconds": 4.808814332
+    },
+    {
+      "phase": "engaged",
+      "label": "14 bound, idle",
+      "workspaces": 14,
+      "goroutines": 164,
+      "heapBytes": 35947400,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 61,
+        "total": 224
+      },
+      "stepSeconds": 2.556237106
+    },
+    {
+      "phase": "active",
+      "label": "14 active",
+      "workspaces": 14,
+      "goroutines": 164,
+      "heapBytes": 36090544,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 65,
+        "total": 240
+      },
+      "stepSeconds": 6.880989074
+    },
+    {
+      "phase": "engaged",
+      "label": "15 bound, idle",
+      "workspaces": 15,
+      "goroutines": 166,
+      "heapBytes": 36172880,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 65,
+        "total": 240
+      },
+      "stepSeconds": 3.082979483
+    },
+    {
+      "phase": "active",
+      "label": "15 active",
+      "workspaces": 15,
+      "goroutines": 166,
+      "heapBytes": 36329896,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 69,
+        "total": 256
+      },
+      "stepSeconds": 4.917237443
+    },
+    {
+      "phase": "engaged",
+      "label": "16 bound, idle",
+      "workspaces": 16,
+      "goroutines": 168,
+      "heapBytes": 36405336,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 69,
+        "total": 256
+      },
+      "stepSeconds": 2.56068223
+    },
+    {
+      "phase": "active",
+      "label": "16 active",
+      "workspaces": 16,
+      "goroutines": 168,
+      "heapBytes": 36549232,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 73,
+        "total": 272
+      },
+      "stepSeconds": 4.8078283840000005
+    },
+    {
+      "phase": "engaged",
+      "label": "17 bound, idle",
+      "workspaces": 17,
+      "goroutines": 170,
+      "heapBytes": 36623104,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 73,
+        "total": 272
+      },
+      "stepSeconds": 2.590859726
+    },
+    {
+      "phase": "active",
+      "label": "17 active",
+      "workspaces": 17,
+      "goroutines": 170,
+      "heapBytes": 36766792,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 77,
+        "total": 288
+      },
+      "stepSeconds": 5.375563271
+    },
+    {
+      "phase": "engaged",
+      "label": "18 bound, idle",
+      "workspaces": 18,
+      "goroutines": 172,
+      "heapBytes": 36844808,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 77,
+        "total": 288
+      },
+      "stepSeconds": 2.555253218
+    },
+    {
+      "phase": "active",
+      "label": "18 active",
+      "workspaces": 18,
+      "goroutines": 172,
+      "heapBytes": 36990488,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 81,
+        "total": 304
+      },
+      "stepSeconds": 4.806307254
+    },
+    {
+      "phase": "engaged",
+      "label": "19 bound, idle",
+      "workspaces": 19,
+      "goroutines": 174,
+      "heapBytes": 37069360,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 81,
+        "total": 304
+      },
+      "stepSeconds": 2.557327136
+    },
+    {
+      "phase": "active",
+      "label": "19 active",
+      "workspaces": 19,
+      "goroutines": 174,
+      "heapBytes": 37214408,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 85,
+        "total": 320
+      },
+      "stepSeconds": 4.822781419
+    },
+    {
+      "phase": "engaged",
+      "label": "20 bound, idle",
+      "workspaces": 20,
+      "goroutines": 176,
+      "heapBytes": 37292944,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 85,
+        "total": 320
+      },
+      "stepSeconds": 2.556155977
+    },
+    {
+      "phase": "active",
+      "label": "20 active",
+      "workspaces": 20,
+      "goroutines": 176,
+      "heapBytes": 37451528,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 5.366935233
+    },
+    {
+      "phase": "disengaged",
+      "label": "19 left",
+      "workspaces": 19,
+      "goroutines": 174,
+      "heapBytes": 37395624,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 16.290794462
+    },
+    {
+      "phase": "disengaged",
+      "label": "18 left",
+      "workspaces": 18,
+      "goroutines": 172,
+      "heapBytes": 37364712,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.25519775
+    },
+    {
+      "phase": "disengaged",
+      "label": "17 left",
+      "workspaces": 17,
+      "goroutines": 170,
+      "heapBytes": 37313672,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.235760921
+    },
+    {
+      "phase": "disengaged",
+      "label": "16 left",
+      "workspaces": 16,
+      "goroutines": 168,
+      "heapBytes": 37269416,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.230577635
+    },
+    {
+      "phase": "disengaged",
+      "label": "15 left",
+      "workspaces": 15,
+      "goroutines": 166,
+      "heapBytes": 37231776,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.233414098
+    },
+    {
+      "phase": "disengaged",
+      "label": "14 left",
+      "workspaces": 14,
+      "goroutines": 164,
+      "heapBytes": 37206904,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.266897916
+    },
+    {
+      "phase": "disengaged",
+      "label": "13 left",
+      "workspaces": 13,
+      "goroutines": 162,
+      "heapBytes": 37160640,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.243751832
+    },
+    {
+      "phase": "disengaged",
+      "label": "12 left",
+      "workspaces": 12,
+      "goroutines": 160,
+      "heapBytes": 37124376,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.234694918
+    },
+    {
+      "phase": "disengaged",
+      "label": "11 left",
+      "workspaces": 11,
+      "goroutines": 158,
+      "heapBytes": 37079832,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.235695044
+    },
+    {
+      "phase": "disengaged",
+      "label": "10 left",
+      "workspaces": 10,
+      "goroutines": 156,
+      "heapBytes": 37038984,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.257613223
+    },
+    {
+      "phase": "disengaged",
+      "label": "9 left",
+      "workspaces": 9,
+      "goroutines": 154,
+      "heapBytes": 37006912,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.240231288
+    },
+    {
+      "phase": "disengaged",
+      "label": "8 left",
+      "workspaces": 8,
+      "goroutines": 152,
+      "heapBytes": 36963416,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.312489551
+    },
+    {
+      "phase": "disengaged",
+      "label": "7 left",
+      "workspaces": 7,
+      "goroutines": 150,
+      "heapBytes": 36963432,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.247095456
+    },
+    {
+      "phase": "disengaged",
+      "label": "6 left",
+      "workspaces": 6,
+      "goroutines": 148,
+      "heapBytes": 36898848,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.236795965
+    },
+    {
+      "phase": "disengaged",
+      "label": "5 left",
+      "workspaces": 5,
+      "goroutines": 146,
+      "heapBytes": 36850528,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.234866299
+    },
+    {
+      "phase": "disengaged",
+      "label": "4 left",
+      "workspaces": 4,
+      "goroutines": 144,
+      "heapBytes": 36799992,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.306783292
+    },
+    {
+      "phase": "disengaged",
+      "label": "3 left",
+      "workspaces": 3,
+      "goroutines": 142,
+      "heapBytes": 36758944,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.259054946
+    },
+    {
+      "phase": "disengaged",
+      "label": "2 left",
+      "workspaces": 2,
+      "goroutines": 140,
+      "heapBytes": 36708008,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.233171744
+    },
+    {
+      "phase": "disengaged",
+      "label": "1 left",
+      "workspaces": 1,
+      "goroutines": 138,
+      "heapBytes": 36674816,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.263595629
+    },
+    {
+      "phase": "disengaged",
+      "label": "0 left",
+      "workspaces": 0,
+      "goroutines": 71,
+      "heapBytes": 36331712,
+      "traffic": {
+        "watchStreams": 7,
+        "wildcardWatchStreams": 6,
+        "scopedWatchStreams": 1,
+        "lists": 0,
+        "discovery": 89,
+        "total": 336
+      },
+      "stepSeconds": 10.227241705
+    }
+  ],
+  "streams": [
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "/configmaps",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "/secrets",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "apis.kcp.io/apibindings",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "root",
+      "resource": "apis.kcp.io/apiexportendpointslices",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "bootstrap.cluster.x-k8s.io/kubeadmconfigs",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/clusters",
+      "count": 1
+    },
+    {
+      "verb": "watch-list",
+      "cluster": "*",
+      "resource": "cluster.x-k8s.io/machines",
+      "count": 1
+    }
+  ]
+}

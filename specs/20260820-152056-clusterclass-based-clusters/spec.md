@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-20
 
-**Status**: Draft
+**Status**: Draft — implementation complete, pending the fork tag (see Success Criteria)
 
 **Input**: "We should base everything on ClusterClass based clusters."
 
@@ -159,11 +159,46 @@ core provider's.
 ## Success Criteria
 
 - `task verify` passes, with `test/integration/demo` asserting FR-001 to
-  FR-003 on ClusterClass based clusters.
+  FR-003 on ClusterClass based clusters. **Met**, with one step reported as
+  *could not run* — see below.
 - `task test:sweep` reports the per-workspace cost of the fleet shape with a
   ClusterClass based cluster in every workspace, and the figures in
   [Workspace resource usage](../../docs/site/content/en/docs/design/workspace-resource-usage.md)
   and [Usage](../../docs/site/content/en/docs/user/usage.md) are the figures
-  from that run.
+  from that run. **Met** — the run is in [`evidence/`](evidence/README.md).
 - `task drift` passes against a signed tag of the fork carrying the four
-  setups.
+  setups. **Not met**, and it is the one thing here that cannot be finished
+  from a session: the pin is a pseudo-version of the fork branch until somebody
+  cuts `v1.15.0-kcp.12` with a key. `DRIFT.md` says what has to happen; the
+  check passes against the branch (`go run ./cmd/drift -ref <branch>`) and
+  reports *divergence matches DRIFT.md exactly*.
+
+## Where this landed
+
+- **FR-001 to FR-003**: `test/integration/demo` takes two workspaces to ready
+  ClusterClass based clusters in about 90 seconds and asserts the isolation.
+  Both workspaces hold a class called `demo` and a `Cluster` called `demo-00`,
+  and they are distinct objects.
+- **FR-004**: `coremanager.SetFeatureGateDefaults`, called before flag parsing
+  in all four managers, so `--feature-gates=ClusterTopology=false` still wins.
+- **FR-005**: `coremanager.FleetCacheIndexes` and
+  `providerwiring.WithCacheIndexes`.
+- **FR-006**: measured, in [`evidence/`](evidence/README.md). Wiring the four
+  topology controllers moved exactly one number in the per-deployment table —
+  the core deployment holds two more watch streams on the shard — and moved no
+  per-workspace column at all.
+
+Three things the implementation found that the specification did not predict,
+all now in [The demo](../../docs/site/content/en/docs/design/demo.md):
+
+1. A feature gate guards watches and reconcilers, not reads. The topology
+   reconciler lists `MachinePool`s on every reconcile whatever the gate says,
+   so the type has to be published even though nothing here reconciles one.
+2. The topology reconciler needs `delete` on `Secret`s, for the cluster shim it
+   owns its work through. Without it a cluster comes up completely and then
+   reports `TopologyReconciled=False` forever — a permission failure wearing
+   the costume of a reconcile bug.
+3. A `Cluster` being deleted was blocked forever by a `ClusterClass` that had
+   already gone, which is what a deleted `APIBinding` produces when it removes
+   every bound object at once. Fixed in the fork, as an upstreamable bug: a
+   deleted namespace tears a class down alongside its clusters the same way.

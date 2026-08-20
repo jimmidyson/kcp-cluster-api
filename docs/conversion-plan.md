@@ -37,6 +37,18 @@ having to reconstruct the answer from the commit log.
   its work through — without it a cluster comes up completely and then reports
   `TopologyReconciled=False` forever.
 
+  **Measured, not predicted.** Wiring the four topology controllers moved one
+  number in the per-deployment table: the core deployment holds eight watch
+  streams on the shard where it held six, for `ClusterClass` and `MachinePool`.
+  Every per-workspace column is unchanged — 2 goroutines, 3 discovery requests,
+  7 reconcile requests, nothing retained on departure. What did move is the
+  shape with clusters in it: a workspace holding a ClusterClass based cluster
+  costs 57 goroutines and ~484 reconcile requests, against 45 and ~236
+  previously reported for a hand-built one under the previous wiring — a
+  before-and-after of one change rather than an experiment isolating the
+  topology, and the evidence says so. The run is under the feature's
+  [`evidence/`](../specs/20260820-152056-clusterclass-based-clusters/evidence/README.md).
+
   What is deliberately not done: class variables and patches, which need G4
   because variable defaulting is a webhook's job; runtime extensions, which
   stay behind `RuntimeSDK`; and upgrade-through-the-class, which is its own
@@ -50,7 +62,7 @@ having to reconstruct the answer from the commit log.
   deployment costs **2 goroutines per active workspace**, flat to twenty, with
   no watch streams or LISTs added by a workspace and everything returned when
   one departs; an installation of all four pays 8, plus 17 discovery requests
-  and 26 watch streams held on the shard. What is *not* uniform is reconciling:
+  and 28 watch streams held on the shard. What is *not* uniform is reconciling:
   the control plane provider costs 72 requests per workspace against core's 7,
   which a single fleet-wide figure hid. `cmd/sweeptotals` does the addition and
   refuses to print a total when a deployment's report is missing. See
