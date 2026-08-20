@@ -16,6 +16,22 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The fork model has a decided shape for more than one provider, and none of
+  it is built yet.**
+  [ADR-0004](adr-0004-scaling-to-many-provider-forks.md) settles that the
+  two-repository split stays — neither merge is available — and that the
+  boundary becomes three layers: shared multicluster plumbing as its own
+  module, one thin patch-carrier fork per upstream repository, and per-provider
+  integration as modules in this repository rather than separate repositories.
+  Per Principle VIII nothing is built for a set of one: the trigger for the
+  shared module is the first provider fork outside `sigs.k8s.io/cluster-api`,
+  and the trigger for the module boundary here is the second provider
+  integration. What the ADR changes today is the fork's admission rule — a new
+  file justifies itself against the shared layer before being carried — and two
+  corrections: the design site and `go.mod` described a single-patch fork that
+  ADR-0003 replaced, and the `replace` directives are now recorded as
+  non-propagating.
+
 - **Providers are separate deployments with separate APIExports.** One export
   per provider (`internal/capiexports`), one binary each, and the claims
   between them resolved at run time because an identity hash is per kcp
@@ -34,8 +50,8 @@ having to reconstruct the answer from the commit log.
   `cmd/kubeadm-bootstrap-manager`, plus `--control-plane-machines` in the demo,
   and `test/integration/bootstrap` asserts per-workspace bootstrap data and
   per-workspace cluster certificates. It needed D3's open item settled — see
-  below. The fork is tagged `v1.15.0-kcp.8` and `go.mod` pins that tag, so
-  `task drift` runs against a real ref again (see [`DRIFT.md`](../DRIFT.md)).
+  below. The fork is tagged and `go.mod` pins the tag, so `task drift` runs
+  against a real ref (see [`DRIFT.md`](../DRIFT.md) for the current pin).
 - **P2 has landed: a control plane comes up in every workspace.**
   `cmd/kubeadm-control-plane-manager` and its own export; `task demo` brings a
   KubeadmControlPlane to ready in each workspace, and

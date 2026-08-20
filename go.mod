@@ -27,8 +27,14 @@ require (
 )
 
 // Cluster API is consumed as an ordinary versioned dependency, resolved to
-// this project's patched fork. The fork carries the single public seam
-// recorded in DRIFT.md and is otherwise upstream at its base commit.
+// this project's patched fork. The fork carries the patches recorded in
+// DRIFT.md and is otherwise upstream at its base commit.
+//
+// These replace directives do not propagate: Go honours replace only in the
+// main module, and the fork keeps the module path sigs.k8s.io/cluster-api.
+// Anything that consumes this module must restate all three at matching
+// versions, or it resolves genuine upstream Cluster API instead. See
+// docs/adr-0004-scaling-to-many-provider-forks.md.
 //
 // All three modules must be pinned together: api/ and test/ are separate Go
 // modules inside the Cluster API repository, resolved by tag prefix, and a
