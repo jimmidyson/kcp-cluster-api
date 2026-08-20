@@ -58,28 +58,33 @@ having to reconstruct the answer from the commit log.
   blocked until they timed out and no probe failure reached the control plane
   provider. Both are fixed, the second in `v1.15.0-kcp.8`. See
   [The demo](site/content/en/docs/design/demo.md).
-- **Known defect: one workspace of two intermittently never reaches ready.**
-  Seen three times in CI and never locally. A run reports `1 of 2 clusters
-  ready` and stays there until the budget expires, while another package in the
-  same job does the identical work — two workspaces, a control plane machine
-  and a worker each — in 87 seconds. So it is a stall, not slowness, and the
-  integration budgets raised to 10 minutes are headroom that hides it rather
-  than a fix.
+- **Fixed: one workspace of two intermittently never reached ready.** Found by
+  investigation rather than by another timeout, and the cause was not the one
+  first guessed here.
 
-  Unproven hypothesis, recorded so the next session starts from it rather than
-  from the timeouts: `loggingClusterNotFoundWrapper` drops a request naming a
-  cluster the provider has not engaged yet, logs it at V(2), and nothing
-  re-enqueues it. A wildcard source sees every workspace's objects, including
-  ones engaged moments later, so a request arriving in that window would be
-  dropped silently — and a workspace whose objects were all dropped that way
-  would sit exactly like this. It is the one place in this wiring where work
-  disappears without a trace, which is why the wrapper logs at all.
+  The in-memory backend's mux handed out workload cluster ports by counting
+  upward from its minimum without checking any of them — upstream's own TODO,
+  standing where the check should be. A caller that derives its range from one
+  probed port gives the first workload cluster the port it probed and every
+  later one an unprobed neighbour, so on a busy machine the *second* workspace
+  gets a port something else already holds. The port is recorded on the
+  listener and never revisited, so it is retried with the same port forever:
+  the cluster's endpoint answers nothing, the remote connection probe never
+  succeeds, no Node appears, the Machine stays `Provisioned` and the control
+  plane never initialises.
 
-  This blocks nothing that has landed, and it is why
-  `test/integration/dockerbackend`'s two-workspace variant is not in the tree:
-  it never got a Machine created in 20 minutes on a runner where the
-  single-workspace docker test passes in 40 seconds, which may be the same
-  fault or may be its own.
+  That is why it was always 1 of 2 and never 0 of 2, why it never reproduced
+  locally, and why it looked like slowness — it is a permanent failure, and no
+  budget increase was ever going to help. The 10-minute integration budgets
+  raised while chasing it are headroom that should now be unnecessary; they are
+  left because a slow runner is still a slow runner, not because anything is
+  hiding behind them.
+
+  Fixed in the fork by binding to check and skipping what is taken
+  (`test/infrastructure/inmemory/pkg/server/mux.go`, recorded in
+  [`DRIFT.md`](../DRIFT.md) with an upstream proposal pending), with a
+  regression test for both halves.
+
 - **G4, the webhook dispatch layer, is the gating item.** Phase 3's P4 waits
   on it, and until it lands webhook wiring serves one named workspace and
   refuses a second rather than silently serving it wrong. It keeps a human
