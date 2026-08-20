@@ -52,6 +52,7 @@ limitations under the License.
 package sweep_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -110,6 +111,11 @@ const (
 	// between them. Two seconds is comfortably inside such a pause; see
 	// sweep.SettleReleased for the flake that established it.
 	releaseQuiet = 8 * time.Second
+
+	// How many reads a teardown sample is the lowest of, and how far apart.
+	// Enough to step over a transient without adding a minute to the sweep.
+	releasedSamples   = 5
+	releasedSampleGap = 400 * time.Millisecond
 
 	// retainedGoroutinesPerEventHandler is what one event-handler registration
 	// costs after the workspace that made it has gone: the processorListener
@@ -323,6 +329,36 @@ func settle(t *testing.T, what string) {
 	if !sweep.Settle(settleQuiet, settleTimeout) {
 		t.Fatalf("the goroutine count never settled %s: a sample taken now would measure work in flight rather than what the process costs", what)
 	}
+}
+
+// sampleReleased takes a teardown sample as the lowest of a few reads.
+//
+// Settling says the process stopped giving things back; it does not make the
+// next instant representative, because the count can rise again for something
+// unrelated and stay there. Every error in this number is upward - a goroutine
+// not gone yet, a transient one just started, a finalizer the GC inside Take
+// woke - so the lowest read is the estimator, and the sweep's own budget
+// stopped being a coin flip when it started using it.
+func sampleReleased(t *testing.T, report *sweep.Report, counter *sweep.Counter, label string, workspaces int) sweep.Sample {
+	t.Helper()
+	s := sweep.TakeLowest(releasedSamples, releasedSampleGap, sweep.PhaseDisengaged, label, workspaces, counter)
+	report.Add(s)
+	return s
+}
+
+// dumpGoroutines writes every goroutine's stack into the test log.
+//
+// Only on a failure, and deliberately into the log rather than a file: the run
+// that needs it is a CI run somebody is reading after the fact, and a file
+// under bin/ is not in the log they are reading.
+func dumpGoroutines(t *testing.T, why string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
+		t.Logf("could not write the goroutine profile (%s): %v", why, err)
+		return
+	}
+	t.Logf("goroutine profile (%s), grouped by stack with counts:\n%s", why, buf.String())
 }
 
 // settleReleased is settle for a teardown sample, where the question is
@@ -582,7 +618,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 			}
 		})
 		settleReleased(t, fmt.Sprintf("with %d workspaces left", remaining))
-		sample(t, report, counter, sweep.PhaseDisengaged, fmt.Sprintf("%d left", remaining), remaining)
+		sampleReleased(t, report, counter, fmt.Sprintf("%d left", remaining), remaining)
 	}
 
 	drained := report.Samples[len(report.Samples)-1]
@@ -621,6 +657,14 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		if perDeparture > budget {
 			t.Errorf("each departed workspace left %.1f goroutines behind, more than the %.1f this shape may retain (%s)",
 				perDeparture, budget, why)
+			// The stacks, not just the number. This assertion has now failed
+			// three times reporting 2.0 and 3.0 with nothing to say about
+			// what those goroutines were, and each time the answer was
+			// guessed at from the shape of the number rather than read. A
+			// profile written here says what is still running, and a run that
+			// prints it settles in one CI cycle what argument settles in
+			// none.
+			dumpGoroutines(t, "retention budget exceeded")
 		}
 	}
 

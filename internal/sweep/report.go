@@ -177,6 +177,11 @@ func Take(phase Phase, label string, workspaces int, counter *Counter) Sample {
 //
 // It returns whether the process stopped shrinking. False means the caller has
 // measured something still in motion, exactly as with Settle.
+//
+// Waiting is necessary and not sufficient, which cost a round to learn: the
+// count can settle at its low, then rise again for something unrelated - a
+// retry, a keepalive, a finalizer - and stay there. Whatever samples after
+// this has to be robust to that; see TakeLowest.
 func SettleReleased(quiet time.Duration, timeout time.Duration) bool {
 	const interval = 100 * time.Millisecond
 
@@ -197,6 +202,30 @@ func SettleReleased(quiet time.Duration, timeout time.Duration) bool {
 		}
 	}
 	return false
+}
+
+// TakeLowest samples n times and keeps the one holding the fewest goroutines.
+//
+// A teardown sample answers "what does a departed workspace still cost", and
+// every source of error in that number points the same way: a goroutine that
+// has not gone yet, a transient one that has just started, a finalizer the two
+// GCs inside Take woke. All of them inflate it; none of them deflate it below
+// what is genuinely still held. So the lowest of several samples is the better
+// estimator, and not by a heuristic - it is the only direction the noise goes.
+//
+// Sampling once after waiting is what this replaces. Waiting for the count to
+// stop falling does not make the next instant representative, and a run that
+// happened to sample two goroutines above its own settled low reported those
+// two as retained by every workspace that had departed.
+func TakeLowest(n int, gap time.Duration, phase Phase, label string, workspaces int, counter *Counter) Sample {
+	best := Take(phase, label, workspaces, counter)
+	for range max(0, n-1) {
+		time.Sleep(gap)
+		if s := Take(phase, label, workspaces, counter); s.Goroutines < best.Goroutines {
+			best = s
+		}
+	}
+	return best
 }
 
 func Settle(quiet time.Duration, timeout time.Duration) bool {
