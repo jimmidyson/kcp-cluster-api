@@ -52,6 +52,17 @@ weight: 10   # controls ordering within the section; leave gaps (10, 20, 30...)
 Section landing pages (`_index.md`) additionally set `linkTitle` when the
 nav label should differ from the page title.
 
+## Command examples
+
+Spell commands out in full. `kubectl` is always written `kubectl` — never
+`k`, and never behind an alias defined earlier on the page. A reader arrives
+mid-page from a search result, and a command that depends on an alias they
+scrolled past is one they cannot paste.
+
+Where a command needs the same flags every time, set them as environment
+variables in a setup block (`KUBECONFIG`, a server URL) rather than folding
+them into a shorthand, and repeat the remaining flags on each command.
+
 ## Building and previewing
 
 ```sh
