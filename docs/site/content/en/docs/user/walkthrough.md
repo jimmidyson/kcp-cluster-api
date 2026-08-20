@@ -509,7 +509,7 @@ publishes:
 
 ```sh
 kubectl --context base --server "$VW/clusters/*" get machines -A \
-  -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAME:.metadata.name,PHASE:.status.phase'
+  -o custom-columns='LOGICAL CLUSTER:.metadata.annotations.kcp\.io/cluster,NAMESPACE:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase'
 ```
 
 **Nothing named either workspace.** The managers were started before the
