@@ -16,6 +16,30 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The fork model has a decided shape for more than one provider, and none of
+  it is built yet.**
+  [ADR-0004](adr-0004-scaling-to-many-provider-forks.md) settles that the
+  two-repository split stays — neither merge is available — and that the
+  boundary becomes three layers: shared multicluster plumbing as its own
+  module, one thin patch-carrier fork per upstream repository, and per-provider
+  integration as modules in this repository rather than separate repositories.
+  Per Principle VIII nothing is built for a set of one, so the triggers are
+  named instead, and the second provider is named with them: **CAPX**
+  (`cluster-api-provider-nutanix`). Reading CAPX before porting it already
+  changed the ADR — its reconcilers are public, so a fork can be cut from a
+  release tag rather than a `main` commit; it is one Go module, so the
+  three-tag rule turns out to be a Cluster API fact rather than a general one;
+  and it carries two name-collision faults of the class the dev provider
+  needed patching for, which a CAPX fork under this project's ownership
+  (`jimmidyson/cluster-api-provider-nutanix`) will carry — a provider is
+  pinned at a fork this project controls, never at an upstream repository.
+
+  What the ADR changes today is the fork's admission rule — a new file
+  justifies itself against the shared layer before being carried — and two
+  corrections: the design site and `go.mod` described a single-patch fork that
+  ADR-0003 replaced, and the `replace` directives are now recorded as
+  non-propagating.
+
 - **Providers are separate deployments with separate APIExports.** One export
   per provider (`internal/capiexports`), one binary each, and the claims
   between them resolved at run time because an identity hash is per kcp
@@ -34,8 +58,8 @@ having to reconstruct the answer from the commit log.
   `cmd/kubeadm-bootstrap-manager`, plus `--control-plane-machines` in the demo,
   and `test/integration/bootstrap` asserts per-workspace bootstrap data and
   per-workspace cluster certificates. It needed D3's open item settled — see
-  below. The fork is tagged `v1.15.0-kcp.8` and `go.mod` pins that tag, so
-  `task drift` runs against a real ref again (see [`DRIFT.md`](../DRIFT.md)).
+  below. The fork is tagged and `go.mod` pins the tag, so `task drift` runs
+  against a real ref (see [`DRIFT.md`](../DRIFT.md) for the current pin).
 - **P2 has landed: a control plane comes up in every workspace.**
   `cmd/kubeadm-control-plane-manager` and its own export; `task demo` brings a
   KubeadmControlPlane to ready in each workspace, and
