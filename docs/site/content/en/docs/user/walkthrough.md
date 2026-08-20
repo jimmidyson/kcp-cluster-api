@@ -263,9 +263,11 @@ The class and the five templates it refers to are in the workspace too, and
 they are what everything under the `Cluster` was stamped from:
 
 ```sh
+TEMPLATES=clusterclasses,devclustertemplates,devmachinetemplates
+TEMPLATES=$TEMPLATES,kubeadmcontrolplanetemplates,kubeadmconfigtemplates
+
 kubectl --context base --server $KCP/clusters/root:capi-demo-1 -n default \
-  get clusterclasses,devclustertemplates,devmachinetemplates,\
-kubeadmcontrolplanetemplates,kubeadmconfigtemplates
+  get $TEMPLATES
 ```
 
 So the tree below was written by the core provider's topology controller, not
