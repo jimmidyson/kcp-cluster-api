@@ -73,3 +73,6 @@ repository's root `go.mod` and is unaffected by upstream rebases.
   site.
 - CI builds this site on every PR that touches `docs/site/`, so a
   content or config mistake fails the PR rather than shipping broken docs.
+- Merging to `main` publishes that build to
+  <https://jimmidyson.github.io/kcp-cluster-api/>. Nothing else publishes it,
+  so a page that is not merged is not documentation anyone can read.

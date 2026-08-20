@@ -122,7 +122,7 @@ specs/            spec-driven feature specifications
 | `pr` | pull requests, pushes to `main` | Runs `task verify`, then reads `bin/verify-result.json`: "could not run" fails the job rather than passing it |
 | `pr title` | pull requests, including edits | Enforces the Conventional Commits title format |
 | `drift` | daily, on demand, and on PRs touching the pin or the record | Runs `task drift` |
-| `docs` | pull requests touching `docs/site/` | Runs `task docs:build` |
+| `docs` | pull requests touching `docs/site/`, pushes to `main` | Runs `task docs:build`; on `main` publishes the built site to [GitHub Pages](https://jimmidyson.github.io/kcp-cluster-api/) |
 | `release-please` | pushes to `main` | Opens release PRs and cuts tags from the squashed commit titles |
 
 ## Documentation
@@ -138,6 +138,11 @@ Everything this project adds is documented for two audiences, in the
 A feature is not done until both are updated, or a no-op is genuinely
 correct: an internal change with no user-visible behaviour still needs a
 design write-up. Build the site with `task docs:build`.
+
+The site is published at
+<https://jimmidyson.github.io/kcp-cluster-api/> — every merge to `main` that
+touches `docs/site/` deploys the build from that commit, so what is published
+is whatever `main` says now.
 
 ## Contributing
 
