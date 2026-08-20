@@ -327,11 +327,45 @@ type Result struct {
 // they can talk to. The machine count is checked as well as their state, since
 // a worker pool that created no Machines at all would otherwise satisfy
 // "every machine is bootstrapped" vacuously.
+//
+// It is the milestone on the way to Ready rather than the demo's
+// done-condition: reported in the tables, not waited on. See Ready.
 func (r Result) Provisioned() bool {
 	return AllProvisioned(r.Statuses) &&
 		AllInitialized(r.ControlPlanes) &&
 		len(r.Machines) >= r.ExpectedMachines &&
 		AllBootstrapped(r.Machines)
+}
+
+// Ready reports whether every cluster the run asked for is one somebody could
+// use: the Cluster is Available, its control plane has every replica it was
+// asked for, and every Machine is Ready.
+//
+// This is what the demo waits for. Provisioned is not enough and the
+// difference is not cosmetic - a control plane that is initialized but whose
+// machines never go Ready is exactly the shape of the bugs this wiring has
+// had, and a demo that stopped at provisioned would have reported all of them
+// as a success.
+//
+// The machine count is checked here too, for the reason Provisioned checks it:
+// without it a run that created no Machines at all would satisfy "every
+// machine is ready" vacuously.
+//
+// A run that asked for no control plane falls back to Provisioned, because
+// there is nothing for readiness to mean: the Cluster's Available condition
+// summarises a remote connection probe and a control plane availability that a
+// cluster with no control plane never gets, so waiting for it would be waiting
+// for something that cannot happen. ControlPlanes is empty only in that case -
+// a run that asked for one gets a row saying "not created yet" until it
+// appears.
+func (r Result) Ready() bool {
+	if len(r.ControlPlanes) == 0 {
+		return r.Provisioned()
+	}
+	return AllClustersReady(r.Statuses) &&
+		AllControlPlanesReady(r.ControlPlanes) &&
+		len(r.Machines) >= r.ExpectedMachines &&
+		AllMachinesReady(r.Machines)
 }
 
 func fixtureScheme() (*runtime.Scheme, error) {
@@ -532,7 +566,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 
 	// 5. Watch them come up.
-	result, err := waitForProvisioned(ctx, opts, workspaces)
+	result, err := waitForReady(ctx, opts, workspaces)
 	result.Manager = manager
 	result.Managers = byExport
 	return result, err
@@ -697,10 +731,10 @@ func exportNames(providers []capiexports.Provider) []string {
 	return names
 }
 
-// waitForProvisioned polls every workspace directly - not through the
-// manager's caches - and renders the table until everything is provisioned or
-// the timeout expires.
-func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspace) (Result, error) {
+// waitForReady polls every workspace directly - not through the manager's
+// caches - and renders the table until every cluster is ready or the timeout
+// expires.
+func waitForReady(ctx context.Context, opts Options, workspaces []Workspace) (Result, error) {
 	deadline := time.Now().Add(opts.Timeout)
 	ticker := time.NewTicker(opts.PollInterval)
 	defer ticker.Stop()
@@ -736,14 +770,14 @@ func waitForProvisioned(ctx context.Context, opts Options, workspaces []Workspac
 			return result, err
 		}
 
-		if result.Provisioned() {
+		if result.Ready() {
 			return result, nil
 		}
 		if time.Now().After(deadline) {
-			return result, fmt.Errorf("timed out after %s with %d of %d clusters provisioned, %d of %d control planes initialized and %d of %d machines bootstrapped",
-				opts.Timeout, provisionedCount(statuses), len(statuses),
-				initializedCount(controlPlanes), len(controlPlanes),
-				bootstrappedCount(machines), result.ExpectedMachines)
+			return result, fmt.Errorf("timed out after %s with %d of %d clusters ready, %d of %d control planes ready and %d of %d machines ready",
+				opts.Timeout, readyCount(statuses), len(statuses),
+				controlPlanesReadyCount(controlPlanes), len(controlPlanes),
+				machinesReadyCount(machines), result.ExpectedMachines)
 		}
 
 		select {
@@ -758,6 +792,16 @@ func provisionedCount(statuses []ClusterStatus) int {
 	n := 0
 	for _, s := range statuses {
 		if s.Provisioned {
+			n++
+		}
+	}
+	return n
+}
+
+func readyCount(statuses []ClusterStatus) int {
+	n := 0
+	for _, s := range statuses {
+		if s.Ready {
 			n++
 		}
 	}
@@ -849,6 +893,26 @@ func bootstrappedCount(statuses []MachineStatus) int {
 	n := 0
 	for _, s := range statuses {
 		if s.Bootstrapped {
+			n++
+		}
+	}
+	return n
+}
+
+func controlPlanesReadyCount(statuses []ControlPlaneStatus) int {
+	n := 0
+	for _, s := range statuses {
+		if s.Ready {
+			n++
+		}
+	}
+	return n
+}
+
+func machinesReadyCount(statuses []MachineStatus) int {
+	n := 0
+	for _, s := range statuses {
+		if s.Ready {
 			n++
 		}
 	}
