@@ -55,9 +55,9 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.9`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.11`
 
-> All three modules are at `v1.15.0-kcp.9`. `api/` was left behind at
+> All three modules are at `v1.15.0-kcp.11`. `api/` was left behind at
 > `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
 > have pointed a new version at an unchanged tree; it is tagged along with the
 > others again now, which costs nothing and removes a version skew that had to
@@ -125,6 +125,10 @@ cannot build without them. See the feature's research notes (R2).
 | `test/infrastructure/docker/reconcilers/backends/inmemory/workspace_keys.go` | New file. Names the in-memory backend's per-cluster state by management cluster as well as namespace and name. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorycluster_backend.go` | **Modified.** Uses that key. Two clusters called `default/demo-00` in different workspaces previously shared one resource group and one listener, so one tenant's control plane served the other's — a collision that worked rather than failed. | None — carried deliberately, ADR-0003 |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/inmemorymachine_backend.go` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/docker/internal/docker/util.go` | **Modified.** Adds the logical cluster a `Cluster` was read from as a container label, and the helpers that qualify a name and a filter by it. Every lookup in this package selected on `io.x-k8s.kind.cluster`, whose value is the Cluster's *name*: enough for one management cluster's daemon, not for kcp, where two workspaces routinely hold a Cluster with the same name. The scope is read from the object's `kcp.io/cluster` annotation and is empty outside kcp, so filters and names are byte-for-byte upstream's wherever no workspace is involved. | **Pending** |
+| `test/infrastructure/docker/internal/docker/loadbalancer.go` | **Modified.** Qualifies the load balancer's container name by logical cluster, and scopes the filter that collects its backend servers. Two same-named clusters previously shared one `<name>-lb` container — names are unique per daemon, so the second adopted the first's — and `UpdateConfiguration` listed *every* control plane whose Cluster shared the name, so one workspace's load balancer forwarded to another workspace's API server. That surfaced as `x509: certificate signed by unknown authority` against a CA named `kubernetes`, because kubeadm names every cluster's CA that: the right name and the wrong key, which reads as a certificate bug rather than the routing one it is. | **Pending** |
+| `test/infrastructure/docker/internal/docker/machine.go` | **Modified.** Machines carry their logical cluster, stamp it on the containers they create, and filter on it when looking one up. Without the label at creation the scoped filters above would match nothing. | **Pending** |
+| `test/infrastructure/docker/internal/docker/logicalcluster_test.go` | New file. Covers the entry points rather than only the helpers: reverting the load balancer's name or a Machine's knowledge of its workspace fails it, and the unqualified path is asserted to be exactly what upstream produces. | **Pending** |
 | `go.mod` | **Modified.** Adds `sigs.k8s.io/multicluster-runtime`. | None — carried deliberately, ADR-0003 |
 | `go.sum` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
 

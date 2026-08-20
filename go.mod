@@ -33,11 +33,11 @@ require (
 // All three modules must be pinned together: api/ and test/ are separate Go
 // modules inside the Cluster API repository, resolved by tag prefix, and a
 // partial pin fails at dependency resolution rather than at compile time.
-replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.9
+replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.11
 
-replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.9
+replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.11
 
-replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.9
+replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.11
 
 require (
 	cel.dev/expr v0.25.1 // indirect
