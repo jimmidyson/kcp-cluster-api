@@ -7,6 +7,9 @@ design documentation. Published from `content/en/docs/`:
 - `docs/design/` — architecture and deep dives, technical reference for
   developers and agents changing the code.
 
+The site has no landing page: `layouts/index.html` redirects `/` straight to
+`docs/user/`, so the published root is the user docs.
+
 See [Documentation policy](content/en/docs/design/documentation-policy.md)
 for what's expected of new pages, and the root
 [`kcp/README.md`](../../README.md) for how this fits into the rest of the
