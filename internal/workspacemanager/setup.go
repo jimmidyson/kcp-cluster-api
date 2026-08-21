@@ -247,9 +247,19 @@ func newInitializerManager(ctx context.Context, opts Options, providerCfg *rest.
 func newMaintainerManager(ctx context.Context, opts Options, providerClient client.Client) (mcmanager.Manager, error) {
 	export := capiexports.WorkspaceExport
 	registry := &capicontrollerutil.WildcardRegistry{}
+	// Discovered by the workspace's LogicalCluster rather than by an
+	// APIBinding, and that is not optional here. This deployment claims
+	// `apibindings`, which replaces the virtual workspace's normally-filtered
+	// view with every APIBinding the workspace holds - kcp's own tenancy and
+	// topology bindings among them, which never go away. A provider
+	// disengages only when nothing it watches remains for that workspace, so
+	// discovering by APIBinding engages correctly and never disengages,
+	// whatever the filter says. There is one LogicalCluster per workspace and
+	// it is visible only while this export is bound, so the count is one and
+	// reaches zero. See providerwiring.WithLogicalClusterDiscovery.
 	provider, err := providerwiring.NewAPIExportProvider(
 		kcpclient.SetCluster(rest.CopyConfig(opts.BaseConfig), logicalcluster.NewPath(opts.ProviderPath)),
-		export, opts.Scheme, registry)
+		export, opts.Scheme, registry, providerwiring.WithLogicalClusterDiscovery())
 	if err != nil {
 		return nil, fmt.Errorf("constructing the kcp APIExport provider for %s: %w", export, err)
 	}

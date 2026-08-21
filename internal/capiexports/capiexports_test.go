@@ -347,6 +347,21 @@ func TestWorkspacesExportClaimsWhatItsControllerNeeds(t *testing.T) {
 	if _, ok := claims["apibindings.apis.kcp.io"]; !ok {
 		t.Error("the workspace export does not claim apibindings")
 	}
+	// Read-only, and load-bearing: this is the object the fleet-wide manager
+	// discovers a workspace by, so a workspace whose LogicalCluster this
+	// export cannot see is a workspace the manager never engages. See
+	// providerwiring.WithLogicalClusterDiscovery.
+	logical, ok := claims["logicalclusters.core.kcp.io"]
+	if !ok {
+		t.Error("the workspace export does not claim logicalclusters: it discovers workspaces by them")
+	}
+	for _, verb := range logical {
+		if !slices.Contains([]string{"get", "list", "watch"}, verb) {
+			t.Errorf("the workspace export claims logicalclusters for %v: it only reads them", logical)
+			break
+		}
+	}
+
 	verbs, ok := claims["clusterroles.rbac.authorization.k8s.io"]
 	if !ok {
 		t.Fatal("the workspace export does not claim clusterroles")

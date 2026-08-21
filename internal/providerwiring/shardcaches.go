@@ -31,6 +31,7 @@ import (
 	mcrecorder "github.com/kcp-dev/multicluster-provider/pkg/events/recorder"
 	mcpprovider "github.com/kcp-dev/multicluster-provider/pkg/provider"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
 
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
@@ -81,20 +82,22 @@ func NewAPIExportProvider(cfg *rest.Config, endpointSliceName string, scheme *ru
 	}
 
 	logger := log.Log.WithName("kcp-apiexport-cluster-provider")
-	caches := &shardCaches{registry: registry}
+	conf := &providerConfig{caches: &shardCaches{registry: registry}}
 	for _, opt := range opts {
-		opt(caches)
+		opt(conf)
 	}
+
+	object, ready := conf.discovery()
 
 	return mcpprovider.NewProvider(cfg, endpointSliceName, mcpprovider.Options{
 		Scheme:                       scheme,
 		EndpointSliceObject:          &apisv1alpha1.APIExportEndpointSlice{},
 		ExtractURLsFromEndpointSlice: mcpprovider.DefaultExtractURLsFromEndpointSlice,
-		ObjectToWatch:                &apisv1alpha1.APIBinding{},
+		ObjectToWatch:                object,
 		Log:                          &logger,
-		AddFilter:                    mcpprovider.ConditionReadyFunc("Ready"),
-		UpdateFilter:                 mcpprovider.ConditionReadyFunc("Ready"),
-		NewCluster:                   caches.newCluster,
+		AddFilter:                    ready,
+		UpdateFilter:                 ready,
+		NewCluster:                   conf.caches.newCluster,
 	})
 }
 
@@ -180,8 +183,35 @@ type CacheIndex struct {
 	Extract client.IndexerFunc
 }
 
+// providerConfig is what the options build: the per-shard caches, and which
+// object the provider discovers a workspace by.
+type providerConfig struct {
+	caches *shardCaches
+
+	// byLogicalCluster watches LogicalClusters rather than APIBindings.
+	byLogicalCluster bool
+}
+
+// discovery returns the object this provider watches to find workspaces, and
+// the test for that object being usable.
+func (c *providerConfig) discovery() (client.Object, func(client.Object) (bool, error)) {
+	if !c.byLogicalCluster {
+		// An APIBinding, and Ready is a condition on it.
+		return &apisv1alpha1.APIBinding{}, mcpprovider.ConditionReadyFunc("Ready")
+	}
+	// A LogicalCluster says Ready with a phase rather than a condition, so
+	// ConditionReadyFunc finds no conditions and rejects every workspace.
+	return &corev1alpha1.LogicalCluster{}, func(obj client.Object) (bool, error) {
+		logical, ok := obj.(*corev1alpha1.LogicalCluster)
+		if !ok {
+			return false, fmt.Errorf("expected a LogicalCluster, got %T", obj)
+		}
+		return logical.Status.Phase == corev1alpha1.LogicalClusterPhaseReady, nil
+	}
+}
+
 // ProviderOption configures the APIExport provider.
-type ProviderOption func(*shardCaches)
+type ProviderOption func(*providerConfig)
 
 // WithCacheIndexes registers field indexes on each shard's fleet-spanning cache
 // before that shard's watches are registered and before any workspace on it is
@@ -190,9 +220,9 @@ type ProviderOption func(*shardCaches)
 // The context is the one the indexes are registered with, and outlives the
 // registration: controller-runtime uses it to start the informer being indexed.
 func WithCacheIndexes(ctx context.Context, indexes ...CacheIndex) ProviderOption {
-	return func(s *shardCaches) {
-		s.indexCtx = ctx
-		s.indexes = append(s.indexes, indexes...)
+	return func(c *providerConfig) {
+		c.caches.indexCtx = ctx
+		c.caches.indexes = append(c.caches.indexes, indexes...)
 	}
 }
 
@@ -223,4 +253,59 @@ func (s *shardCaches) addIndexes(host string, wildcard mcpcache.WildcardCache) e
 		}
 	}
 	return nil
+}
+
+// WithLogicalClusterDiscovery makes the provider discover workspaces by their
+// LogicalCluster rather than by an APIBinding.
+//
+// # Why a deployment would need this
+//
+// The default is to watch APIBindings, and that view is normally already one
+// object per workspace: kcp serves back only the binding that binds this
+// export (`provideAPIExportFilteredRestStorage`). A deployment that claims
+// `apibindings` replaces that filtered view with every APIBinding the
+// workspace holds - kcp's own `tenancy.kcp.io` and `topology.kcp.io` among
+// them - so its discovery object stops being one per workspace and its
+// engagement bookkeeping starts turning on objects that are not its business.
+// Watching the LogicalCluster restores the one-per-workspace property from the
+// object whose lifetime the fleet actually follows: the workspace.
+//
+// It requires a claim on `logicalclusters`. That claim is also what scopes the
+// fleet correctly, because kcp labels a claimed object only for a workspace
+// that accepted the claim - so a LogicalCluster becomes visible when this
+// export is bound in its workspace, and no workspace that has not onboarded is
+// ever seen.
+//
+// # What this does not fix
+//
+// It does not make a workspace disengage when it unbinds this export, and
+// nothing available here does. Two kcp behaviours combine, both measured on
+// v0.32.3:
+//
+//   - The apiexport virtual workspace skips the APIBinding check for wildcard
+//     requests (`authorizer.boundAPIAuthorizer.Authorize`), so what a
+//     fleet-wide watch sees is decided by the claim label alone.
+//   - Nothing ever removes that label. The `permissionclaimlabel` controller
+//     recomputes labels from the binding, and its `process` returns early when
+//     the binding is gone - so a deleted APIBinding leaves every object it
+//     caused to be labelled labelled forever.
+//
+// So no claimed object leaves a wildcard view when its binding is deleted, and
+// a deployment that discovers by one cannot see an unbind. That holds for the
+// APIBinding view too once `apibindings` is claimed, which is why swapping the
+// discovery object does not change it: a sweep unbinding this export never
+// disengaged under either.
+//
+// For the deployment this was written for that is the right behaviour rather
+// than a limitation to work around. Its APIBinding is written by a
+// WorkspaceType with `defaultAPIBindingLifecycle: Maintain`, so kcp recreates
+// one a tenant deletes: unbinding is not how a workspace leaves. Deleting the
+// workspace is, and the LogicalCluster is deleted with it - which is a real
+// delete rather than a claim label going stale, so the fleet does shrink.
+// Measured by test/integration/sweep's workspace shape, where a departed
+// workspace's cost comes back.
+func WithLogicalClusterDiscovery() ProviderOption {
+	return func(c *providerConfig) {
+		c.byLogicalCluster = true
+	}
 }
