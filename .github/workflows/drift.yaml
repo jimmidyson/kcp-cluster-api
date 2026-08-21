@@ -23,6 +23,10 @@ on:
       - 'DRIFT.md'
       - 'cmd/drift/**'
       - 'internal/drift/**'
+      # One record per fork, and each is pinned by its own module. A record or
+      # a pin outside this list is one the check stops gating.
+      - 'providers/*/DRIFT.md'
+      - 'providers/*/go.mod'
 
 permissions:
   contents: read

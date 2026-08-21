@@ -1,4 +1,4 @@
-# Drift record
+# Drift record: Cluster API
 
 The complete set of changes this project carries against upstream Cluster
 API. Everything here is a liability: each entry makes the next upstream
@@ -6,6 +6,22 @@ adoption more expensive.
 
 `task drift` checks this file against reality and fails on any path that
 diverges without an entry here.
+
+## This is one record of several
+
+There is one drift record per fork, each beside the module that pins its
+fork, and `task drift` checks every one:
+
+| Fork | Record | Pinned by |
+|---|---|---|
+| Cluster API | this file | the repository root |
+| [Nutanix infrastructure](providers/nutanix-infrastructure/DRIFT.md) | `providers/nutanix-infrastructure/DRIFT.md` | that module, and the root |
+
+The reasoning below — what counts as divergence, the two kinds of entry, why
+the check runs where it does — governs all of them. What is specific to a
+fork stays in that fork's record: the three tags per release below are a fact
+about Cluster API's `api/` and `test/` submodules, not about forks, and CAPX
+takes one.
 
 ## Two kinds of entry
 

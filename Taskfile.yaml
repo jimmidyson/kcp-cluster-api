@@ -261,9 +261,19 @@ tasks:
         | tar -xzf - -C {{.BIN}} --strip-components=1 bin/kcp
 
   drift:
-    desc: Report the fork's divergence from its base and check it against DRIFT.md
+    desc: Report each fork's divergence from its base and check it against its record
     cmds:
+      # Cluster API's fork, recorded at the root.
       - go run ./cmd/drift
+      # One record per fork, and each is checked from the module that pins it:
+      # the ref comes from that module's own graph, so a checker run from the
+      # wrong directory would measure the wrong version. A fork whose record is
+      # not listed here is one nothing checks.
+      - cd providers/nutanix-infrastructure && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
+          --record DRIFT.md
+          --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
+          --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
+          --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
 
   docs:build:
     desc: Build the documentation site
