@@ -144,13 +144,34 @@ merged, the `release-please` workflow rewrites its branch, title and changelog
 on every push to `main`, so it always describes everything landed so far —
 there is no window in which starting a release freezes what goes into it.
 
-The split is not a preference. GitHub forbids `GITHUB_TOKEN` from *creating* a
-pull request unless "Allow GitHub Actions to create and approve pull requests"
-is enabled for the repository; updating one that already exists is allowed. So
-the workflow can do everything except the first step, and `task release-please`
-is that step. Run from `main`, and needs Node plus a GitHub token — set
-`GITHUB_TOKEN`, or authenticate `gh` and it will use that. Neither is required
-by `task verify`.
+### Where the history starts
+
+`main` carries 329 commits and only 38 of them are this project's: it is a fork
+of [kubernetes-sigs/cluster-api](https://github.com/kubernetes-sigs/cluster-api)
+and the other 291 are upstream's, which do not follow Conventional Commits and
+are not ours to release. With nothing to stop at, release-please walked back
+into them and pulled an upstream commit into the changelog as a feature of this
+project.
+
+So `release-please-config.json` pins `bootstrap-sha` to
+`281e4e3` — the last upstream commit, one before
+[`7b9ccb3`](https://github.com/jimmidyson/kcp-cluster-api/commit/7b9ccb30b1d6a9215cc06168162e409bd5347db0),
+where this project's own history begins. The named commit is excluded, so the
+38 that follow it are exactly what gets released. It applies only until the
+first release exists and is ignored afterwards; delete it once `v0.1.0` is
+tagged. The config is JSON and cannot hold a comment, which is why the
+reasoning is here.
+
+### Why CI cannot open the pull request
+
+The split above is not a preference. GitHub forbids `GITHUB_TOKEN` from
+*creating* a pull request unless "Allow GitHub Actions to create and approve
+pull requests" is enabled for the repository; updating one that already exists
+is allowed. So the workflow can do everything except the first step, and
+`task release-please` is that step.
+
+It runs from `main` and needs Node plus a GitHub token — set `GITHUB_TOKEN`, or
+authenticate `gh` and it will use that. Neither is required by `task verify`.
 
 ## Documentation
 
