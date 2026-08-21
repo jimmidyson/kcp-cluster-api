@@ -37,10 +37,25 @@ import (
 // already pointed at a logical cluster.
 const BaseContext = "base"
 
+// ShardBaseContext is the same endpoint under the shard admin's credential,
+// which is a member of system:masters.
+//
+// The demo uses it for one thing: impersonating tenants. kcp scopes an
+// impersonated user to the logical cluster the request addresses unless the
+// impersonator is privileged, and a scoped tenant is refused in every other
+// workspace whatever RBAC says - including the one holding the APIExports,
+// where the right to enable a provider is checked. See
+// demo.Options.ImpersonationConfig.
+const ShardBaseContext = "shard-base"
+
 // KcpServer is a kcp server process this package started.
 type KcpServer struct {
 	// BaseConfig addresses the server, cluster-unaware.
 	BaseConfig *rest.Config
+
+	// ImpersonationConfig addresses the same server as the shard admin, which
+	// is what impersonating a tenant needs. See ShardBaseContext.
+	ImpersonationConfig *rest.Config
 
 	// KubeconfigPath is where the server wrote its admin kubeconfig, so a
 	// person can point kubectl at the same server the demo is using.
@@ -146,6 +161,16 @@ func StartKcp(ctx context.Context, dir string, timeout time.Duration, log logr.L
 		return nil, fmt.Errorf("%w (see %s)", err, logPath)
 	}
 	server.BaseConfig = cfg
+
+	// The privileged credential from the same kubeconfig. Read after the
+	// server is up, because it is the same file the base config came from and
+	// that file is written once the server is serving.
+	impersonation, err := ConfigFromKubeconfig(server.KubeconfigPath, ShardBaseContext)
+	if err != nil {
+		server.Stop()
+		return nil, fmt.Errorf("reading the %s context from %s: %w", ShardBaseContext, server.KubeconfigPath, err)
+	}
+	server.ImpersonationConfig = viaLoopback(impersonation)
 
 	log.Info("kcp is serving", "kubeconfig", server.KubeconfigPath)
 	return server, nil

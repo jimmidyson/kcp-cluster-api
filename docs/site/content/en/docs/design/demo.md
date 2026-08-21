@@ -28,7 +28,7 @@ The demo prints a table; the assertions live in `test/integration/demo`, which
 `task verify` runs. Both drive `internal/demo.Run`, so a demo that breaks fails
 CI rather than being discovered at the next presentation.
 
-The test asserts three things:
+The test asserts four things:
 
 1. **Every workspace's cluster is ready** — the `Cluster`'s `Available`
    condition, every control plane replica it was asked for, and every `Machine`
@@ -41,6 +41,14 @@ The test asserts three things:
    own home and their own `Cluster`s, and is refused every other user's home,
    every other user's `Cluster`s, and the org workspace that holds all the
    homes.
+
+4. **Onboarding took no manual step.** Each workspace was created with the
+   `cluster-api` `WorkspaceType` and came up bound to core with its roles
+   written; each tenant enabled their own providers, as themselves; and each
+   workspace's role ended up covering what its tenant enabled, with nothing
+   editing it. `test/integration/onboarding` asserts the same properties
+   against a bare installation, including the refusal a tenant gets when
+   nobody granted them the right to enable a provider.
 
 The second and third are the conversion plan's P8, and they are the ones the
 rest of the suite never made:
@@ -129,13 +137,24 @@ rule. Binding by name is what kcp's own e2e framework does
 `system:authenticated`. A unit test asserts the demo's own roles do **not**
 carry the rule.
 
-The second binding is the ordinary one: `demo-home-owner` in a home,
-`demo-workspace-owner` in a workspace, resolved by ordinary RBAC.
+The second binding is the ordinary one, resolved by ordinary RBAC:
+`demo-home-owner` in a home, which the demo defines, and
+`cluster-api-admin` in a workspace, which it does not. That role is written by
+the Cluster API `WorkspaceType`'s initializer before the workspace becomes
+`Ready`, and kept covering whatever the tenant has enabled by a fleet-wide
+controller — so the demo decides who holds it and nothing else. See
+[Workspace onboarding](workspace-onboarding.md).
 
 ## One writable type, because the cluster is a topology
 
-`demo-workspace-owner` grants `get`/`list`/`watch` across all four Cluster API
-groups and `create`/`update`/`patch`/`delete` on `clusters` alone.
+`cluster-api-admin` grants `get`/`list`/`watch` across every Cluster API group
+the workspace serves, and `create`/`update`/`patch`/`delete` on `clusters`
+alone.
+
+The group list is derived rather than fixed at four — it follows the
+`APIBinding`s the workspace holds, so a tenant who enables another provider
+gets it — but the read/write split below is a decision, and it does not move
+with the list.
 
 That is a consequence of clusters being ClusterClass based. A tenant's `Cluster`
 names a class and a shape; the `DevCluster`, the `KubeadmControlPlane`, the
@@ -159,13 +178,15 @@ above. And `delete` on `machines` — a real operation and a real temptation, bu
 it is remediation, which is the platform's job here, and a `Machine` deleted
 underneath the topology controller is a change it did not make.
 
-The role reads the whole four groups by wildcard rather than naming each type,
-so that an export publishing a new type does not silently fall outside what an
-owner may watch. The write rule names one resource, because that is the whole
-claim and it should be readable as such.
+The role reads each group by wildcard rather than naming each type, so that an
+export publishing a new type does not silently fall outside what an owner may
+watch. The write rule names one resource, because that is the whole claim and
+it should be readable as such.
 
-Unit tests hold both halves: every type the four exports publish is readable,
-and none but `clusters` is writable.
+Unit tests in `internal/capiworkspaces` hold both halves: every type the four
+exports publish is readable, and none but `clusters` is writable. They live
+with the role rather than with the demo, because the role is written by the
+`WorkspaceType`'s initializer now and the demo only decides who holds it.
 
 ## Why impersonation rather than credentials
 
@@ -175,7 +196,24 @@ what `kubectl --as` sends — rather than minting a token per user.
 kcp evaluates its whole authorization stack against the impersonated user, so
 the answer is that user's authorization and not an approximation of it: the
 `forbidden` rows in the access table are the same denials a tenant holding
-their own credentials would get. What impersonation avoids is a second
+their own credentials would get.
+
+**With one condition that is not optional.** kcp scopes an impersonated user to
+the logical cluster the request addresses unless the impersonator is in
+`system:masters` (`pkg/server/filters/impersonation.go`), and a scoped user is
+refused everywhere else whatever RBAC says — the authorizer returns
+`NoOpinion` for any other workspace's local policy. That makes an impersonated
+tenant *less* able than the real one, which is the opposite of what
+impersonation is for here, and it breaks the step the demo exists to show:
+enabling a provider is authorized as `bind` on the `APIExport`, in the
+workspace the export lives in rather than the tenant's own. Impersonated from
+the ordinary admin, a tenant is refused with `no permission to bind to export
+…` and no RBAC anywhere fixes it.
+
+So the demo impersonates from the **shard admin** —
+`Options.ImpersonationConfig`, the `shard-base` context of a kcp kubeconfig —
+and keeps it separate from the credential it does its own work with, so that
+the privilege is used for exactly one thing. What impersonation avoids is a second
 mechanism that would only work half the time. Tokens would mean a
 `--token-auth-file` written before the server starts, which the demo can only do
 for a kcp server it started itself — and `--kcp-kubeconfig` points it at one it

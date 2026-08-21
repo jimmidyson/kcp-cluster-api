@@ -9,7 +9,8 @@ task demo
 ```
 
 That starts a single-shard kcp server, publishes **one `APIExport` per
-provider** out of its `root` workspace, gives **two users a workspace each**,
+provider** out of its `root` workspace along with the **`cluster-api`
+`WorkspaceType`** tenants onboard with, gives **two users a workspace each**,
 runs each provider's controllers — the same wiring each provider's own
 deployment runs — and builds a cluster in each workspace **from a
 `ClusterClass`**, printing what they are doing until they are all ready:
@@ -50,6 +51,53 @@ called `demo-00`, and both classes are called `demo`, on purpose: identical
 names are what makes a cross-workspace confusion visible rather than plausible.
 One shard, one manager per provider, every workspace served by all of them —
 and each workspace's objects stay its own.
+
+## How each workspace came to serve Cluster API
+
+Before the clusters, the run says how each workspace was set up — read back
+from the server rather than from what the demo meant to do:
+
+```
+WORKSPACE                         OWNER  FROM THE TYPE    ENABLED                                                      ENABLED BY  ROLE COVERS
+root:capi-demo:alice:capi-demo-1  alice  core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  alice       bootstrap, core, controlplane, infrastructure
+root:capi-demo:bob:capi-demo-1    bob    core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  bob         bootstrap, core, controlplane, infrastructure
+```
+
+Three columns, three claims.
+
+**FROM THE TYPE** is what each workspace was bound to without anybody asking.
+Creating a `Workspace` of type `cluster-api` is the whole of onboarding: kcp
+binds Cluster API's core `APIExport` into it, and this project's initializer
+writes the roles saying who may use what it serves — before kcp lets the
+workspace become `Ready`.
+
+**ENABLED** and **ENABLED BY** are the providers each tenant turned on, and who
+turned them on. Alice's own name there is the point: the demo did not create
+those bindings on her behalf, she created them, and kcp allowed it because an
+operator granted her `bind` on those exports. A tenant without that grant is
+refused — `test/integration/onboarding` asserts exactly that.
+
+**ROLE COVERS** is what her `cluster-api-admin` role ended up granting.
+Nobody edited it; it is derived from what she bound, and it widened when she
+bound it.
+
+The permission claims each provider's controllers hold are printed next, saying
+which of them exist because somebody named them and which because a provider
+published a labelled `APIExport`:
+
+```
+EXPORT                            CLAIMS                                                      PUBLISHED BY                      VERBS                                      SOURCE
+cluster-api-core                  devclusters.infrastructure.cluster.x-k8s.io                 cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  secrets                                                     (built in)                        get,list,watch,create,update,patch,delete  declared
+```
+
+(Two rows of about thirty.) A **discovered** claim is one nobody wrote down:
+core reaches `DevCluster` because the dev infrastructure provider publishes an
+`APIExport` labelled with the contract it serves, and a provider this project
+has never heard of becomes reachable the same way, on the day it is installed.
+[The Nutanix provider](#the-nutanix-provider) is that case, and it runs.
+[Onboarding a workspace](onboarding.md) is the tenant-facing version of all of
+this.
 
 ## Two users, and what neither can see
 
@@ -256,10 +304,22 @@ condition summarises a remote connection and a control plane it does not have.
 task demo DEMO_FLAGS="--nutanix-export"
 ```
 
-Adds a fifth `APIExport`, `cluster-api-nutanix-infrastructure`, and binds it
-into every workspace alongside the other four. `kubectl get nutanixclusters`
-then works in a workspace, and a `Cluster` can name a `NutanixCluster` as its
-infrastructure.
+Adds a fifth `APIExport`, `cluster-api-nutanix-infrastructure`, which each
+tenant then enables in their own workspace alongside the other three — it
+appears in the **ENABLED** column of the onboarding table, enabled by them.
+`kubectl get nutanixclusters` then works in a workspace, and a `Cluster` can
+name a `NutanixCluster` as its infrastructure.
+
+It is also the sharpest demonstration of what enabling a provider costs, for
+the reason below: **nothing here reconciles Nutanix**, and the permissions
+follow it anyway. Core's claim table gains its five types, marked
+`discovered`, because the export carries a contract label and for no other
+reason — nobody wrote those claims down.
+
+**ROLE COVERS** does not change, and that is the right answer rather than a
+miss: `NutanixCluster` is in `infrastructure.cluster.x-k8s.io`, a group
+`cluster-api-admin` already covers because the dev provider is enabled in the
+same workspace. The role follows API groups; the claims follow resources.
 
 **Nothing in the demo reconciles them.** The demo runs managers for the four
 providers it starts; the Nutanix one is a separate binary, and running it needs

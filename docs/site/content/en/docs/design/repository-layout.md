@@ -12,7 +12,8 @@ API is a pinned dependency, not a tree here — see
 |---|---|
 | `Taskfile.yaml` | The named operations. `task --list` shows them. |
 | `DRIFT.md` | What this project carries against upstream, and why. |
-| `cmd/core-manager/` | The KCP-aware manager entrypoint. We do not run upstream's `main.go`: wiring in workspace-awareness happens here. |
+| `cmd/core-manager/` | The KCP-aware manager entrypoint. We do not run upstream's `main.go`: wiring in workspace-awareness happens here. One sibling per provider. |
+| `cmd/workspace-manager/` | Onboards workspaces to Cluster API and keeps their permissions right. It reconciles no Cluster API object; everything it writes is a permission. See [Workspace onboarding](workspace-onboarding.md). |
 | `cmd/verify/` | The verification harness behind `task verify`. |
 | `cmd/drift/` | The drift check behind `task drift`. |
 | `internal/` | Implementation packages, not for external import. |

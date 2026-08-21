@@ -119,7 +119,7 @@ func TestRolesGrantNoClusterAPITypesUntilSomethingIsBound(t *testing.T) {
 	}
 }
 
-func TestAdminMayUseEveryBoundClusterAPIGroup(t *testing.T) {
+func TestAdminMayReadEveryBoundClusterAPIGroup(t *testing.T) {
 	bindings := []apisv1alpha2.APIBinding{
 		bound("cluster-api-core", "cluster.x-k8s.io"),
 		bound("cluster-api-dev-infrastructure", "infrastructure.cluster.x-k8s.io"),
@@ -130,27 +130,109 @@ func TestAdminMayUseEveryBoundClusterAPIGroup(t *testing.T) {
 	if !slices.Equal(rule.APIGroups, []string{"cluster.x-k8s.io", "infrastructure.cluster.x-k8s.io"}) {
 		t.Errorf("the admin role's first rule covers %v", rule.APIGroups)
 	}
-	for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
-		if !slices.Contains(rule.Verbs, verb) {
-			t.Errorf("the admin role cannot %s a Cluster API object", verb)
+	if !slices.Equal(rule.Resources, []string{"*"}) {
+		t.Errorf("the admin role reads %v rather than every type its groups publish", rule.Resources)
+	}
+	if !slices.Equal(rule.Verbs, []string{"get", "list", "watch"}) {
+		t.Errorf("the admin role's read rule grants %v", rule.Verbs)
+	}
+}
+
+// A tenant of a Cluster API workspace writes exactly one object, and this is
+// the table that says so against every type the four in-repo exports publish.
+//
+// A cluster here is built from a ClusterClass: the Cluster names a class and a
+// shape, and everything under it is created by the topology controller under
+// the manager's identity. A tenant who could write the rest would be holding
+// the grant the hand-built model needed against a system that no longer builds
+// clusters that way. Scaling and version changes do not reopen it - both are
+// fields of spec.topology, so write on clusters already carries them.
+func TestAdminRoleWritesNothingButClusters(t *testing.T) {
+	// Every type the four provider APIExports publish - see
+	// internal/capiexports. A type missing from this table is a type this
+	// test says nothing about.
+	published := map[string][]string{
+		"cluster.x-k8s.io":                {"clusters", "clusterclasses", "machines", "machinesets", "machinedeployments"},
+		"bootstrap.cluster.x-k8s.io":      {"kubeadmconfigs", "kubeadmconfigtemplates"},
+		"controlplane.cluster.x-k8s.io":   {"kubeadmcontrolplanes", "kubeadmcontrolplanetemplates"},
+		"infrastructure.cluster.x-k8s.io": {"devclusters", "devclustertemplates", "devmachines", "devmachinetemplates"},
+	}
+
+	// Every one of those groups bound, which is what a workspace running the
+	// demo's cluster has. The role is derived from the bindings, so the table
+	// only means anything against a workspace that serves the types in it.
+	bindings := make([]apisv1alpha2.APIBinding, 0, len(published))
+	for group := range published {
+		bindings = append(bindings, bound("binding-"+group, group))
+	}
+	admin := roleNamed(t, Roles(bindings), AdminRoleName)
+
+	for group, resources := range published {
+		for _, resource := range resources {
+			// Read on everything: an owner watches what their cluster became,
+			// which is most of what a tenant does with these types at all.
+			for _, verb := range []string{"get", "list", "watch"} {
+				if !grants(admin.Rules, group, resource, verb) {
+					t.Errorf("the admin role does not grant %s on %s/%s, so an owner cannot watch what their cluster became: %+v",
+						verb, group, resource, admin.Rules)
+				}
+			}
+
+			writable := group == WritableGroup && resource == WritableResource
+			for _, verb := range []string{"create", "update", "patch", "delete"} {
+				got := grants(admin.Rules, group, resource, verb)
+				if got && !writable {
+					t.Errorf("the admin role grants %s on %s/%s, which the topology controller writes and a tenant does not: %+v",
+						verb, group, resource, admin.Rules)
+				}
+				if !got && writable {
+					t.Errorf("the admin role does not grant %s on %s/%s, so an owner cannot manage their own cluster: %+v",
+						verb, group, resource, admin.Rules)
+				}
+			}
 		}
 	}
 }
 
-// Enabling a provider is creating an APIBinding. An admin who cannot do that
-// has to ask an operator, which is the manual step this is meant to remove.
-func TestAdminMayEnableAProvider(t *testing.T) {
-	admin := roleNamed(t, Roles(nil), AdminRoleName)
+// The two writes most likely to be added back, and the reason neither belongs
+// to a tenant. Both are covered by the table above; they are named here so
+// that the answer is findable by whoever is about to ask the question.
+func TestAdminRoleWithholdsTheTemptingWrites(t *testing.T) {
+	admin := roleNamed(t, Roles([]apisv1alpha2.APIBinding{bound("core", ClusterAPIGroup)}), AdminRoleName)
 
-	for _, rule := range admin.Rules {
-		if !slices.Contains(rule.APIGroups, "apis.kcp.io") || !slices.Contains(rule.Resources, "apibindings") {
-			continue
-		}
-		if slices.Contains(rule.Verbs, "create") {
-			return
+	// Writing a ClusterClass is authoring the blueprint rather than using it:
+	// it decides what a cluster in this installation is made of. That answer
+	// is the platform's, which is why the class and its templates are seeded
+	// into the workspace for the tenant and read-only once there.
+	for _, verb := range []string{"create", "update", "patch", "delete"} {
+		if grants(admin.Rules, ClusterAPIGroup, "clusterclasses", verb) {
+			t.Errorf("the admin role grants %s on clusterclasses, so a tenant could author the blueprint: %+v", verb, admin.Rules)
 		}
 	}
-	t.Error("the admin role cannot create an APIBinding, so a tenant cannot enable a provider themselves")
+
+	// Deleting a Machine to force a replacement is a real operation and a real
+	// temptation. It is remediation, which is the platform's job here; a
+	// tenant changes their cluster through spec.topology, and a Machine
+	// deleted underneath the topology controller is a change it did not make.
+	if grants(admin.Rules, ClusterAPIGroup, "machines", "delete") {
+		t.Errorf("the admin role grants delete on machines, which is remediation rather than a tenant's own change: %+v", admin.Rules)
+	}
+}
+
+// grants reports whether the rules allow one verb on one resource.
+func grants(rules []rbacv1.PolicyRule, group, resource, verb string) bool {
+	for _, rule := range rules {
+		if !slices.Contains(rule.APIGroups, group) && !slices.Contains(rule.APIGroups, "*") {
+			continue
+		}
+		if !slices.Contains(rule.Resources, resource) && !slices.Contains(rule.Resources, "*") {
+			continue
+		}
+		if slices.Contains(rule.Verbs, verb) || slices.Contains(rule.Verbs, "*") {
+			return true
+		}
+	}
+	return false
 }
 
 // A cluster's admin kubeconfig is a Secret. Seeing that a cluster exists is

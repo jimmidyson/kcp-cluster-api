@@ -17,6 +17,9 @@ If you're looking for how to run the project rather than build it, see
 - **[Repository layout](repository-layout.md)** — what lives where.
 - **[Per-workspace wiring](per-workspace-wiring.md)** — the seam between
   workspace discovery and unmodified upstream reconcilers.
+- **[Workspace onboarding](workspace-onboarding.md)** — the `WorkspaceType` a
+  tenant onboards with, the roles it writes, and the two controllers that keep
+  a workspace's permissions right as providers come and go.
 - **[Workspace resource usage](workspace-resource-usage.md)** — what one
   manager process costs per active workspace, measured against a real kcp
   server.

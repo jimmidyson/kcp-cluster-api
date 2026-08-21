@@ -30,6 +30,10 @@ func validOptions() Options {
 		ClustersPerWorkspace: 1,
 		ControlPlaneMachines: 1,
 		Backend:              BackendInMemory,
+		// Supplied for the same reason Backend is: validate() runs after
+		// applyDefaults, and both fields reject an unset value rather than
+		// silently choosing for the caller.
+		Onboarding: OnboardingWorkspaceType,
 	}
 }
 

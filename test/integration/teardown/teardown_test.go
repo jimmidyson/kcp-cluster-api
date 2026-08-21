@@ -84,6 +84,12 @@ func TestUnbindingAWorkspaceThatStillHoldsClusters(t *testing.T) {
 		ControlPlaneMachines: controlPlaneMachines,
 		Backend:              demo.BackendInMemory,
 		RunManager:           true,
+		// Hand-onboarded, because this test takes a workspace apart. A
+		// workspace on the Cluster API WorkspaceType has its core APIBinding
+		// maintained by kcp: delete it and kcp puts it back, which is the
+		// right behaviour for a tenant who is still using the workspace and
+		// the wrong shape for the question here. See demo.OnboardingManual.
+		Onboarding: demo.OnboardingManual,
 		// Ten minutes for a run that takes about ninety seconds when it works.
 		//
 		// The budget was five while demo.Run stopped at provisioned, and

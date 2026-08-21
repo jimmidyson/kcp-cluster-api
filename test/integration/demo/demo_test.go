@@ -64,7 +64,17 @@ func TestDemoBringsEveryWorkspaceToAReadyCluster(t *testing.T) {
 
 	result, err := demo.Run(ctx, demo.Options{
 		BaseConfig: server.BaseConfig(t),
-		Workspaces: workspaces,
+		// The privileged credential, and it is not interchangeable with the
+		// one above. kcp scopes an impersonated user to the logical cluster
+		// the request addresses unless the impersonator is in system:masters,
+		// and a scoped tenant is refused in the workspace holding the
+		// APIExports - which is where the right to enable a provider is
+		// checked. Impersonated from an ordinary admin, alice is refused with
+		// "no permission to bind to export ...", which is a fact about
+		// impersonation rather than about anything this test asserts. See
+		// demo.ConfigForUser.
+		ImpersonationConfig: server.RootShardSystemMasterBaseConfig(t),
+		Workspaces:          workspaces,
 		// One tenant per workspace, each granted their own and nothing else.
 		// The run reports what kcp let each of them read of the others, which
 		// is asserted below.
