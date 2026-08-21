@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-20
 
-**Status**: Draft
+**Status**: Shipped in [#80](https://github.com/jimmidyson/kcp-cluster-api/pull/80)
 
 **Input**: "We should base everything on ClusterClass based clusters."
 
