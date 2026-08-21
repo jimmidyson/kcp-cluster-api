@@ -317,17 +317,68 @@ tasks:
       # contents and pull requests.
       - sh: '[ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null'
         msg: Needs a token — set GITHUB_TOKEN, or install gh and run `gh auth login`.
+    vars:
+      REPO: '{{.REPO | default ""}}'
+    silent: true
     cmds:
       # `task release-please -- --dry-run` reports what it would open without
       # opening it.
-      - >-
-        npx --yes release-please@{{.RELEASE_PLEASE_VERSION}} release-pr
-        --repo-url "$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
-        --target-branch "$(git rev-parse --abbrev-ref HEAD)"
-        --config-file release-please-config.json
-        --manifest-file .release-please-manifest.json
-        --token "${GITHUB_TOKEN:-$(gh auth token)}"
-        {{.CLI_ARGS}}
+      - |
+        repo="{{.REPO}}"
+        if [ -z "$repo" ]; then
+          # Take the last two segments of whatever `origin` is, rather than
+          # matching on a github.com host. A remote does not have to name that
+          # host: an SSH alias (`personalgit:owner/repo`, from an ssh_config
+          # Host block, usually paired with `url.<alias>.insteadOf` to force
+          # SSH) carries the same repository under a name that exists only on
+          # that machine — and is how someone keeps a personal account apart
+          # from a managed-user one. Matching on the host produced no match
+          # there and passed the whole string through untouched, so
+          # release-please read `personalgit` as a host and the rest as a port:
+          #
+          #   TypeError [ERR_INVALID_ARG_VALUE]: The argument 'url'
+          #   https://personalgit:jimmidyson/kcp-cluster-api.
+          #   Received 'Invalid port in url'
+          #
+          # This form is alias-agnostic: it also handles scp-style, https, and
+          # ssh:// URLs with an explicit port.
+          repo=$(git remote get-url origin | sed -E 's#\.git$##; s#.*[:/]([^/:]+/[^/]+)$#\1#')
+        fi
+
+        # Check the shape before handing it over. The bug above was not that
+        # the string was wrong; it was that a wrong string went unremarked
+        # until Node failed on it three layers down, in a message naming
+        # neither this repository nor the remote it came from.
+        #
+        # Shape only: a remote that is not GitHub's still yields a well-formed
+        # `owner/repo` from its last two segments and passes this. That failure
+        # surfaces as a 404 from the API, which says enough. `REPO=` is the way
+        # out of both.
+        if ! printf '%s' "$repo" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+          echo "could not read owner/repo from origin ($(git remote get-url origin))." >&2
+          echo "Got: '$repo'. Pass it explicitly: task release-please REPO=owner/repo" >&2
+          exit 1
+        fi
+
+        # Spelled out rather than written `"${GITHUB_TOKEN:-$(gh auth token)}"`.
+        # go-task runs commands through mvdan/sh, not bash, and that shell
+        # evaluates the command substitution in a `:-` default even when the
+        # variable is set — so the short form shells out to gh regardless, and
+        # under `errexit` a machine with a token but no gh fails at exit 127
+        # having never needed it.
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+          token="$GITHUB_TOKEN"
+        else
+          token="$(gh auth token)"
+        fi
+
+        npx --yes release-please@{{.RELEASE_PLEASE_VERSION}} release-pr \
+          --repo-url "$repo" \
+          --target-branch "$(git rev-parse --abbrev-ref HEAD)" \
+          --config-file release-please-config.json \
+          --manifest-file .release-please-manifest.json \
+          --token "$token" \
+          {{.CLI_ARGS}}
 
   pr:sign:
     desc: Re-sign a pull request branch's commits and push it, ready to merge
