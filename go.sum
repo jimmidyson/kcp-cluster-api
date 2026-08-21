@@ -230,8 +230,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/jimmidyson/cluster-api v1.15.0-kcp.12 h1:7TD4AkmJUfMnWYe9kF0CnbgVZOgO2hpL+p02zxqtTyE=
 github.com/jimmidyson/cluster-api v1.15.0-kcp.12/go.mod h1:qlMd8Ygs29ELGubs9Bx52V18+N1CKH2vDGKXfEOy2Os=
-github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.1 h1:2ka3p2Q7ZqG5UCyDYwd6Vw3XJxRbnOUdjSJIpzGm6wI=
-github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.1/go.mod h1:emQN7l6etGNwJ3EREG/qj78bRt6pwr2KU6Ndsgygtcs=
+github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.2 h1:9Rgv7JXlZFeJq5G3+GaRdzxoRJ4LcqfZhNaDgt1kT6I=
+github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.2/go.mod h1:emQN7l6etGNwJ3EREG/qj78bRt6pwr2KU6Ndsgygtcs=
 github.com/jimmidyson/cluster-api/api v1.15.0-kcp.12 h1:bRRjxII+LhXJZAgeJWIMlhksQslg3rmS+lsonJg/SI4=
 github.com/jimmidyson/cluster-api/api v1.15.0-kcp.12/go.mod h1:LJ/5hdS9tqTBi9YqyLRnd1t53Sn/cXsa7rEVaY0bBms=
 github.com/jimmidyson/cluster-api/test v1.15.0-kcp.12 h1:8EzASPEJB3vfuccHVk2N6sXk4f0V0hfW5JSGZcm+58U=
