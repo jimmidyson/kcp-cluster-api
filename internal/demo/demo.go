@@ -511,7 +511,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// each provider's controllers reach the types another one publishes.
 	providers := opts.providers()
 	log.Info("Publishing the APIExports", "workspace", opts.Parent, "exports", exportNames(providers))
-	identities, err := capiexports.Publish(ctx, parentClient, providers, 2*time.Minute)
+	discovery, err := capiexports.Publish(ctx, parentClient, providers, 2*time.Minute)
 	if err != nil {
 		return Result{}, err
 	}
@@ -559,7 +559,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				BindingName:      provider.Export,
 				ExportPath:       opts.Parent,
 				ExportName:       provider.Export,
-				PermissionClaims: provider.Claims(identities),
+				PermissionClaims: provider.Claims(discovery.Identities(), discovery),
 				ReadyTimeout:     time.Minute,
 			}); err != nil {
 				return Result{}, fmt.Errorf("binding %s into %s: %w", provider.Export, wsPath, err)

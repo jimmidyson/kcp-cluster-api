@@ -96,8 +96,16 @@ type PublishAPIExportOptions struct {
 	SchemaPrefix string
 
 	// CRDPaths are the CRD manifests to publish, converted to
-	// APIResourceSchemas.
+	// APIResourceSchemas. An export may publish none: a deployment that adds
+	// no API to a workspace, and only claims what is already there, is a legal
+	// APIExport and kcp requires no schemas on one.
 	CRDPaths []string
+
+	// Labels are set on the APIExport, and kept in step on a re-run. They are
+	// how an export says something about itself that another controller
+	// selects on - the Cluster API provider contract it serves, in this
+	// project's case.
+	Labels map[string]string
 
 	// ConversionWebhookClientConfig, if set, is injected as a Webhook
 	// conversion strategy into any loaded CRD that has more than one
@@ -188,7 +196,7 @@ func PublishAPIExport(ctx context.Context, cl client.Client, opts PublishAPIExpo
 	}
 
 	export := &apisv1alpha2.APIExport{
-		ObjectMeta: metav1.ObjectMeta{Name: opts.ExportName},
+		ObjectMeta: metav1.ObjectMeta{Name: opts.ExportName, Labels: opts.Labels},
 		Spec: apisv1alpha2.APIExportSpec{
 			Resources:        resources,
 			PermissionClaims: opts.PermissionClaims,
@@ -227,9 +235,25 @@ func updateAPIExport(ctx context.Context, cl client.Client, want *apisv1alpha2.A
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(want), got); err != nil {
 		return fmt.Errorf("reading existing APIExport %s: %w", want.Name, err)
 	}
-	if reflect.DeepEqual(got.Spec.Resources, want.Spec.Resources) &&
+	labelled := true
+	for k, v := range want.Labels {
+		if got.Labels[k] != v {
+			labelled = false
+			break
+		}
+	}
+	if labelled &&
+		reflect.DeepEqual(got.Spec.Resources, want.Spec.Resources) &&
 		reflect.DeepEqual(got.Spec.PermissionClaims, want.Spec.PermissionClaims) {
 		return nil
+	}
+	// Only the labels asked for, not the whole map: an export can carry labels
+	// this project did not put there, and replacing the map would drop them.
+	if len(want.Labels) > 0 && got.Labels == nil {
+		got.Labels = map[string]string{}
+	}
+	for k, v := range want.Labels {
+		got.Labels[k] = v
 	}
 	got.Spec.Resources = want.Spec.Resources
 	got.Spec.PermissionClaims = want.Spec.PermissionClaims

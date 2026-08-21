@@ -67,6 +67,20 @@ const (
 	ControlPlaneExport = "cluster-api-controlplane-kubeadm"
 	InfraExport        = "cluster-api-dev-infrastructure"
 	NutanixInfraExport = "cluster-api-nutanix-infrastructure"
+
+	// WorkspaceExport publishes no Cluster API types at all. It is the
+	// identity the workspace onboarding controllers act under inside a tenant
+	// workspace: it claims the APIBindings a workspace holds, so that they can
+	// be seen, and the ClusterRoles in it, so that they can be kept in line
+	// with what is bound.
+	//
+	// A separate export rather than more claims on core's, because the two
+	// identities should not be one. Core already reaches every Secret in every
+	// workspace; letting it write ClusterRoles there as well would let the
+	// provider that holds every tenant's kubeconfig also grant itself anything
+	// else, which is not a privilege this project should hand out to get a
+	// role reconciled.
+	WorkspaceExport = "cluster-api-workspace"
 )
 
 // Resource is a group and resource, with no version: an APIExport publishes
@@ -94,6 +108,12 @@ type Provider struct {
 	// Export is the APIExport's name.
 	Export string
 
+	// Contract is the Cluster API provider contract this export serves. It is
+	// published as the ContractLabel, which is how the claim controller
+	// recognises this export - and how it recognises one this repository has
+	// never heard of.
+	Contract Contract
+
 	// Module and CRDs locate the CRD manifests this export publishes,
 	// resolved from the pinned Cluster API modules at run time so they cannot
 	// disagree with the code they are published for.
@@ -108,7 +128,30 @@ type Provider struct {
 	// ProviderClaims are claims on resources another export publishes, keyed
 	// by that export's name. Each becomes a claim carrying that export's
 	// identity hash, resolved when the export exists.
+	//
+	// Only core's own types are claimed this way. A provider is written
+	// against `Cluster` and `Machine` by name, so naming them here is stating
+	// what the code does; everything a provider reaches for by contract rather
+	// than by name is DiscoveredClaims below.
 	ProviderClaims map[string][]Resource
+
+	// DiscoveredClaims are claims on every resource published by every export
+	// serving a given contract, whatever that export turns out to be, with the
+	// verbs this provider needs on it.
+	//
+	// This is the half of the claim list that cannot be written down, and the
+	// reason ADR-0001 asks for a controller: core dereferences
+	// `spec.infrastructureRef` without knowing what an infrastructure provider
+	// is, so it must claim the types of a provider that may not have existed
+	// when core shipped. What is fixed is the verb set, which follows from
+	// what core's own reconcilers do with whatever they find there.
+	//
+	// A discovered claim covers *every* resource its export publishes, because
+	// which of them a Cluster will reference is not knowable from outside: an
+	// infrastructure provider's cluster, machine and both templates are all
+	// reachable from a ClusterClass. The verbs stay as narrow as the markers
+	// justify - it is the resource list that widens, not the permission.
+	DiscoveredClaims map[Contract][]string
 }
 
 // Verb sets, named for what they let a controller do. Every claim carries
@@ -162,6 +205,11 @@ var (
 	devClusterTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devclustertemplates"}
 	devMachines         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachines"}
 	devMachineTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachinetemplates"}
+
+	// What the workspace onboarding export claims. Both are types kcp serves
+	// in every workspace rather than types an export publishes.
+	apiBindings  = Resource{Group: "apis.kcp.io", Resource: "apibindings"}
+	clusterRoles = Resource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}
 )
 
 // to returns r claimed for the given verbs. It reads at the call site as
@@ -180,8 +228,9 @@ func to(r Resource, verbs []string) Resource {
 // external object is how the owning provider learns to act on it.
 func Core() Provider {
 	return Provider{
-		Export: CoreExport,
-		Module: kcpfixtures.ModuleClusterAPI,
+		Export:   CoreExport,
+		Contract: ContractCore,
+		Module:   kcpfixtures.ModuleClusterAPI,
 		CRDs: []string{
 			"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
 			// The ClusterClass a Cluster's topology names. It is the core
@@ -216,28 +265,31 @@ func Core() Provider {
 		// Core's markers say nothing at all about ConfigMaps; read is what the
 		// controllers that reach for one need.
 		CoreClaims: []Resource{to(secrets, own), to(configMaps, read)},
-		ProviderClaims: map[string][]Resource{
-			// Everything, on all three groups. Core's marker is
-			// `resources=*, verbs=get;list;watch;create;update;patch;delete`
-			// across infrastructure, bootstrap and controlplane, and it earns
-			// it: the Cluster reconciler deletes the control plane and the
-			// infrastructure cluster, and the Machine reconciler deletes the
-			// bootstrap config and the infrastructure machine.
-			//
-			// The topology controller widens what "resolve" means without
-			// widening the claim: for a ClusterClass based cluster it does not
-			// only dereference these types, it *creates* them from the
-			// templates the class names — the infrastructure cluster, the
-			// control plane, and a MachineDeployment's bootstrap and
-			// infrastructure templates. Every template a class can name is
-			// therefore claimed alongside the object stamped from it, and the
-			// verbs are already the ones that allows.
-			BootstrapExport:    {to(kubeadmConfigs, own), to(kubeadmConfigTemplates, own)},
-			ControlPlaneExport: {to(kubeadmControlPlanes, own), to(kubeadmControlPlaneTemplates, own)},
-			InfraExport: {
-				to(devClusters, own), to(devClusterTemplates, own),
-				to(devMachines, own), to(devMachineTemplates, own),
-			},
+		// Everything, on every provider there is. Core's marker is
+		// `resources=*, verbs=get;list;watch;create;update;patch;delete`
+		// across infrastructure, bootstrap and controlplane, and it earns it:
+		// the Cluster reconciler deletes the control plane and the
+		// infrastructure cluster, and the Machine reconciler deletes the
+		// bootstrap config and the infrastructure machine.
+		//
+		// The topology controller widens what "resolve" means without widening
+		// the claim: for a ClusterClass based cluster it does not only
+		// dereference these types, it *creates* them from the templates the
+		// class names - the infrastructure cluster, the control plane, and a
+		// MachineDeployment's bootstrap and infrastructure templates. Every
+		// template a class can name is therefore claimed alongside the object
+		// stamped from it, and the verbs are already the ones that allows.
+		//
+		// Discovered rather than named, and that is the point: "whatever a
+		// Cluster points at" is what core's reconcilers resolve and what this
+		// package cannot enumerate. The claims on the dev infrastructure
+		// provider are not written here any more; they appear because that
+		// provider publishes a labelled export, and a third-party provider's
+		// appear the same way, on the day it is installed.
+		DiscoveredClaims: map[Contract][]string{
+			ContractInfrastructure: own,
+			ContractBootstrap:      own,
+			ContractControlPlane:   own,
 		},
 	}
 }
@@ -252,8 +304,9 @@ func Core() Provider {
 // once this project expresses them in kcp's v1alpha2 shape.
 func ControlPlane() Provider {
 	return Provider{
-		Export: ControlPlaneExport,
-		Module: kcpfixtures.ModuleClusterAPI,
+		Export:   ControlPlaneExport,
+		Contract: ContractControlPlane,
+		Module:   kcpfixtures.ModuleClusterAPI,
 		CRDs: []string{
 			"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanes.yaml",
 			"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanetemplates.yaml",
@@ -267,13 +320,19 @@ func ControlPlane() Provider {
 			// Machines in full: it creates and deletes the Machines its
 			// control plane is made of.
 			CoreExport: {to(clusters, read), to(machines, own)},
-			// It authors the KubeadmConfig for each Machine it creates, and
-			// its marker grants the bootstrap group in full.
-			BootstrapExport: {to(kubeadmConfigs, own), to(kubeadmConfigTemplates, own)},
-			// It reads the infrastructure template its machineTemplate names
-			// and *creates* a DevMachine per control plane Machine from it, so
-			// this claim is a write as much as a read.
-			InfraExport: {to(devMachines, own), to(devMachineTemplates, own)},
+		},
+		// It authors the KubeadmConfig for each Machine it creates, and its
+		// marker grants the bootstrap group in full. It reads the
+		// infrastructure template its machineTemplate names and *creates* an
+		// infrastructure machine per control plane Machine from it, so that
+		// claim is a write as much as a read.
+		//
+		// Both discovered, for core's reason: `machineTemplate.infrastructureRef`
+		// and the bootstrap config it stamps are references, and which provider
+		// answers them is the tenant's choice.
+		DiscoveredClaims: map[Contract][]string{
+			ContractInfrastructure: own,
+			ContractBootstrap:      own,
 		},
 	}
 }
@@ -285,8 +344,9 @@ func ControlPlane() Provider {
 // plane machine of a cluster with no control plane provider.
 func Bootstrap() Provider {
 	return Provider{
-		Export: BootstrapExport,
-		Module: kcpfixtures.ModuleClusterAPI,
+		Export:   BootstrapExport,
+		Contract: ContractBootstrap,
+		Module:   kcpfixtures.ModuleClusterAPI,
 		CRDs: []string{
 			"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigs.yaml",
 			"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml",
@@ -306,10 +366,12 @@ func Bootstrap() Provider {
 			// from its Machine up, and a link it cannot read fails the
 			// reconcile rather than shortening the log line.
 			CoreExport: {to(clusters, read), to(machines, read), to(machineSets, read), to(machineDeployments, read)},
-			// It reads the KubeadmControlPlane a Machine belongs to, to
-			// resolve the control plane's version when preparing a config.
-			// Read-only, and its marker says so.
-			ControlPlaneExport: {to(kubeadmControlPlanes, read)},
+		},
+		// It reads the control plane object a Machine belongs to, to resolve
+		// the control plane's version when preparing a config. Read-only, and
+		// its marker says so.
+		DiscoveredClaims: map[Contract][]string{
+			ContractControlPlane: read,
 		},
 	}
 }
@@ -320,8 +382,9 @@ func Bootstrap() Provider {
 // workload-cluster kubeconfig Secrets.
 func Infrastructure() Provider {
 	return Provider{
-		Export: InfraExport,
-		Module: kcpfixtures.ModuleClusterAPITest,
+		Export:   InfraExport,
+		Contract: ContractInfrastructure,
+		Module:   kcpfixtures.ModuleClusterAPITest,
 		CRDs: []string{
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
 			"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
@@ -366,8 +429,9 @@ func Infrastructure() Provider {
 // underneath it.
 func NutanixInfrastructure() Provider {
 	return Provider{
-		Export: NutanixInfraExport,
-		Module: kcpfixtures.ModuleCAPX,
+		Export:   NutanixInfraExport,
+		Contract: ContractInfrastructure,
+		Module:   kcpfixtures.ModuleCAPX,
 		CRDs: []string{
 			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixclusters.yaml",
 			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixmachines.yaml",
@@ -388,7 +452,37 @@ func NutanixInfrastructure() Provider {
 	}
 }
 
-// All is every provider this repository wires, in publication order.
+// Workspaces is the workspace onboarding export: the identity the controllers
+// that keep a tenant workspace's ClusterRoles current act under.
+//
+// It publishes nothing. An export with no resources is a legal one - kcp
+// requires no schemas - and it is the honest shape here: this deployment adds
+// no API to a workspace, it reads what the workspace has bound and writes the
+// roles that follow from it.
+//
+// Both claims are on types kcp serves everywhere, so neither carries an
+// identity hash. `apibindings` is claimable because kcp exempts its own
+// `apis.kcp.io` group from the identity requirement; without the claim an
+// APIExport's virtual workspace serves only the one APIBinding that binds it,
+// which is precisely the thing this controller must not be limited to.
+func Workspaces() Provider {
+	return Provider{
+		Export: WorkspaceExport,
+		CoreClaims: []Resource{
+			// Read: which providers a workspace has enabled is the input.
+			to(apiBindings, read),
+			// Write: the roles are the output. No delete - a role this
+			// controller did not create is not its to remove, and a workspace
+			// leaving Cluster API keeps the roles until somebody decides
+			// otherwise.
+			to(clusterRoles, []string{"get", "list", "watch", "create", "update", "patch"}),
+		},
+	}
+}
+
+// All is every Cluster API provider this repository wires, in publication
+// order. Workspaces is not among them: it serves no contract and reconciles no
+// Cluster API type, so a caller that wants it asks for it.
 func All() []Provider {
 	return []Provider{Core(), Bootstrap(), ControlPlane(), Infrastructure()}
 }
@@ -396,8 +490,9 @@ func All() []Provider {
 // Identities maps an export's name to the identity hash the server assigned it.
 type Identities map[string]string
 
-// Claims returns the permission claims an export should declare, given the
-// identities of the exports it claims from.
+// Claims returns the permission claims an export should declare: what it
+// needs from core, and what it needs from whichever providers the installation
+// turns out to have.
 //
 // It is a pure function of the topology so that what a deployment asks for can
 // be asserted without a server, and it is deterministic - sorted by group and
@@ -408,10 +503,22 @@ type Identities map[string]string
 // claim with an empty identity. An empty identity hash does not mean "any
 // export"; it means "a core type", so writing one for a provider resource
 // would silently claim something else.
-func (p Provider) Claims(identities Identities) []apisv1alpha2.PermissionClaim {
-	claims := make([]apisv1alpha2.PermissionClaim, 0, len(p.CoreClaims))
+//
+// A resource reached both ways - named in ProviderClaims and published by a
+// discovered provider - is claimed once, for the union of the two verb sets.
+// That union is the safe direction and the only one available: kcp scopes a
+// claim by resource and verb, so two claims on one resource are not two
+// permissions, they are one, and the narrower of them would silently be the
+// one that lost.
+func (p Provider) Claims(identities Identities, discovered Discovery) []apisv1alpha2.PermissionClaim {
+	verbsByClaim := map[claimKey][]string{}
+	add := func(r Resource, identity string) {
+		key := claimKey{group: r.Group, resource: r.Resource, identity: identity}
+		verbsByClaim[key] = unionVerbs(verbsByClaim[key], r.Verbs)
+	}
+
 	for _, r := range p.CoreClaims {
-		claims = append(claims, claim(r, ""))
+		add(r, "")
 	}
 
 	exports := make([]string, 0, len(p.ProviderClaims))
@@ -426,17 +533,109 @@ func (p Provider) Claims(identities Identities) []apisv1alpha2.PermissionClaim {
 			continue
 		}
 		for _, r := range p.ProviderClaims[export] {
-			claims = append(claims, claim(r, identity))
+			add(r, identity)
 		}
+	}
+
+	for _, found := range discovered {
+		// An export does not claim its own resources: it publishes them, and
+		// kcp serves an export's own types to it without a claim. A provider
+		// that claimed itself would be asking the server for permission it
+		// already has, on an identity hash of its own - which kcp rejects.
+		if found.Export == p.Export {
+			continue
+		}
+		verbs, wanted := p.DiscoveredClaims[found.Contract]
+		if !wanted {
+			continue
+		}
+		for _, r := range found.Resources {
+			add(to(r, verbs), found.IdentityHash)
+		}
+	}
+
+	claims := make([]apisv1alpha2.PermissionClaim, 0, len(verbsByClaim))
+	for key, verbs := range verbsByClaim {
+		if len(verbs) == 0 {
+			// v1alpha2 requires at least one verb, so "unset" has to become
+			// something. Every verb is what a v1alpha1 claim granted, which
+			// keeps an unnarrowed resource behaving as it did.
+			verbs = []string{"*"}
+		}
+		claims = append(claims, apisv1alpha2.PermissionClaim{
+			GroupResource: apisv1alpha2.GroupResource{Group: key.group, Resource: key.resource},
+			IdentityHash:  key.identity,
+			Verbs:         verbs,
+		})
 	}
 
 	slices.SortFunc(claims, func(a, b apisv1alpha2.PermissionClaim) int {
 		if a.Group != b.Group {
 			return compare(a.Group, b.Group)
 		}
-		return compare(a.Resource, b.Resource)
+		if a.Resource != b.Resource {
+			return compare(a.Resource, b.Resource)
+		}
+		return compare(a.IdentityHash, b.IdentityHash)
 	})
 	return claims
+}
+
+// claimKey is what makes two claims the same claim: kcp scopes a claim by the
+// resource and the identity it is served under, and the verbs are the
+// permission granted on that pair.
+type claimKey struct {
+	group    string
+	resource string
+	identity string
+}
+
+// verbOrder is the order verbs are written in, so that a claim list is stable
+// enough to compare against the one on the server.
+//
+// Lifecycle order rather than alphabetical, because that is the order the
+// upstream `+kubebuilder:rbac` markers these verb sets come from are written
+// in, and a claim should read like the marker it was derived from.
+var verbOrder = []string{"*", "get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"}
+
+// unionVerbs merges two verb sets into verbOrder, dropping duplicates.
+//
+// An empty result means the caller asked for no verbs at all, which v1alpha2
+// forbids; claim() turns that into "*", which is what a v1alpha1 claim granted
+// and so what an unnarrowed resource behaved as.
+func unionVerbs(a, b []string) []string {
+	seen := map[string]bool{}
+	for _, v := range a {
+		seen[v] = true
+	}
+	for _, v := range b {
+		seen[v] = true
+	}
+	if seen["*"] {
+		// Every verb, so the rest say nothing. Keeping them would make one
+		// claim compare unequal to an identical one written the other way
+		// round, and rewrite the export forever.
+		return []string{"*"}
+	}
+
+	verbs := make([]string, 0, len(seen))
+	for _, v := range verbOrder {
+		if seen[v] {
+			verbs = append(verbs, v)
+			delete(seen, v)
+		}
+	}
+	// Anything verbOrder does not know about, in a stable place rather than a
+	// random one. A verb this project has never seen is still a verb.
+	unknown := make([]string, 0, len(seen))
+	for v := range seen {
+		unknown = append(unknown, v)
+	}
+	slices.Sort(unknown)
+	if len(verbs) == 0 && len(unknown) == 0 {
+		return nil
+	}
+	return append(verbs, unknown...)
 }
 
 // MissingIdentities names the exports p claims from whose identity is not yet
@@ -451,21 +650,6 @@ func (p Provider) MissingIdentities(identities Identities) []string {
 	}
 	slices.Sort(missing)
 	return missing
-}
-
-func claim(r Resource, identity string) apisv1alpha2.PermissionClaim {
-	verbs := r.Verbs
-	if len(verbs) == 0 {
-		// v1alpha2 requires at least one verb, so "unset" has to become
-		// something. Every verb is what a v1alpha1 claim granted, which keeps
-		// an unnarrowed resource behaving as it did.
-		verbs = []string{"*"}
-	}
-	return apisv1alpha2.PermissionClaim{
-		GroupResource: apisv1alpha2.GroupResource{Group: r.Group, Resource: r.Resource},
-		IdentityHash:  identity,
-		Verbs:         verbs,
-	}
 }
 
 func compare(a, b string) int {
@@ -486,12 +670,19 @@ func compare(a, b string) int {
 // mutually referential - core claims the providers' types and they claim
 // core's - so no single ordering of one-pass creates can resolve them. The
 // first pass publishes schemas and the claims that need no identity; the
-// second resolves identities and updates each export's claim list.
+// second discovers what was published and gives every export the claim list
+// that follows.
+//
+// The second pass is ReconcileClaims, which is also what the claim controller
+// runs on every APIExport event. Publishing and maintaining are the same
+// operation on a different trigger, and sharing the code is what keeps a
+// deployment's claim list identical to the one this repository's own tests
+// assert.
 //
 // Idempotent, so it doubles as the reconcile a long-lived deployment would run:
 // an export that already exists is brought to the requested shape, and one
 // whose claims already match is left alone.
-func Publish(ctx context.Context, cl client.Client, providers []Provider, timeout time.Duration) (Identities, error) {
+func Publish(ctx context.Context, cl client.Client, providers []Provider, timeout time.Duration) (Discovery, error) {
 	if timeout == 0 {
 		timeout = time.Minute
 	}
@@ -505,9 +696,10 @@ func Publish(ctx context.Context, cl client.Client, providers []Provider, timeou
 			ExportName:   p.Export,
 			SchemaPrefix: "v1",
 			CRDPaths:     paths,
+			Labels:       p.labels(),
 			// Only the identity-free claims in the first pass. The rest need
 			// identities that do not exist until every export does.
-			PermissionClaims: p.Claims(nil),
+			PermissionClaims: p.Claims(nil, nil),
 			CRDTransform:     kcpfixtures.KeepStorageVersion,
 		}); err != nil {
 			return nil, fmt.Errorf("publishing APIExport %s: %w", p.Export, err)
@@ -535,12 +727,31 @@ func Publish(ctx context.Context, cl client.Client, providers []Provider, timeou
 				return nil, fmt.Errorf("APIExport %s claims from %s, whose identity is unknown", p.Export, export)
 			}
 		}
-		if err := setClaims(ctx, cl, p.Export, p.Claims(identities)); err != nil {
-			return nil, err
-		}
 	}
 
-	return identities, nil
+	if _, err := ReconcileClaims(ctx, cl, providers); err != nil {
+		return nil, err
+	}
+
+	return DiscoverIn(ctx, cl)
+}
+
+// DiscoverIn reads the provider exports in the workspace cl is scoped to.
+func DiscoverIn(ctx context.Context, cl client.Client) (Discovery, error) {
+	exports := &apisv1alpha2.APIExportList{}
+	if err := cl.List(ctx, exports); err != nil {
+		return nil, fmt.Errorf("listing APIExports: %w", err)
+	}
+	return Discover(exports.Items), nil
+}
+
+// labels are what an export carries so that the claim controller can recognise
+// it. An export serving no contract carries none.
+func (p Provider) labels() map[string]string {
+	if p.Contract == "" {
+		return nil
+	}
+	return map[string]string{ContractLabel: string(p.Contract)}
 }
 
 // WaitForIdentities reads each export's server-assigned identity hash.
@@ -564,19 +775,19 @@ func WaitForIdentities(ctx context.Context, cl client.Client, providers []Provid
 	return identities, nil
 }
 
-func setClaims(ctx context.Context, cl client.Client, name string, claims []apisv1alpha2.PermissionClaim) error {
+func setClaims(ctx context.Context, cl client.Client, name string, claims []apisv1alpha2.PermissionClaim) (bool, error) {
 	export := &apisv1alpha2.APIExport{}
 	if err := cl.Get(ctx, client.ObjectKey{Name: name}, export); err != nil {
-		return fmt.Errorf("reading APIExport %s: %w", name, err)
+		return false, fmt.Errorf("reading APIExport %s: %w", name, err)
 	}
 	if slices.EqualFunc(export.Spec.PermissionClaims, claims, sameClaim) {
-		return nil
+		return false, nil
 	}
 	export.Spec.PermissionClaims = claims
 	if err := cl.Update(ctx, export); err != nil {
-		return fmt.Errorf("updating the claims on APIExport %s: %w", name, err)
+		return false, fmt.Errorf("updating the claims on APIExport %s: %w", name, err)
 	}
-	return nil
+	return true, nil
 }
 
 func sameClaim(a, b apisv1alpha2.PermissionClaim) bool {
