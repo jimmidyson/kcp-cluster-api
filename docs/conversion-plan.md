@@ -177,12 +177,25 @@ having to reconstruct the answer from the commit log.
   review checkpoint (see [Executing this
   plan](#executing-this-plan-what-needs-a-human-first)) — a
   workspace-resolution bug here is a cross-tenant bleed, not an ordinary bug.
-- **P1–P3 are dispatchable in parallel now.** Each ports one provider's
-  `main.go` wiring onto the per-workspace glue G2 already provides — same
-  recipe as Phase 1's core-provider port, each in its own `cmd/<name>/`
-  directory, so simultaneous work won't collide.
-- **G3 has no caller and is not built.** Building it is the first step of P5
-  (clusterctl), and nothing else needs it today.
+- **What is dispatchable now.** P1–P3 are done, so the parallel
+  provider-port track this section used to name is closed. What is open and
+  waits on nothing that does not already exist:
+  - **P7** — RBAC/identity provisioning per D5. Nothing blocks it, and D5's
+    decision (one system identity through the virtual workspace) is recorded.
+  - **P9** — observability across the four binaries. Half-built already:
+    `internal/workspacetelemetry` bounds the exported series so per-workspace
+    attribution does not scale with tenant count, and `cmd/core-manager` wires
+    it. The other three binaries do not, and marker aggregation is untouched.
+  - **P6's remainder** — the `WorkspaceType` a tenant onboards with. The
+    exports, their endpoint slices and the claim list between them are built
+    and maintained; a workspace is still created as `universal` and bound by
+    hand.
+  - **The CAPX integration module**, and the three name collisions on the fork
+    before it — see the fork-model item above.
+  - **G3, then P5**, if clusterctl is wanted. G3 has no caller and is not
+    built; building it is the first step of P5 and nothing else needs it today.
+    Pin its shape into a Go interface before handing P5 out — see [Executing
+    this plan](#executing-this-plan-what-needs-a-human-first).
 - Phase 0, Phase 1 and the rest of Phase 2 are done. Phase 4 starts once
   Phase 3 lands, and Phase 4's idle eviction now has the measurements it
   needs (see [Scalability](#scalability)).
@@ -194,10 +207,33 @@ Run the four existing Cluster API manager binaries (`core`,
 `test/infrastructure/docker`) as **multi-tenant, KCP workspace-aware**
 controllers: one deployment per provider that transparently reconciles
 `Cluster`/`Machine`/etc. objects living in many KCP logical
-clusters/workspaces, without editing a single upstream file (see
-`AGENTS.md`).
+clusters/workspaces.
 
-## Chosen model: `multicluster-runtime` + `kcp-dev/multicluster-provider` as the discovery/cache engine, unmodified upstream managers on top
+> **The clause that used to end that sentence — "without editing a single
+> upstream file" — is gone, and it was the project's central premise when this
+> was written.** [ADR-0003](adr-0003-workspace-aware-cluster-api.md) accepted
+> option B on 2026-08-17: the premise narrows to unmodified upstream *reconcile
+> logic*, and the workspace-aware **wiring** is carried in the fork and counted
+> in [`DRIFT.md`](../DRIFT.md). What that bought is in
+> [Scalability](#scalability) — a workspace costs 2 goroutines per deployment
+> where a manager per workspace cost 51.7. The goal above is otherwise
+> unchanged, and every reconciler still runs upstream's own code.
+
+## Chosen model: `multicluster-runtime` + `kcp-dev/multicluster-provider` as the discovery/cache engine
+
+> **Half of this was superseded, and the half that was not is what every
+> deployment runs on.** The discovery and cache engine is exactly as described
+> below: the library's `WildcardCache` and `Provider` are the foundation, and
+> nothing has displaced them. What changed is the layer above. The seam this
+> section identifies — `GetManager(ctx, clusterName)` per workspace, with
+> upstream's `setupReconcilers` wired onto the result — is no longer where the
+> reconcilers are wired. Each deployment's controllers are **fleet-wide**, set
+> up once for the process against the shared cache, because a controller set
+> per workspace cost 51.7 goroutines per workspace and fleet-wide wiring costs
+> 2. See [ADR-0003](adr-0003-workspace-aware-cluster-api.md) for the decision.
+> The per-workspace seam still exists — it is G2, `internal/providerwiring`,
+> and it is still what engages and disengages a workspace — it just no longer
+> runs a controller set per workspace.
 
 Every upstream provider's `main.go` already reduces to a pure function of
 a `manager.Manager`:
@@ -520,13 +556,15 @@ different binary/concern."
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
 | P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
 | P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
-| P8 | done on the in-memory backend — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently and asserts isolation, both between the workspaces' objects and between the two tenants who own them. On a real container runtime the same shape reaches ready Clusters, initialized control planes and bootstrapped Machines, and stops at Node readiness for want of a CNI nothing here installs (see below) | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
-| P9 | not started | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
+| P8 | done, on both backends — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently on the dev provider's in-memory backend and asserts isolation, both between the workspaces' objects and between the two tenants who own them; `test/integration/dockerbackend` reaches the same readiness on a real container runtime, Nodes included (#67, see below). Both run under `task verify`, the second as its own capability-gated step | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
+| P9 | partly — `internal/workspacetelemetry` attributes reconcile load to the workspace that caused it with a bounded exported series, and `cmd/core-manager` wires it; the other three binaries do not, and marker aggregation is untouched | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
 | P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
-P1–P3 are mechanically identical to Phase 1's core-provider port, so
-they're the safest to parallelize across multiple agents/contributors at
-once — same recipe, different source `main.go`.
+P1–P3 were expected to be mechanically identical to Phase 1's core-provider
+port, and so the safest to parallelize — same recipe, different source
+`main.go`. They were not: each of the three found something the recipe did not
+cover, and the notes below say what. The expectation is left here because it is
+the one this plan would otherwise repeat for the next provider.
 
 **P2** is the first provider that talks to the clusters it creates, and the
 first that authors another provider's types: a KubeadmControlPlane creates
@@ -586,15 +624,21 @@ the demo's done-condition is readiness rather than provisioned infrastructure:
 the Cluster's `Available` condition, every control plane replica it was asked
 for, and every Machine Ready, control plane and worker alike.
 
-What is left of P8 is the backend rather than the shape. That proof runs on the
-dev provider's in-memory backend, where the workload cluster is a process, its
-API server is a fake and its Node objects are written rather than joined.
-`test/integration/dockerbackend` is the one that uses a real container runtime.
+The backend half is done too, which is what closed P8. The demo's proof runs on
+the dev provider's in-memory backend, where the workload cluster is a process,
+its API server is a fake and its Node objects are written rather than joined —
+so `test/integration/dockerbackend` runs the same shape against a real
+container runtime. `task verify` runs it as its own step, reported as "could
+not run" rather than passed where no runtime is reachable.
 
-### What two container-backed workspaces reach, and where they stop
+### What two container-backed workspaces reach
 
-Measured, on a branch that takes two workspaces to ready on the docker backend
-concurrently. It is not merged, and the paragraph below is why.
+Measured, and merged in #67. Both workspaces reach ready on a real container
+runtime, Nodes included. Getting there took three findings — two cross-tenant
+defects and one thing Cluster API deliberately does not do — and none of them
+was visible from the in-memory backend, which is this suite's justification in
+one sentence. They are kept below because the next backend will raise the same
+questions.
 
 The wiring works against a real API server. Both Clusters reach ready, both
 control planes initialize and report `Available`, and both Machines bootstrap
@@ -605,8 +649,8 @@ control plane endpoint host and no port, so nothing could dial the workload
 cluster. The in-memory backend assigns its own port and never exercised that
 path, which is the argument for this suite in one sentence.
 
-**It stops at Node readiness, and the reason is not a defect.** Both Machines
-sit at:
+**It stopped at Node readiness, and the reason was not a defect.** Both
+Machines sat at:
 
 ```
 Node.Ready: container runtime network not ready: NetworkReady=false
@@ -710,10 +754,15 @@ what settled it: three ports, none of which reached for it.
   a measured constraint — not preemptively.
 - Idle eviction: stop (and later restart) managers for workspaces with no
   recent reconcile activity, to bound steady-state memory.
-- Upgrade/rebase drill: pull the next upstream cluster-api release through
-  `git merge origin/main` and confirm the invariant check
-  (`git diff --name-only <upstream-base>..HEAD -- . ':!kcp'`) stays clean,
-  proving the model survives a real rebase.
+- Upgrade drill: adopt the next upstream Cluster API release and confirm the
+  model survives it. This is no longer the merge it was written as — the
+  repository inversion (#22) made upstream a pinned dependency, so an upgrade
+  cuts a fork branch from the new ref, replays the patches in
+  [`DRIFT.md`](../DRIFT.md), tags all three modules and moves the `replace`
+  pins. `task drift` is the invariant check that replaced the tree-wide diff.
+  See [Adopting upstream releases](site/content/en/docs/design/rebasing.md).
+  Not yet done against a release the fork was not cut from, which is the part
+  that is still a drill.
 - Security review of the webhook dispatch layer (G4) specifically — it's
   the one component that fans a single network listener out across tenant
   boundaries, so a workspace-resolution bug there is a cross-tenant
@@ -764,11 +813,18 @@ Phase 4 (sharding, idle eviction, rebase drill, security review)
    and the feature that produced it,
    [`specs/20260815-211812-workspace-wiring-scale`](../specs/20260815-211812-workspace-wiring-scale/spec.md),
    whose own status records which of its work shipped and which was superseded.
-4. Whether `multicluster-provider`'s `Provider` reacts live to
+4. ~~Whether `multicluster-provider`'s `Provider` reacts live to
    `APIExportEndpointSlice.status.endpoints` changing (e.g. a shard
    joining/leaving a `Partition`, or a workspace migrating between
-   shards), or requires a restart to pick up a new endpoint set — drives
-   whether D6's partition topology can change without a rollout.
+   shards), or requires a restart to pick up a new endpoint set.~~
+   **Answered for the library's half: it does react live.**
+   `endpointSliceUpdate` reconciles the watched endpoint set on every slice
+   change, starting watches for new URLs and cancelling those no longer
+   listed, so D6's partition topology can change under a running process
+   without a rollout. kcp's half is still open — whether a logical cluster can
+   move between shards at all — and
+   [ADR-0002](adr-0002-shard-appliance-scaling.md) A1 defers rebalancing on
+   that basis. See [Scalability](#scalability) for the reference.
 
 ## Executing this plan: what needs a human first
 
@@ -797,12 +853,14 @@ without a human (or a dedicated security review pass) checking the
 workspace-resolution logic specifically, independent of normal code
 review.
 
-**Before fanning Phase 3 out to multiple agents with no shared context:**
-pin G3's behavioural description into an actual Go interface signature first
-(a types-only skeleton, landed as its own small PR) — it is still prose
-("turns a workspace path + config into a `*rest.Config`"), which is fine for
-a human but leaves room for two agents to independently build incompatible
-shapes for the same seam. G1 and G2 no longer have this problem: they are
+**Before handing out what is left of Phase 3:** pin G3's behavioural
+description into an actual Go interface signature first (a types-only
+skeleton, landed as its own small PR) — it is still prose ("turns a workspace
+path + config into a `*rest.Config`"), which is fine for a human but leaves
+room for two agents to independently build incompatible shapes for the same
+seam. This mattered less than expected for P1–P3, which shipped without ever
+reaching for G3; it matters for P5, which is the seam's only caller. G1 and G2
+no longer have this problem: they are
 built, and their contract is written down in
 [Per-workspace wiring](site/content/en/docs/design/per-workspace-wiring.md).
 Give each P item a one-line acceptance check as it is picked up (a test, or a
