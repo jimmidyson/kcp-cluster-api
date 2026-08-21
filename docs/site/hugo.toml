@@ -37,7 +37,7 @@ disableAliases = false
 
   # Repo config used by the "Edit this page" / "Create issue" links in Docsy.
   github_repo = "https://github.com/jimmidyson/kcp-cluster-api"
-  github_subdir = "kcp/docs/site"
+  github_subdir = "docs/site"
   github_branch = "main"
 
   # Site search. Docsy offers Google CSE, Algolia DocSearch and this: a Lunr
