@@ -114,7 +114,7 @@ tasks:
       # is currently unable to handle the request" - go to -p 1 rather than
       # re-running. The serial sum is the eight minutes the bound above already
       # allows for.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m -p 2 ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m -p 2 ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/onboarding/... ./test/integration/bootstrap/... ./test/integration/teardown/...
 
   demo:
     desc: Build a ready cluster in each of several kcp workspaces from one manager, and watch it happen
