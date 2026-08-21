@@ -77,16 +77,28 @@ having to reconstruct the answer from the commit log.
   which is the pin-propagation hazard observed on the first consumer that is
   not this repository.
 
-  The forward-port cost far less than predicted — six paths so far against the
-  dev provider's 17, and the version skew cost one dead-code deletion rather
-  than a rewrite. **That figure is partial**: the integration module is
-  unbuilt and none of the three name collisions is fixed, and each fix adds to
-  it.
+  **Both are now built, and the fork carries 21 paths** against the dev
+  provider's 17 — recorded in
+  [`providers/nutanix-infrastructure/DRIFT.md`](../providers/nutanix-infrastructure/DRIFT.md),
+  which `task drift` checks alongside Cluster API's. The version skew itself
+  cost one dead-code deletion; the rest is the fleet-wide wiring and four
+  multi-tenancy fixes. Three were names unique only within one API server — VM
+  names, the CAPI category, the Prism client caches. The fourth was not a
+  collision at all: CAPX falls back to the operator's own Prism credentials
+  when a cluster names none, which serving many tenants turns into an
+  escalation past all of them.
 
-  **Next on CAPX:** fix the collisions on the fork, then build the integration
-  module — which is where the untested claim now lives, that L3 modules can
-  share one `Taskfile` and verification contract across differing dependency
-  graphs.
+  Building the module also corrected the ADR twice over. `internal/` is
+  reachable from a nested module — Go's rule is path-prefix based, not module
+  based — so the split needed nothing promoted to a public API, which is
+  cheaper than the ADR assumed. And `./...` reaches no nested module, so
+  `build`, `lint`, `test:unit` and `drift` all had to be taught to iterate
+  them; a module or record left off those lists is one CI never looks at.
+
+  **Not established:** no VM has been provisioned against a real Prism
+  Central. Every fix is proven at its seam by unit tests and envtest, and none
+  of it end to end — CAPX's e2e suite needs a live Prism Central this
+  project's CI does not have.
 
 - **Providers are separate deployments with separate APIExports.** One export
   per provider (`internal/capiexports`), one binary each, and the claims

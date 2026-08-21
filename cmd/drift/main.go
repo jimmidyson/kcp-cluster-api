@@ -35,10 +35,11 @@ func main() {
 	fork := flag.String("fork", "https://github.com/jimmidyson/cluster-api", "fork repository to measure")
 	ref := flag.String("ref", "", "fork ref carrying the patches; empty reads the version this module pins")
 	upstream := flag.String("upstream", "https://github.com/kubernetes-sigs/cluster-api", "upstream repository")
+	module := flag.String("module", "sigs.k8s.io/cluster-api", "module path whose pin names the fork ref to measure")
 	flag.Parse()
 
 	if *ref == "" {
-		v, err := pinnedForkVersion()
+		v, err := pinnedForkVersion(*module)
 		if err != nil {
 			fail("%v", err)
 		}
@@ -68,7 +69,12 @@ func main() {
 	}
 }
 
-// pinnedForkVersion reports the fork version this module actually depends on.
+// pinnedForkVersion reports the fork version the named module is pinned at.
+//
+// The module path is a parameter because there is more than one fork now: the
+// Cluster API one this repository pins, and the Nutanix provider's, pinned by
+// the provider module beside its own record. A checker that resolved one
+// module by name could only ever check one of them.
 //
 // # Why this is not a constant
 //
@@ -81,17 +87,17 @@ func main() {
 // pins disagree eventually. Reading it from the module graph means the check
 // measures what the project builds against, which is the only version the
 // record is a record of.
-func pinnedForkVersion() (string, error) {
+func pinnedForkVersion(module string) (string, error) {
 	// The replace directive rather than the require: the require names
 	// sigs.k8s.io/cluster-api at an upstream version, and what is actually
 	// fetched is the fork the replace points at.
-	out, err := exec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}", "sigs.k8s.io/cluster-api").Output()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}", module).Output()
 	if err != nil {
-		return "", fmt.Errorf("reading the pinned fork version from the module graph: %w", err)
+		return "", fmt.Errorf("reading the pinned fork version of %s from the module graph: %w", module, err)
 	}
 	v := strings.TrimSpace(string(out))
 	if v == "" {
-		return "", fmt.Errorf("the module graph reports no version for sigs.k8s.io/cluster-api")
+		return "", fmt.Errorf("the module graph reports no version for %s", module)
 	}
 	if pseudoVersion.MatchString(v) {
 		// A pseudo-version names a commit, and it names it by a twelve

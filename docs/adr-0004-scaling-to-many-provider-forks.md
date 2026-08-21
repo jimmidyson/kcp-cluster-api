@@ -1,8 +1,11 @@
 # ADR-0004: Scaling the fork model to many providers
 
-Status: **accepted**, decided 2026-08-20. **Amended 2026-08-20: L1 is
-retired** — the CAPX port fired its trigger and the layer turned out not to be
-needed. See [What the CAPX port settled](#what-the-capx-port-settled). The
+Status: **accepted**, decided 2026-08-20. **Amended 2026-08-21: the module
+split is built** — see [What building the provider module
+settled](#what-building-the-provider-module-settled), which corrects the
+`internal/` blocker.
+**Amended 2026-08-20: L1 is retired** — the CAPX port fired its trigger and
+the layer turned out not to be needed. See [What the CAPX port settled](#what-the-capx-port-settled). The
 reasoning below is kept as it was written, so what the decision was taken
 against stays legible.
 
@@ -136,6 +139,12 @@ the shape Constitution Principle VIII calls out — structural to retrofit, and
 silent when violated.
 
 ### Everything reusable is `internal/`
+
+> **Amended 2026-08-21, after building the Nutanix provider module.** This
+> blocker is real for a fork in another repository and *not* real for a module
+> in this one, which is the case that actually arrived. The original text is
+> kept below; the correction is in
+> [What building the provider module settled](#what-building-the-provider-module-settled).
 
 `internal/providerwiring`, `internal/capiexports`, `internal/coremanager` and
 the rest are exactly the glue a forked provider needs, and are unimportable
@@ -352,6 +361,63 @@ callers, so nothing populates the map. It was removed as dead code rather than
 ported, which is also what fixed the one compile error the version bump caused.
 Unlike the other two it is kcp-specific — `ObjectKey` carries a namespace, so
 it does not collide within a single management cluster.
+
+## What building the provider module settled
+
+Later than the rest, and later than [What the CAPX port
+settled](#what-the-capx-port-settled): this records what happened when the
+per-provider module this ADR proposed was actually built, as
+`providers/nutanix-infrastructure`.
+
+### `internal/` is not a wall for a module in this repository
+
+Go's internal rule is **path-prefix based, not module based**. A module at
+`github.com/jimmidyson/kcp-cluster-api/providers/nutanix-infrastructure`
+imports `internal/coremanager` and `internal/providerwiring` without
+complaint, because its path is inside the tree rooted at the parent of
+`internal/`. A module outside that prefix is refused, with
+`use of internal package ... not allowed`. Both directions were checked.
+
+So the blocker above is really two claims, and only one survives:
+
+| | Reachable? |
+|---|---|
+| A provider *module* under `github.com/jimmidyson/kcp-cluster-api/…` | **yes** |
+| A provider *fork* at `github.com/nutanix-cloud-native/…` | no |
+
+The case that arrived is the first. L3 modules reuse the fleet wiring as it
+stands, and nothing had to be promoted to a public API to allow it — which
+makes the module split materially cheaper than this ADR assumed, and removes
+the reason it gave for wanting L1 in the first place.
+
+The second claim stands and is worth keeping: a fork in another repository
+still cannot import any of it, which is why the fork carries its own wiring
+rather than calling into this repository's.
+
+### The pin-propagation hazard is exactly as described
+
+The provider module restates all four `replace` directives, because Go honours
+`replace` only in the main module. This is the first consumer that is not the
+repository root, and it needed every one of them.
+
+The pins must also move together. The root and the provider module both pin
+the CAPX fork, and a pair that disagreed would build two different CAPX into
+one repository — which compiles.
+
+### The SDK containment is what the split was for, and it holds
+
+| | provider module | root |
+|---|---|---|
+| `aws-sdk-go-v2` | 12 | 0 |
+| `ntnx-api-golang-clients` | 8 | 0 |
+
+### One thing the ADR did not anticipate
+
+`./...` does not reach a nested module, so a provider module is invisible to
+every command this project verifies with. `build`, `lint` and `test:unit` now
+iterate them explicitly, and `drift` checks one record per fork. A module or a
+record left off those lists is one CI never looks at, which is how it stops
+working.
 
 ## The decision: three layers
 
