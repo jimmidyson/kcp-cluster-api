@@ -162,20 +162,18 @@ type Options struct {
 	ClustersPerWorkspace int
 
 	// ControlPlaneMachines is how many control plane machines each cluster
-	// gets, as a KubeadmControlPlane the Cluster points at. Asking for any
-	// wires the kubeadm bootstrap and control plane providers, which create
-	// each machine's Machine, KubeadmConfig and DevMachine themselves.
+	// gets, as a KubeadmControlPlane the Cluster points at. The kubeadm
+	// bootstrap and control plane providers create each machine's Machine,
+	// KubeadmConfig and DevMachine themselves.
 	//
-	// Zero means none, and a run with none cannot reach ready - there is no
-	// control plane for the Cluster's Available condition to summarise - so it
-	// waits for provisioned instead. See Result.Ready. cmd/demo asks for one
-	// by default, because a demo that stops short of a cluster is not showing
-	// the thing it exists to show.
+	// At least one. The ClusterClass every demo cluster is built from always
+	// names a control plane, so a run asking for none asks for a blueprint it
+	// cannot satisfy.
 	ControlPlaneMachines int
 
 	// WorkerMachines is how many worker machines each cluster gets, as a
-	// MachineDeployment. Workers need a control plane to join, so asking for
-	// them without ControlPlaneMachines is rejected.
+	// MachineDeployment. They always have a control plane to join, because
+	// ControlPlaneMachines is at least one.
 	WorkerMachines int
 
 	// KubernetesVersion is what those machines ask for. Empty means
@@ -258,16 +256,20 @@ func (o *Options) applyDefaults() {
 
 // providers is the set of provider exports this run publishes and wires.
 //
-// The bootstrap and control plane providers are included only when the run asks
-// for machines: their exports would publish types nothing uses, and their
-// managers would engage every workspace to reconcile nothing. Core and the
-// infrastructure provider are always there, because a cluster is made of both.
+// All four, always. The bootstrap and control plane exports used to be
+// conditional on the run asking for machines, from when a demo cluster was a
+// Cluster with an infrastructureRef and nothing else — with no machines their
+// types really were unused. A cluster is a ClusterClass based cluster now, the
+// class always names a KubeadmControlPlaneTemplate, and Blueprint creates one
+// unconditionally, so the types are always used and the condition had become a
+// way to publish a blueprint whose kinds nobody had bound.
 func (o Options) providers() []capiexports.Provider {
-	providers := []capiexports.Provider{capiexports.Core(), capiexports.Infrastructure()}
-	if o.ControlPlaneMachines > 0 {
-		providers = append(providers, capiexports.Bootstrap(), capiexports.ControlPlane())
+	return []capiexports.Provider{
+		capiexports.Core(),
+		capiexports.Infrastructure(),
+		capiexports.Bootstrap(),
+		capiexports.ControlPlane(),
 	}
-	return providers
 }
 
 func (o Options) validate() error {
@@ -280,8 +282,9 @@ func (o Options) validate() error {
 	if o.ClustersPerWorkspace < 1 {
 		return fmt.Errorf("ClustersPerWorkspace = %d, want at least 1", o.ClustersPerWorkspace)
 	}
-	if o.WorkerMachines > 0 && o.ControlPlaneMachines == 0 {
-		return errors.New("WorkerMachines without ControlPlaneMachines: a worker has no control plane to join")
+	if o.ControlPlaneMachines < 1 {
+		return fmt.Errorf("ControlPlaneMachines = %d, want at least 1: the ClusterClass every demo cluster is built from always names a control plane, so a run with none asks for a blueprint it cannot satisfy",
+			o.ControlPlaneMachines)
 	}
 	if err := validateUsers(o.Users); err != nil {
 		return err
@@ -363,24 +366,6 @@ type Result struct {
 	Manager mcmanager.Manager
 }
 
-// Provisioned reports whether every cluster reached provisioned, every control
-// plane the run asked for can accept requests, and every machine it asked for
-// exists with its bootstrap data.
-//
-// The control plane leads because it is what a person waits for: a cluster
-// they can talk to. The machine count is checked as well as their state, since
-// a worker pool that created no Machines at all would otherwise satisfy
-// "every machine is bootstrapped" vacuously.
-//
-// It is the milestone on the way to Ready rather than the demo's
-// done-condition: reported in the tables, not waited on. See Ready.
-func (r Result) Provisioned() bool {
-	return AllProvisioned(r.Statuses) &&
-		AllInitialized(r.ControlPlanes) &&
-		len(r.Machines) >= r.ExpectedMachines &&
-		AllBootstrapped(r.Machines)
-}
-
 // Ready reports whether every cluster the run asked for is one somebody could
 // use: the Cluster is Available, its control plane has every replica it was
 // asked for, and every Machine is Ready.
@@ -395,16 +380,13 @@ func (r Result) Provisioned() bool {
 // without it a run that created no Machines at all would satisfy "every
 // machine is ready" vacuously.
 //
-// A run that asked for no control plane falls back to Provisioned, because
-// there is nothing for readiness to mean: the Cluster's Available condition
-// summarises a remote connection probe and a control plane availability that a
-// cluster with no control plane never gets, so waiting for it would be waiting
-// for something that cannot happen. ControlPlanes is empty only in that case -
-// a run that asked for one gets a row saying "not created yet" until it
-// appears.
+// There is no fallback for a run with no control planes. Every run has one
+// now, so an empty ControlPlanes means the snapshot failed rather than that
+// none was asked for, and reporting that as ready-by-provisioned would call a
+// broken run finished.
 func (r Result) Ready() bool {
 	if len(r.ControlPlanes) == 0 {
-		return r.Provisioned()
+		return false
 	}
 	return AllClustersReady(r.Statuses) &&
 		AllControlPlanesReady(r.ControlPlanes) &&
@@ -910,7 +892,7 @@ func waitForReady(ctx context.Context, opts Options, workspaces []Workspace) (Re
 		if err != nil {
 			return Result{Workspaces: workspaces, Statuses: statuses}, err
 		}
-		controlPlanes, err := SnapshotControlPlanes(ctx, workspaces, opts.ClustersPerWorkspace, opts.ControlPlaneMachines)
+		controlPlanes, err := SnapshotControlPlanes(ctx, workspaces, opts.ClustersPerWorkspace)
 		if err != nil {
 			return Result{Workspaces: workspaces, Statuses: statuses, Machines: machines}, err
 		}
@@ -1005,11 +987,7 @@ func SnapshotMachines(ctx context.Context, workspaces []Workspace) ([]MachineSta
 }
 
 // SnapshotControlPlanes reads every cluster's control plane.
-func SnapshotControlPlanes(ctx context.Context, workspaces []Workspace, clustersPerWorkspace, machinesPerCluster int) ([]ControlPlaneStatus, error) {
-	if machinesPerCluster == 0 {
-		return nil, nil
-	}
-
+func SnapshotControlPlanes(ctx context.Context, workspaces []Workspace, clustersPerWorkspace int) ([]ControlPlaneStatus, error) {
 	statuses := make([]ControlPlaneStatus, 0, len(workspaces)*clustersPerWorkspace)
 	for _, ws := range workspaces {
 		for n := range clustersPerWorkspace {
