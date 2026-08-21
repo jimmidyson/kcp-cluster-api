@@ -91,10 +91,11 @@ root                                  the APIExports live here
 ```
 
 Each user is granted two things and nothing else: the right to be in their own
-home and read the workspaces in it, and full use of the Cluster API types in
-the workspaces they own. Nothing grants them anything in the org workspace,
-which is why listing it is refused — and why the isolation is a property of
-where the workspaces are rather than of anything the demo does at read time.
+home and read the workspaces in it, and — in the workspaces they own — read of
+every Cluster API type plus write of the one they are meant to write, the
+`Cluster`. Nothing grants them anything in the org workspace, which is why
+listing it is refused — and why the isolation is a property of where the
+workspaces are rather than of anything the demo does at read time.
 
 ### The first row, and why the org workspace is in the way
 

@@ -589,9 +589,18 @@ system:kcp:workspace:access:alice   system:kcp:workspace:access   alice
 
 The **first** is ordinary Kubernetes RBAC — a role the demo defines, granting
 `get`/`list`/`watch` on `tenancy.kcp.io` `workspaces`. In each workspace Alice
-owns it is `demo-workspace-owner` instead: full use of the four Cluster API
-groups, and read access to Secrets, because a cluster's admin kubeconfig is
-one.
+owns it is `demo-workspace-owner` instead: read across the four Cluster API
+groups, write on `clusters` alone, and read access to Secrets, because a
+cluster's admin kubeconfig is one.
+
+Write on one type is all a ClusterClass based cluster needs. Alice's `Cluster`
+names a class and a shape, and everything under it — the `DevCluster`, the
+`KubeadmControlPlane`, the worker `MachineDeployment` — is created by the
+topology controller, not by her. Scaling and version bumps are edits to
+`spec.topology`, so they are edits to the `Cluster`. The `ClusterClass` and its
+templates were seeded into her workspace by the demo and she can read but not
+change them: choosing what a cluster here is made of is the platform's answer,
+not a tenant's.
 
 The **second** is kcp's. Before RBAC on the resource is consulted at all,
 kcp's workspace content authorizer asks whether you may be in the workspace —

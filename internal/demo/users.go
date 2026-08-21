@@ -242,16 +242,45 @@ func NewHomeRole() *rbacv1.ClusterRole {
 	}
 }
 
-// NewWorkspaceRole is what a user may do in each of their own workspaces: full
-// use of the Cluster API types bound there, and read access to the objects
-// those types produce. Being in the workspace is WorkspaceAccessRoleName's
-// grant, as in the home.
+// NewWorkspaceRole is what a user may do in each of their own workspaces: read
+// every Cluster API type bound there, and write exactly one of them, the
+// Cluster. Being in the workspace is WorkspaceAccessRoleName's grant, as in
+// the home.
 //
-// Narrowed by group rather than granted as "*", for the reason the permission
-// claims are narrowed by verb: this is the place where what a tenant may do is
-// written down, so it should say it. Secrets are readable because a cluster's
-// admin kubeconfig is one, and are not writable because a tenant never writes
-// one - the control plane provider does.
+// # One writable type, because a demo cluster is a ClusterClass based cluster
+//
+// The Cluster names a class and a shape. The DevCluster, the
+// KubeadmControlPlane, the worker MachineDeployment and the templates each is
+// stamped from are created by the topology controller under the manager's
+// identity, never the tenant's, so a tenant who could write them would be
+// holding the grant the hand-built model needed against a demo that no longer
+// builds clusters that way. Scaling and version changes do not reopen it:
+// both are fields of spec.topology, which write on clusters already carries.
+//
+// The blueprint is the other half. The ClusterClass and the five templates it
+// refers to are seeded into the workspace by whoever runs the demo, the way a
+// platform operator seeds a tenant's - and are read-only once there, because
+// writing a class is deciding what a cluster in this installation is made of
+// rather than asking for one, and that answer is not a tenant's to give.
+//
+// Deleting a Machine to force a replacement is deliberately absent. It is a
+// real operation and a real temptation, but it is remediation, which is the
+// platform's job here; a tenant changes their cluster through spec.topology,
+// and a Machine deleted underneath the topology controller is a change it did
+// not make.
+//
+// # Why the shape of the rules
+//
+// The groups are named rather than granted as "*", for the reason the
+// permission claims are narrowed by verb: this is the place where what a
+// tenant may do is written down, so it should say it. Within them read is a
+// wildcard, so that an export publishing a new type does not silently fall
+// outside what an owner may watch, and write is one rule naming one resource,
+// because that is the whole claim and it should be readable as such.
+//
+// Secrets are readable because a cluster's admin kubeconfig is one, and are
+// not writable because a tenant never writes one - the control plane provider
+// does.
 func NewWorkspaceRole() *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: WorkspaceRoleName},
@@ -264,7 +293,12 @@ func NewWorkspaceRole() *rbacv1.ClusterRole {
 					"infrastructure.cluster.x-k8s.io",
 				},
 				Resources: []string{"*"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"cluster.x-k8s.io"},
+				Resources: []string{"clusters"},
+				Verbs:     []string{"create", "update", "patch", "delete"},
 			},
 			{
 				APIGroups: []string{""},
