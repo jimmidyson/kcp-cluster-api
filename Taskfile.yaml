@@ -138,10 +138,10 @@ tasks:
       # run's numbers as this run's, which for a measurement is not a saving
       # but a wrong answer.
       #
-      # Six shapes run here, sized independently so widening a cheap one does
-      # not widen an expensive one by accident. One per provider deployment,
-      # because a workspace is engaged by each of them and a single aggregate
-      # would hide which one a regression is in:
+      # Seven shapes run here, sized independently so widening a cheap one does
+      # not widen an expensive one by accident. One per deployment, because a
+      # workspace is engaged by each of them and a single aggregate would hide
+      # which one a regression is in:
       #
       #   SWEEP_WORKSPACES / SWEEP_OBJECTS                     (default 4 / 5)
       #     one controller watching one type — bin/sweep-report.{md,json}
@@ -154,6 +154,8 @@ tasks:
       #     bin/sweep-report-controlplane.{md,json}
       #   SWEEP_DEV_WORKSPACES / SWEEP_DEV_OBJECTS             (default 3 / 1)
       #     cmd/dev-infrastructure-manager — bin/sweep-report-dev.{md,json}
+      #   SWEEP_WORKSPACE_WORKSPACES / SWEEP_WORKSPACE_OBJECTS (default 3 / 1)
+      #     cmd/workspace-manager — bin/sweep-report-workspace.{md,json}
       #   SWEEP_FLEET_WORKSPACES / SWEEP_FLEET_OBJECTS         (default 2 / 1)
       #     every provider's controllers on one fleet, taken to an initialized
       #     control plane — bin/sweep-report-fleet.{md,json}

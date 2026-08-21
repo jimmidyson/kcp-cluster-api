@@ -44,12 +44,19 @@ having to reconstruct the answer from the commit log.
   when it does not, on roughly half of the runs.
   `capiworkspaces.NudgeUnappliedClaims` is the workaround and says so.
 
-  **Per-workspace cost is not measured.** This adds a fifth deployment and a
-  binding per workspace, so the totals in
+  **Per-workspace cost, measured.** The fifth deployment costs **7 goroutines,
+  0 watch streams, 3 discovery requests and 5 reconcile requests per active
+  workspace**, and retains **1 goroutine** per departed one, at twenty
+  workspaces — so an installation of all five pays 15 goroutines and 20
+  discovery requests per workspace and holds 32 streams at rest. `task
+  test:sweep` runs the shape and `cmd/sweeptotals` refuses a total without it,
+  so the figures in
   [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
-  no longer add up to an installation's. Running `task test:sweep` against a
-  shape that includes `cmd/workspace-manager` is what would make a number
-  quotable, and it has not been run.
+  add up to an installation's again. Five of the seven goroutines and the one
+  retained are the role maintainer's `mcbuilder` wiring rather than its work;
+  moving it onto the shard-wide watch registry the providers use is what would
+  retire them, and that has not been done. Spec:
+  [`specs/20260821-113240-workspace-deployment-cost`](../specs/20260821-113240-workspace-deployment-cost/spec.md).
 
 - **A cluster is a ClusterClass based cluster.** The core deployment wires the
   four topology reconcilers — `clusterclass`, `topology/cluster`,
