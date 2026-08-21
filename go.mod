@@ -181,4 +181,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.2.5-0.20260821071820-1aade1b9ca26
+replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.1

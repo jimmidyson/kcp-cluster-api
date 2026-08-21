@@ -206,7 +206,7 @@ replace github.com/jimmidyson/kcp-cluster-api => ../..
 // only in the main module, so a nested module inherits none of them. Without
 // them this resolves genuine upstream Cluster API alongside the fork. See
 // ADR-0004, which recorded the hazard before this module existed to prove it.
-replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.2.5-0.20260821071820-1aade1b9ca26
+replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.1
 
 replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.12
 
