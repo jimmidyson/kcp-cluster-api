@@ -329,6 +329,82 @@ tasks:
         --token "${GITHUB_TOKEN:-$(gh auth token)}"
         {{.CLI_ARGS}}
 
+  pr:sign:
+    desc: Re-sign a pull request branch's commits and push it, ready to merge
+    # An agent session commits in a container that has no signing key, so its
+    # commits reach the branch unsigned. That failure is silent rather than
+    # loud: this repository's container has `commit.gpgsign=true`, `gpg.format
+    # =ssh` and a `user.signingkey` pointing at a **zero-byte** placeholder, so
+    # `git commit` succeeds and produces a commit with no signature at all.
+    # Nothing says so until GitHub shows the branch Unverified next to a `main`
+    # whose commits are all signed.
+    #
+    # This pulls such a branch onto a machine that does have the key, rewrites
+    # every commit on it with a signature, and pushes the result.
+    #
+    # Rewriting history is the point here, not a side effect, so the usual rule
+    # against it applies with full force: run this only on a branch that is
+    # yours. The guard below refuses `main`; it cannot tell whose branch any
+    # other one is.
+    #
+    # The rebase is onto `origin/main` because that is how this project updates
+    # an open pull request branch anyway — see AGENTS.md, "Merging and keeping
+    # branches current". So one command both signs the branch and brings it
+    # current, which is what "ready to merge" means.
+    vars:
+      PR: '{{.PR | default ""}}'
+    # Without this the whole script is echoed before it runs, burying the git
+    # output that actually matters. Every command here reports for itself.
+    silent: true
+    cmds:
+      # `task pr:sign PR=97` fetches and checks that pull request out first;
+      # bare `task pr:sign` signs whatever branch is already checked out.
+      - |
+        if [ -n "{{.PR}}" ]; then
+          gh pr checkout "{{.PR}}"
+        fi
+
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch" = "main" ]; then
+          echo "refusing to rewrite main. Check out the pull request branch first." >&2
+          exit 1
+        fi
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "working tree is dirty; commit or stash before rewriting history." >&2
+          exit 1
+        fi
+        if [ -z "$(git config --get user.signingkey)" ]; then
+          echo "no user.signingkey configured — this would rewrite every commit and sign none." >&2
+          exit 1
+        fi
+
+        git fetch origin main
+        # --force-rebase because a branch already on top of main is otherwise a
+        # no-op, and a no-op re-creates no commits and so signs nothing. The
+        # author and author date of each commit survive; the committer becomes
+        # whoever runs this, which is the truth about who signed it.
+        git rebase --force-rebase --gpg-sign origin/main
+
+        # Assert the outcome rather than trusting the command that produced it.
+        # This exists because the failure it catches has already happened here
+        # once, silently, with signing switched on the whole time.
+        #
+        # `git log %G?` reports N for no signature, and E when a signature is
+        # present but cannot be checked — which is the normal answer wherever
+        # gpg.ssh.allowedSignersFile is unset. E is therefore a pass: the claim
+        # being made is that a signature exists, not that this machine can
+        # establish who made it.
+        unsigned=$(git log --format='%h %G?' origin/main..HEAD | awk '$2 == "N" { print $1 }')
+        if [ -n "$unsigned" ]; then
+          echo "signing did not take. These commits still carry no signature:" >&2
+          echo "$unsigned" >&2
+          echo "Nothing has been pushed. Check that user.signingkey names a real key." >&2
+          exit 1
+        fi
+
+        git push --force-with-lease
+        echo "signed and pushed $(git rev-list --count origin/main..HEAD) commit(s) on $branch"
+
   docs:build:
     desc: Build the documentation site
     dir: docs/site

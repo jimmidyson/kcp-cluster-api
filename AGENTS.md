@@ -350,3 +350,28 @@ git fetch origin main
 git rebase origin/main
 git push --force-with-lease
 ```
+
+### Signing an agent's commits
+
+An agent session commits in a container with no signing key, so its commits
+reach the branch **unsigned** while every commit on `main` is signed. The
+failure is silent, not loud: the container ships `commit.gpgsign=true`,
+`gpg.format=ssh` and a `user.signingkey` pointing at a zero-byte placeholder,
+so `git commit` succeeds and produces a commit carrying no signature at all.
+Nothing reports it until GitHub shows the branch Unverified.
+
+Sign such a branch from a machine that has the key:
+
+```sh
+task pr:sign PR=97   # or bare `task pr:sign` for the current branch
+```
+
+It checks the pull request out, rebases onto `origin/main` with signing — the
+same rebase this section already prescribes, so the branch comes out both
+signed and current — and force-pushes with lease. Author and author date
+survive; the committer becomes whoever signed, which is the truth.
+
+It **asserts the result rather than trusting the command**: if any commit is
+still unsigned afterwards it names them and pushes nothing. That check exists
+because the silent failure above has already happened in this repository, with
+signing switched on throughout.
