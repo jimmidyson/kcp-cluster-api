@@ -456,6 +456,62 @@ tasks:
         git push --force-with-lease
         echo "signed and pushed $(git rev-list --count origin/main..HEAD) commit(s) on $branch"
 
+  release-please:sign:
+    desc: Sign the open release pull request — run immediately before merging it
+    # release-please cannot sign what it writes. Its only signing-adjacent flag
+    # is `--signoff`, which appends a `Signed-off-by:` line and is not a
+    # signature, and its commits are made through the Git Data API — create
+    # tree, create commit, update ref — which signs nothing unless handed a
+    # signature it never supplies. So the release branch carries one Unverified
+    # commit, and this is how it stops doing so.
+    #
+    # **Immediately before merging** is not incidental. Every run of the
+    # release-please workflow replaces that branch's head with a fresh
+    # unsigned commit, so a signature applied earlier is gone the next time
+    # anything lands on main. Signing is the last step before the merge button,
+    # not something done once when the pull request opens.
+    #
+    # Whether this is needed at all is worth knowing before reaching for it.
+    # GitHub signs the squash merge itself — the commit on main is committed by
+    # `web-flow` and carries GitHub's signature whatever the branch looked
+    # like — so `main` stays fully signed without this. This is for wanting the
+    # pull request itself to read Verified.
+    #
+    # No gh anywhere in here. Finding the branch is a plain `ls-remote`, which
+    # goes through git's own remote handling and so works with an SSH alias
+    # (`personalgit:owner/repo`) that gh may not resolve; and `pr:sign` with no
+    # PR set signs the branch already checked out, which needs no gh either.
+    silent: true
+    cmds:
+      - |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "working tree is dirty; commit or stash first." >&2
+          exit 1
+        fi
+
+        git fetch origin
+        branches=$(git ls-remote --heads origin 'refs/heads/release-please--*' | sed 's#.*refs/heads/##')
+        n=$(printf '%s\n' "$branches" | grep -c . || true)
+
+        if [ "$n" -eq 0 ]; then
+          echo "no release branch on origin. Run \`task release-please\` first." >&2
+          exit 1
+        fi
+        if [ "$n" -gt 1 ]; then
+          # More than one means several release lines are open at once, and
+          # which of them you meant is not this task's guess to make.
+          echo "more than one release branch on origin:" >&2
+          printf '%s\n' "$branches" >&2
+          echo "Check the one you want out, then run \`task pr:sign\`." >&2
+          exit 1
+        fi
+
+        echo "signing $branches"
+        git checkout -B "$branches" "origin/$branches"
+      # Signs whatever is now checked out. You are left on the release branch:
+      # switch back to main yourself once the pull request is merged.
+      - task: pr:sign
+
   docs:build:
     desc: Build the documentation site
     dir: docs/site

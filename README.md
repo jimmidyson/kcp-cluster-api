@@ -144,6 +144,12 @@ merged, the `release-please` workflow rewrites its branch, title and changelog
 on every push to `main`, so it always describes everything landed so far —
 there is no window in which starting a release freezes what goes into it.
 
+That rewriting is also why the release pull request carries an Unverified
+commit: release-please writes through the Git Data API, which signs nothing.
+The commit that reaches `main` is signed by GitHub regardless, so this is
+cosmetic — `task release-please:sign` fixes it for anyone who wants the pull
+request itself to read Verified, run immediately before merging.
+
 ### Where the history starts
 
 `main` carries 329 commits and only 38 of them are this project's: it is a fork
