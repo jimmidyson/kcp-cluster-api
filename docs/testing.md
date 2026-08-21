@@ -70,6 +70,28 @@ tagged tests — `go install github.com/kcp-dev/kcp/cmd/kcp@<version>` does
 not work here, because kcp's `go.mod` carries `replace` directives and `go
 install pkg@version` refuses to build a non-main module that has any.
 
+### One kcp server per package, two packages at a time
+
+Every package under `test/integration/` starts its own kcp server with an
+embedded etcd, and `go test` runs packages in parallel — `-p`, which
+defaults to `GOMAXPROCS`. On a four-core runner that brings four servers up
+at once, and a server that does not reach readiness inside the fixture's
+timeout fails its whole package before any test body runs.
+
+`task test:integration:kcp` therefore passes `-p 2`. Two rather than one
+keeps most of the wall-clock saving — the packages sum to about eight
+minutes run one at a time — while halving how many servers compete to
+start.
+
+**If bring-up starts failing again at two, the next step is `-p 1`, not a
+re-run.** A readiness timeout, or a discovery error like `the server is
+currently unable to handle the request`, is contention rather than a defect
+in whichever package happened to report it — the failing package moves
+around between runs, which is the tell.
+
+Nothing under `test/integration/` calls `t.Parallel()`, so tests within a
+package already run one at a time.
+
 ### `envtest.Environment`'s workspace parameter
 
 `kcp` rejects API requests made against its bare server root (the "base",

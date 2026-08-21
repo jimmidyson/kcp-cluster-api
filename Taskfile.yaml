@@ -82,7 +82,24 @@ tasks:
       # PATH is the right mechanism despite what the fixture's failure hint
       # says. KCP_BINARIES_DIR only controls whether that hint is printed; the
       # fixture resolves the server as a bare "kcp" and relies on lookup.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
+      #
+      # -p 2 rather than go test's default of GOMAXPROCS. Every package here
+      # starts its own kcp server with an embedded etcd, so the default brings
+      # four up at once on a four-core runner and they contend for the CPU each
+      # needs to reach readiness in time. The `test:integration` target above
+      # already avoids exactly this between its two children; nothing in these
+      # tests calls t.Parallel(), so the concurrency inside this one is go
+      # test's default rather than anything the tests asked for.
+      #
+      # Two rather than one: it halves how many servers compete to start while
+      # keeping most of the wall-clock saving, and the diagnosis is inferred
+      # from three bring-up failures across two environments rather than
+      # measured, so this is the smaller step that tests it. If bring-up flakes
+      # again at two - a readiness timeout, or discovery answering "the server
+      # is currently unable to handle the request" - go to -p 1 rather than
+      # re-running. The serial sum is the eight minutes the bound above already
+      # allows for.
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m -p 2 ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/bootstrap/... ./test/integration/teardown/...
 
   demo:
     desc: Build a ready cluster in each of several kcp workspaces from one manager, and watch it happen
