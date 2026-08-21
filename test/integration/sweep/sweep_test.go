@@ -132,6 +132,24 @@ const (
 	// informer — which is why a shape's retention is stated as its own
 	// constant rather than derived from how many types it watches.
 	retainedGoroutinesPerEventHandler = 2
+
+	// retainedGoroutinesPerFleetSource is what one fleet-wide controller's
+	// source costs per workspace after that workspace has gone.
+	//
+	// multicluster-runtime engages a cluster by wrapping each of the
+	// controller's sources in startWithinContext, which starts a goroutine
+	// parked on the *controller's* context waiting to cancel the cluster's
+	// (pkg/controller/controller.go). Disengaging cancels the cluster's
+	// context, which that goroutine is not waiting on, so it stays until the
+	// controller stops - which for a fleet-wide controller is process
+	// lifetime.
+	//
+	// Measured on multicluster-runtime v0.24.1 by the workspace shape, which
+	// is the only one here whose controllers are fleet-wide: one source, one
+	// goroutine per departed workspace. Like the constant above it is
+	// measured rather than budgeted, and the assertion is that it does not get
+	// worse.
+	retainedGoroutinesPerFleetSource = 1
 )
 
 // sweepConfig is one workload shape to measure. Everything that differs
@@ -184,6 +202,11 @@ type sweepConfig struct {
 	crds func(t *testing.T) []string
 	// crdTransform is applied to each CRD before it is published.
 	crdTransform func(*apiextensionsv1.CustomResourceDefinition)
+
+	// providerOptions are extra options for the APIExport provider this shape
+	// builds. A shape whose deployment narrows discovery has to narrow it here
+	// too, or it measures a fleet a deployment would not have.
+	providerOptions []providerwiring.ProviderOption
 
 	// permissionClaims are declared on the export and accepted by every
 	// binding. A shape whose controllers write Secrets or ConfigMaps - the
@@ -251,6 +274,18 @@ type sweepConfig struct {
 	// down would do anyway.
 	deactivate  func(t *testing.T, ctx context.Context, tn *tenant, objects int)
 	deactivated func(t *testing.T, ctx context.Context, tn *tenant, objects int) bool
+
+	// depart is how a workspace leaves this deployment's fleet. Nil means
+	// deleting the APIBinding to the swept export, which is how a tenant
+	// leaves a provider.
+	//
+	// It is not the same event for every deployment, and measuring the wrong
+	// one measures nothing. A provider is bound by the tenant and unbound by
+	// the tenant, so the binding is the boundary. The onboarding deployment's
+	// binding is created and maintained by a WorkspaceType, which recreates
+	// one a tenant deletes - so its fleet is the workspaces that exist, and a
+	// workspace leaves it by being deleted. See the workspace shape.
+	depart func(t *testing.T, ctx context.Context, tn *tenant)
 }
 
 // tenant is one workspace in the sweep: its logical cluster name, and a client
@@ -258,6 +293,13 @@ type sweepConfig struct {
 type tenant struct {
 	name         multicluster.ClusterName
 	directClient client.Client
+
+	// workspaceName is the Workspace in `root` this logical cluster belongs
+	// to, and rootClient addresses that workspace's parent. A shape whose
+	// departure is the workspace going away rather than an APIBinding being
+	// deleted needs both. See sweepConfig.depart.
+	workspaceName string
+	rootClient    client.Client
 }
 
 func must(t *testing.T, err error) {
@@ -448,8 +490,10 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		directClient, err := client.New(wsCfg, client.Options{Scheme: cfg.scheme})
 		must(t, err)
 		tenants = append(tenants, &tenant{
-			name:         multicluster.ClusterName(ws.Spec.Cluster),
-			directClient: directClient,
+			name:          multicluster.ClusterName(ws.Spec.Cluster),
+			directClient:  directClient,
+			workspaceName: ws.Name,
+			rootClient:    rootClient,
 		})
 	}
 
@@ -474,7 +518,7 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 
 	wildcardRegistry := &capicontrollerutil.WildcardRegistry{}
 	provider, err := providerwiring.NewAPIExportProvider(countedCfg, cfg.exportName, cfg.scheme, wildcardRegistry,
-		providerwiring.WithCacheIndexes(ctx, indexes...))
+		append([]providerwiring.ProviderOption{providerwiring.WithCacheIndexes(ctx, indexes...)}, cfg.providerOptions...)...)
 	must(t, err)
 
 	// The manager's local cluster. Per-workspace wiring wants the workspace
@@ -620,9 +664,13 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 			})
 		}
 
-		must(t, tn.directClient.Delete(ctx, &apisv1alpha1.APIBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: bindingName},
-		}))
+		if cfg.depart != nil {
+			cfg.depart(t, ctx, tn)
+		} else {
+			must(t, tn.directClient.Delete(ctx, &apisv1alpha1.APIBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: bindingName},
+			}))
+		}
 		eventually(t, fmt.Sprintf("workspace %s to disengage", tn.name), func() bool {
 			return len(wiring.Engaged()) == remaining
 		}, func() {
@@ -662,7 +710,9 @@ func runSweep(t *testing.T, cfg sweepConfig) {
 		// The assertion is that this does not get worse. The target is zero;
 		// see the workspace resource usage design page for what reaching it
 		// would take.
-		budget, why := 0.0, "its controllers are fleet-wide, so a workspace's departure has no handler registration to leave behind"
+		budget := float64(retainedGoroutinesPerFleetSource * cfg.watchedTypes)
+		why := fmt.Sprintf("%d fleet-wide source(s) × %d, which is the goroutine multicluster-runtime parks on the controller's context per engaged cluster",
+			cfg.watchedTypes, retainedGoroutinesPerFleetSource)
 		if cfg.wiresPerWorkspaceControllers {
 			budget = float64(retainedGoroutinesPerEventHandler * cfg.eventHandlers)
 			why = fmt.Sprintf("%d event-handler registration(s) × %d, which is what a per-workspace controller's handlers on the shared informers account for",

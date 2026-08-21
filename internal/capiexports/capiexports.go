@@ -206,10 +206,11 @@ var (
 	devMachines         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachines"}
 	devMachineTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachinetemplates"}
 
-	// What the workspace onboarding export claims. Both are types kcp serves
-	// in every workspace rather than types an export publishes.
-	apiBindings  = Resource{Group: "apis.kcp.io", Resource: "apibindings"}
-	clusterRoles = Resource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}
+	// What the workspace onboarding export claims. All three are types kcp
+	// serves in every workspace rather than types an export publishes.
+	apiBindings     = Resource{Group: "apis.kcp.io", Resource: "apibindings"}
+	clusterRoles    = Resource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}
+	logicalClusters = Resource{Group: "core.kcp.io", Resource: "logicalclusters"}
 )
 
 // to returns r claimed for the given verbs. It reads at the call site as
@@ -471,6 +472,14 @@ func Workspaces() Provider {
 		CoreClaims: []Resource{
 			// Read: which providers a workspace has enabled is the input.
 			to(apiBindings, read),
+			// Read: the workspace itself, which is what this deployment
+			// discovers a workspace by. One LogicalCluster exists per
+			// workspace and it is reachable through this claim only while
+			// this export is bound, so it appears when a workspace onboards
+			// and disappears when it unbinds - which is exactly the pair of
+			// events a fleet-wide manager engages and disengages on. See
+			// providerwiring.WithLogicalClusterDiscovery.
+			to(logicalClusters, read),
 			// Write: the roles are the output. No delete - a role this
 			// controller did not create is not its to remove, and a workspace
 			// leaving Cluster API keeps the roles until somebody decides
