@@ -162,7 +162,7 @@ func firstSet(values ...string) string {
 }
 
 func run(ctx context.Context, opts options) error {
-	baseConfig, kubeconfigPath, stop, err := connect(ctx, opts)
+	baseConfig, impersonationConfig, kubeconfigPath, stop, err := connect(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -174,6 +174,7 @@ func run(ctx context.Context, opts options) error {
 
 	result, runErr := demo.Run(ctx, demo.Options{
 		BaseConfig:           baseConfig,
+		ImpersonationConfig:  impersonationConfig,
 		Parent:               opts.parent,
 		WorkspacePrefix:      opts.workspacePrefix,
 		Workspaces:           opts.workspaces,
@@ -206,6 +207,23 @@ func run(ctx context.Context, opts options) error {
 			return err
 		}
 	}
+	if len(result.Onboarding) > 0 {
+		fmt.Println()
+		fmt.Println("How each workspace came to serve Cluster API. Nothing in the last three")
+		fmt.Println("columns was written out by hand:")
+		if err := demo.RenderOnboardingTable(os.Stdout, result.Onboarding); err != nil {
+			return err
+		}
+	}
+	if len(result.Claims) > 0 {
+		fmt.Println()
+		fmt.Println("What each provider's controllers may reach. A \"discovered\" claim exists")
+		fmt.Println("because a provider published a labelled APIExport, not because anybody")
+		fmt.Println("named it - and every workspace accepted it without being asked:")
+		if err := demo.RenderClaimsTable(os.Stdout, result.Claims); err != nil {
+			return err
+		}
+	}
 	if len(result.Access) > 0 {
 		fmt.Println()
 		if err := demo.RenderAccessTable(os.Stdout, result.Access); err != nil {
@@ -233,24 +251,38 @@ func run(ctx context.Context, opts options) error {
 	return nil
 }
 
-// connect returns the shard config the demo runs against, starting a kcp
-// server first when no kubeconfig was given, along with the function that
-// stops it. Stopping somebody else's server is not this command's business,
-// so that function does nothing when a kubeconfig was given.
-func connect(ctx context.Context, opts options) (cfg *rest.Config, kubeconfigPath string, stop func(), err error) {
+// connect returns the demo's own credential, the privileged one it
+// impersonates tenants from, where the kubeconfig is, and how to stop a server
+// this function started.
+//
+// The two configs are different users of the same kubeconfig. See
+// demo.Options.ImpersonationConfig for why impersonating from an ordinary
+// admin is not enough. Stopping somebody else's server is not this command's
+// business, so the returned stop function does nothing when a kubeconfig was
+// given.
+func connect(ctx context.Context, opts options) (cfg, impersonation *rest.Config, kubeconfigPath string, stop func(), err error) {
+	noop := func() {}
 	if opts.kubeconfig != "" {
 		cfg, err := demo.ConfigFromKubeconfig(opts.kubeconfig, opts.kubeconfigCtx)
 		if err != nil {
-			return nil, "", func() {}, err
+			return nil, nil, "", noop, err
 		}
-		return cfg, opts.kubeconfig, func() {}, nil
+		// Best effort: a kubeconfig somebody supplied need not carry the
+		// shard admin, and a run with no tenants never impersonates anybody.
+		// A run that does will fail where the permission is missing, which
+		// says more than refusing to start would.
+		impersonation, err := demo.ConfigFromKubeconfig(opts.kubeconfig, demo.ShardBaseContext)
+		if err != nil {
+			impersonation = cfg
+		}
+		return cfg, impersonation, opts.kubeconfig, noop, nil
 	}
 
 	server, err := demo.StartKcp(ctx, opts.kcpDirectory, 0, opts.log, opts.kcpArgs...)
 	if err != nil {
-		return nil, "", func() {}, err
+		return nil, nil, "", noop, err
 	}
-	return server.BaseConfig, server.KubeconfigPath, server.Stop, nil
+	return server.BaseConfig, server.ImpersonationConfig, server.KubeconfigPath, server.Stop, nil
 }
 
 func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath string) {

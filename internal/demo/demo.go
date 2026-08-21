@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -67,10 +68,12 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/bootstrapmanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
+	"github.com/jimmidyson/kcp-cluster-api/internal/capiworkspaces"
 	"github.com/jimmidyson/kcp-cluster-api/internal/controlplanemanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
+	"github.com/jimmidyson/kcp-cluster-api/internal/workspacemanager"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
@@ -121,6 +124,47 @@ const (
 var PermissionClaims = []apisv1alpha2.PermissionClaim{
 	{GroupResource: apisv1alpha2.GroupResource{Resource: "secrets"}, Verbs: []string{"*"}},
 	{GroupResource: apisv1alpha2.GroupResource{Resource: "configmaps"}, Verbs: []string{"*"}},
+}
+
+// operatorEnabled is what OnboardingStatus.EnabledBy says when a run has no
+// tenants and the demo's own credentials made the bindings.
+const operatorEnabled = "the operator"
+
+// Onboarding is how a run's workspaces come to serve Cluster API. The two
+// modes are the two kcp offers, and ADR-0001 names both: a managed
+// WorkspaceType, and doing it by hand.
+type Onboarding string
+
+const (
+	// OnboardingWorkspaceType creates each workspace with the Cluster API
+	// WorkspaceType. kcp binds Cluster API's core APIExport into it and keeps
+	// the accepted claims current, and this project's initializer writes the
+	// workspace's roles before kcp lets it become Ready. The tenant enables
+	// whichever providers they want afterwards, themselves.
+	//
+	// This is the default, and what a deployment should do.
+	OnboardingWorkspaceType Onboarding = "workspace-type"
+
+	// OnboardingManual creates universal workspaces and writes every
+	// APIBinding and every role from here, with the demo's own credentials.
+	//
+	// It is not a legacy path. It is the opt-out ADR-0001 documents: a tenant
+	// who hand-creates their APIBinding to core is not on the managed
+	// lifecycle, so nothing rewrites their accepted claims and nothing
+	// recreates a binding they delete. A run that wants to take a workspace
+	// apart needs exactly that - which is why test/integration/teardown uses
+	// it, and why this mode is worth keeping working rather than deleting.
+	OnboardingManual Onboarding = "manual"
+)
+
+// Validate rejects a mode this package does not implement.
+func (o Onboarding) Validate() error {
+	switch o {
+	case OnboardingWorkspaceType, OnboardingManual:
+		return nil
+	default:
+		return fmt.Errorf("unknown onboarding mode %q, want %q or %q", o, OnboardingWorkspaceType, OnboardingManual)
+	}
 }
 
 // Options configures a demo run.
@@ -195,6 +239,28 @@ type Options struct {
 	// the only one that needs neither a container runtime nor image pulls.
 	Backend Backend
 
+	// ImpersonationConfig is the credential the demo impersonates tenants
+	// from. Empty means BaseConfig, which is right only when BaseConfig is
+	// itself privileged.
+	//
+	// It is separate from BaseConfig because kcp scopes an impersonated user
+	// to the logical cluster the request addresses unless the impersonator is
+	// in system:masters - so a tenant impersonated from an ordinary admin is a
+	// strictly weaker stand-in than the real user, and is refused outright in
+	// any other workspace. Enabling a provider is authorized in the workspace
+	// holding the APIExport, so an under-privileged impersonator turns "the
+	// tenant enabled it" into "no permission to bind to export ...". See
+	// ConfigForUser.
+	//
+	// For a demo-started kcp this is the shard-base context of its
+	// kubeconfig; for the test fixture it is
+	// RootShardSystemMasterBaseConfig.
+	ImpersonationConfig *rest.Config
+
+	// Onboarding is how a run's workspaces come to serve Cluster API. Empty
+	// means OnboardingWorkspaceType.
+	Onboarding Onboarding
+
 	// RunManager runs the manager in this process. Set it false to drive
 	// workspaces and objects against a core-manager started separately -
 	// which is the same wiring, in the shape a deployment actually has.
@@ -250,6 +316,12 @@ func (o *Options) applyDefaults() {
 	}
 	if o.Backend == "" {
 		o.Backend = BackendInMemory
+	}
+	if o.Onboarding == "" {
+		o.Onboarding = OnboardingWorkspaceType
+	}
+	if o.ImpersonationConfig == nil {
+		o.ImpersonationConfig = o.BaseConfig
 	}
 	if o.KubernetesVersion == "" {
 		o.KubernetesVersion = DefaultKubernetesVersion
@@ -330,6 +402,9 @@ func (o Options) validate() error {
 		return fmt.Errorf("%d users and %d workspaces: a user with no workspace owns nothing to be isolated from",
 			len(o.Users), o.Workspaces)
 	}
+	if err := o.Onboarding.Validate(); err != nil {
+		return err
+	}
 	return o.Backend.Validate()
 }
 
@@ -343,6 +418,17 @@ type Workspace struct {
 	// no users. It is the demo's own record of who was granted what, and it is
 	// what the access checks compare kcp's answers against.
 	Owner string
+
+	// ProvidersEnabled are the provider APIExports bound in this workspace by
+	// somebody choosing to enable them. Core is not among them under the
+	// WorkspaceType: nobody chose it, the type binds it.
+	ProvidersEnabled []string
+
+	// EnabledBy is who made those bindings - the owner's name in a run with
+	// tenants, or "the operator" in one without. It is reported because the
+	// difference is the point: a provider a tenant enabled is proof of a
+	// permission, and one the demo's admin credentials enabled is not.
+	EnabledBy string
 
 	// Client is scoped to this workspace and bypasses the manager's caches
 	// entirely, so what it reads is what the shard holds for this workspace
@@ -372,6 +458,16 @@ type Result struct {
 	// workspaces, as kcp answered it. Empty when the run had no users, and
 	// when the run did not get far enough to ask.
 	Access []AccessCheck
+
+	// Onboarding is how each workspace came to serve Cluster API: what it was
+	// bound to without asking, what its tenant enabled, and what its roles
+	// ended up covering.
+	Onboarding []OnboardingStatus
+
+	// Claims is every permission claim on the exports this run published,
+	// with the export each one lands on resolved from its identity hash - and
+	// which of them nobody wrote down.
+	Claims []ClaimStatus
 
 	// Machines is every Machine the workspaces hold - created by the control
 	// plane provider, not by the demo.
@@ -510,13 +606,54 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// 1. Publish one APIExport per provider, and resolve the claims that let
 	// each provider's controllers reach the types another one publishes.
 	providers := opts.providers()
-	log.Info("Publishing the APIExports", "workspace", opts.Parent, "exports", exportNames(providers))
-	discovery, err := capiexports.Publish(ctx, parentClient, providers, 2*time.Minute)
+	published := providers
+	if opts.Onboarding == OnboardingWorkspaceType {
+		// The onboarding export as well. It publishes no Cluster API type; it
+		// is the identity the controllers that write a workspace's roles act
+		// under. See capiexports.Workspaces.
+		published = append(slices.Clone(providers), capiexports.Workspaces())
+	}
+	log.Info("Publishing the APIExports", "workspace", opts.Parent, "exports", exportNames(published))
+	discovery, err := capiexports.Publish(ctx, parentClient, published, 2*time.Minute)
 	if err != nil {
 		return Result{}, err
 	}
 
-	// 2. The tenants, when the run has any: an org workspace holding one home
+	// 2. The WorkspaceType a tenant onboards with, and the deployment behind
+	// it. Both before any workspace exists: a workspace of this type is held
+	// out of Ready until the initializer has written its roles, so creating
+	// one with nothing running would simply time out.
+	if opts.Onboarding == OnboardingWorkspaceType {
+		workspaceType := capiworkspaces.NewWorkspaceType(opts.Parent, capiworkspaces.DefaultExports())
+		if err := capiworkspaces.EnsureWorkspaceType(ctx, parentClient, workspaceType, time.Minute); err != nil {
+			return Result{}, err
+		}
+		log.Info("Published the Cluster API WorkspaceType",
+			"workspace", opts.Parent, "type", capiworkspaces.WorkspaceTypeName,
+			"binds", exportRefNames(workspaceType.Spec.DefaultAPIBindings))
+
+		if opts.RunManager {
+			runner, err := workspacemanager.New(ctx, workspacemanager.Options{
+				BaseConfig:   opts.BaseConfig,
+				ProviderPath: opts.Parent,
+				Providers:    published,
+				Timeout:      2 * time.Minute,
+				// This process runs every manager, which a deployment does
+				// not, and a test binary runs several demos in turn.
+				SkipControllerNameValidation: true,
+			})
+			if err != nil {
+				return Result{}, fmt.Errorf("setting up the workspace manager: %w", err)
+			}
+			go func() {
+				if err := runner.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					log.Error(err, "Workspace manager exited")
+				}
+			}()
+		}
+	}
+
+	// 3. The tenants, when the run has any: an org workspace holding one home
 	// workspace per user, each readable only by its own user. Everything a
 	// user owns is created inside their home, so the isolation the run reports
 	// is a property of where the workspaces are and who was granted what -
@@ -526,7 +663,19 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	// 3. Create the workspaces and bind each to the export. The endpoint
+	// Tenants may enable a provider for themselves, which is a grant made
+	// here rather than in their own workspace: kcp authorizes creating an
+	// APIBinding as the verb "bind" on the APIExport, in the workspace the
+	// export lives in.
+	bindable := tenantProviders(providers, opts.Onboarding)
+	if len(opts.Users) > 0 && len(bindable) > 0 {
+		if err := capiworkspaces.GrantProviderBinding(ctx, parentClient, opts.Users, bindable); err != nil {
+			return Result{}, fmt.Errorf("letting the tenants enable providers: %w", err)
+		}
+		log.Info("Tenants may enable these providers themselves", "users", opts.Users, "exports", bindable)
+	}
+
+	// 4. Create the workspaces and enable the providers in each. The endpoint
 	// slice stays empty until at least one binding consumes the export, so
 	// this has to happen before anything waits on it.
 	plans := PlanWorkspaces(opts.Parent, opts.WorkspacePrefix, opts.Users, opts.Workspaces)
@@ -539,7 +688,15 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				return Result{}, err
 			}
 		}
-		clusterName, err := kcpfixtures.EnsureWorkspace(ctx, planParent, plan.Name, time.Minute)
+
+		workspaceType := kcpfixtures.DefaultWorkspaceType
+		if opts.Onboarding == OnboardingWorkspaceType {
+			workspaceType = capiworkspaces.TypeReference(opts.Parent)
+		}
+		// Longer than a universal workspace needs, because this one waits on
+		// more: kcp's own initializers, then the default APIBindings, then
+		// this project's initializer writing the roles.
+		clusterName, err := kcpfixtures.EnsureWorkspaceOfType(ctx, planParent, plan.Name, workspaceType, 2*time.Minute)
 		if err != nil {
 			return Result{}, err
 		}
@@ -550,36 +707,91 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			return Result{}, err
 		}
 
-		// One binding per export, each accepting that export's claims. A
-		// deployment automates this through a WorkspaceType's
-		// defaultAPIBindings; a tenant is not meant to hand-accept a claim per
-		// provider.
+		// The owner's grants first, and that ordering is the change the
+		// WorkspaceType made: a tenant who is about to enable a provider for
+		// themselves has to be able to enter the workspace and write an
+		// APIBinding in it before they can. The roles they are being given
+		// already exist - the initializer wrote them - so this only says who
+		// holds them.
+		//
+		// Hand-onboarded, they do not exist yet and are written below. A
+		// ClusterRoleBinding naming a role that is not there is not an error
+		// and starts granting the moment the role appears, so the order is
+		// still this one.
+		if plan.Owner != "" {
+			if err := capiworkspaces.GrantRoles(ctx, wsClient, plan.Owner, capiworkspaces.AdminRoleName); err != nil {
+				return Result{}, fmt.Errorf("granting %s their workspace %s: %w", plan.Owner, plan.Path, err)
+			}
+		}
+
+		// One binding per provider, made by whoever the run says makes it. In
+		// a multi-tenant run that is the tenant, impersonated - so a binding
+		// that appears is proof the tenant was allowed to make it, not proof
+		// that the demo's admin credentials were.
+		//
+		// Core is not among them under the WorkspaceType: kcp bound it when
+		// the workspace was created, under a name it generated, and binding it
+		// again would bind the same export twice.
+		enabler, enabledBy := wsClient, operatorEnabled
+		if plan.Owner != "" && opts.Onboarding == OnboardingWorkspaceType {
+			// ConfigForUser has already scoped the config to the workspace,
+			// so this builds a client from it rather than going through
+			// clientFor, which would scope it a second time and address
+			// /clusters/<path>/clusters/<path>.
+			enabler, err = client.New(ConfigForUser(opts.ImpersonationConfig, plan.Owner, plan.Path), client.Options{Scheme: scheme})
+			if err != nil {
+				return Result{}, fmt.Errorf("building a client for %s as %s: %w", plan.Path, plan.Owner, err)
+			}
+			enabledBy = plan.Owner
+		}
+		enabled := make([]string, 0, len(providers))
 		for _, provider := range providers {
-			if err := kcpfixtures.BindExport(ctx, wsClient, kcpfixtures.BindExportOptions{
+			if opts.Onboarding == OnboardingWorkspaceType && provider.Export == capiexports.CoreExport {
+				continue
+			}
+			if err := kcpfixtures.BindExport(ctx, enabler, kcpfixtures.BindExportOptions{
 				BindingName:      provider.Export,
 				ExportPath:       opts.Parent,
 				ExportName:       provider.Export,
 				PermissionClaims: provider.Claims(discovery.Identities(), discovery),
 				ReadyTimeout:     time.Minute,
 			}); err != nil {
-				return Result{}, fmt.Errorf("binding %s into %s: %w", provider.Export, wsPath, err)
+				if apierrors.IsForbidden(err) && enabledBy != operatorEnabled {
+					// The likeliest cause by a distance, and it is not
+					// something more RBAC will fix: an impersonated tenant is
+					// scoped to their own workspace unless the impersonator is
+					// privileged, and the right to enable a provider is
+					// checked in the workspace holding the export. See
+					// Options.ImpersonationConfig.
+					return Result{}, fmt.Errorf("enabling %s in %s as %s: %w; "+
+						"if this is a refusal to bind, the credential tenants are impersonated from is not privileged "+
+						"enough - see demo.Options.ImpersonationConfig", provider.Export, wsPath, enabledBy, err)
+				}
+				return Result{}, fmt.Errorf("enabling %s in %s as %s: %w", provider.Export, wsPath, enabledBy, err)
+			}
+			enabled = append(enabled, provider.Export)
+		}
+
+		// Hand-onboarded workspaces get their roles from here, because nothing
+		// else is going to write them. Exactly the roles the WorkspaceType's
+		// initializer would have written - the same function - so the two
+		// modes differ in who acts, not in what a tenant ends up with.
+		if opts.Onboarding == OnboardingManual {
+			if _, err := capiworkspaces.ReconcileRoles(ctx, wsClient); err != nil {
+				return Result{}, fmt.Errorf("writing the Cluster API roles in %s: %w", wsPath, err)
 			}
 		}
 
-		// The owner's grant last, so that a workspace a tenant can enter is
-		// one that already serves the types they were granted use of.
-		if plan.Owner != "" {
-			if err := GrantOwner(ctx, wsClient, NewWorkspaceRole(), plan.Owner); err != nil {
-				return Result{}, fmt.Errorf("granting %s their workspace %s: %w", plan.Owner, plan.Path, err)
-			}
-		}
-
-		log.Info("Workspace bound", "workspace", wsPath.String(), "logicalCluster", clusterName, "owner", plan.Owner)
+		log.Info("Workspace ready to hold clusters", "workspace", wsPath.String(),
+			"logicalCluster", clusterName, "owner", plan.Owner,
+			"providersEnabled", enabled, "enabledBy", enabledBy)
 		workspaces = append(workspaces, Workspace{
-			Path:           wsPath.String(),
-			LogicalCluster: clusterName,
-			Owner:          plan.Owner,
-			Client:         wsClient,
+			Path:             wsPath.String(),
+			LogicalCluster:   clusterName,
+			Owner:            plan.Owner,
+			ProvidersEnabled: enabled,
+			EnabledBy:        enabledBy,
+			Client:           wsClient,
 		})
 	}
 
@@ -589,8 +801,9 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	// 4. The manager: the same wiring cmd/core-manager runs, serving every
-	// workspace bound to the export from one set of controllers.
+	// 5. The provider managers: the same wiring cmd/core-manager and its
+	// siblings run, serving every workspace bound to their export from one set
+	// of controllers each.
 	var manager mcmanager.Manager
 	var byExport map[string]mcmanager.Manager
 	if opts.RunManager {
@@ -683,12 +896,29 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// to watch here, so it belongs with the run's final report rather than in
 	// the poll loop. cmd/demo renders it there.
 	if len(users) > 0 {
-		access, err := CheckAccess(ctx, opts.BaseConfig, opts.Parent, result.Org, users, workspaces)
+		access, err := CheckAccess(ctx, opts.ImpersonationConfig, opts.Parent, result.Org, users, workspaces)
 		if err != nil {
 			return result, fmt.Errorf("checking what each user can read: %w", err)
 		}
 		result.Access = access
 	}
+
+	// 9. What each workspace was onboarded with, and what the claim list ended
+	// up saying. Both read back from the server rather than reported from what
+	// the run did: a table built from the demo's own intentions would look the
+	// same whether or not any of it worked.
+	onboarding, err := SnapshotOnboarding(ctx, workspaces)
+	if err != nil {
+		return result, err
+	}
+	result.Onboarding = onboarding
+
+	claims, err := SnapshotClaims(ctx, parentClient, exportNames(published))
+	if err != nil {
+		return result, err
+	}
+	result.Claims = claims
+
 	return result, nil
 }
 
@@ -741,7 +971,7 @@ func ensureUsers(
 		if err != nil {
 			return nil, err
 		}
-		if err := GrantOwner(ctx, homeClient, NewHomeRole(), name); err != nil {
+		if err := GrantHomeOwner(ctx, homeClient, name); err != nil {
 			return nil, fmt.Errorf("granting %s their home workspace: %w", name, err)
 		}
 
@@ -910,6 +1140,28 @@ func newFleetFor(
 		return nil, nil, fmt.Errorf("building the fleet for %s: %w", export, err)
 	}
 	return mgr, fleet, nil
+}
+
+// tenantProviders are the exports a tenant is expected to enable for
+// themselves: every provider the run wires, minus the one their WorkspaceType
+// already bound for them.
+func tenantProviders(providers []capiexports.Provider, onboarding Onboarding) []string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		if onboarding == OnboardingWorkspaceType && p.Export == capiexports.CoreExport {
+			continue
+		}
+		names = append(names, p.Export)
+	}
+	return names
+}
+
+func exportRefNames(refs []tenancyv1alpha1.APIExportReference) []string {
+	names := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		names = append(names, ref.Export)
+	}
+	return names
 }
 
 func exportNames(providers []capiexports.Provider) []string {

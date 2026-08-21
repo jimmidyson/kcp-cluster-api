@@ -16,6 +16,41 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **Onboarding a workspace is creating one.** A tenant creates a `Workspace` of
+  the `cluster-api` `WorkspaceType` and it comes up already bound to Cluster
+  API's core `APIExport` and already carrying the roles that say who may use
+  it — held out of `Ready` until both are true. Enabling a provider is the
+  tenant's own `APIBinding`, made with the tenant's own permissions, and
+  nothing has to be edited afterwards: core's permission claims grow because a
+  provider published a labelled `APIExport`, every workspace accepts them
+  because kcp's `Maintain` lifecycle rebuilds its accepted list, and the
+  tenant's own role grows because a controller watched what they bound. P6 and
+  P7 land with it, and ADR-0001's open questions 3 and 6 are closed:
+  `cluster.x-k8s.io/provider-contract` is the discovery convention. See
+  [Workspace onboarding](site/content/en/docs/design/workspace-onboarding.md)
+  and [Onboarding a workspace](site/content/en/docs/user/onboarding.md); spec in
+  [`specs/20260821-063000-workspace-onboarding`](../specs/20260821-063000-workspace-onboarding/spec.md).
+
+  Two things kcp does that cost a session each to rediscover, both now written
+  down. An **impersonated user is scoped to one logical cluster** unless the
+  impersonator is in `system:masters`, so an impersonated tenant is strictly
+  weaker than the real one and cannot be authorized to bind an export in
+  another workspace at all — which is where kcp checks the right to enable a
+  provider. And **a claim on a provider the workspace has not bound races the
+  workspace becoming `Ready`**: kcp materialises a bound CRD so the claim can
+  apply, but its label controller gives up after about thirteen seconds and
+  nothing re-enqueues the binding. Measured on kcp v0.32.3: `Ready` in about
+  ten seconds when the materialiser wins, and not `Ready` two minutes later
+  when it does not, on roughly half of the runs.
+  `capiworkspaces.NudgeUnappliedClaims` is the workaround and says so.
+
+  **Per-workspace cost is not measured.** This adds a fifth deployment and a
+  binding per workspace, so the totals in
+  [Workspace resource usage](site/content/en/docs/design/workspace-resource-usage.md)
+  no longer add up to an installation's. Running `task test:sweep` against a
+  shape that includes `cmd/workspace-manager` is what would make a number
+  quotable, and it has not been run.
+
 - **A cluster is a ClusterClass based cluster.** The core deployment wires the
   four topology reconcilers — `clusterclass`, `topology/cluster`,
   `topology/machinedeployment`, `topology/machineset` — as fleet-wide
@@ -566,11 +601,11 @@ different binary/concern."
 | P3 | done — `cmd/dev-infrastructure-manager`, on its own APIExport ([design](site/content/en/docs/design/provider-exports.md)) | `kcp/cmd/docker-infrastructure-manager`: port `test/infrastructure/docker/main.go` wiring onto G2 (needed for dev/e2e, not for production) | G2, G3 |
 | P4 | blocked on G4 | Webhook wiring for all 4 providers through G4 | G4, P1–P3 (can stub against G4's interface early) |
 | P5 | not started — needs G3, which is unbuilt | `clusterctl` workspace-awareness: teach `cmd/clusterctl` to target a `clusters/<path>` kubeconfig context (flag/env plumbing only — clusterctl is a client, not a controller, so this track has no dependency on P1–P4) | G3 |
-| P6 | partly — the exports, their endpoint slices and the claim list between them are built and maintained (`internal/capiexports`); the `WorkspaceType` tenants onboard with is not | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
-| P7 | not started | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
+| P6 | done — the exports, their endpoint slices and a claim list *derived from the providers an installation has* (`internal/capiexports`), plus the `Maintain`-lifecycle `WorkspaceType` tenants onboard with and the deployment behind it (`internal/capiworkspaces`, `cmd/workspace-manager`) ([design](site/content/en/docs/design/workspace-onboarding.md), [usage](site/content/en/docs/user/onboarding.md)) | APIExport/APIBinding manifests + permission-claim wiring per D3, plus the default single-partition `APIExportEndpointSlice` (D6's starting point — no `Partition`/`PartitionSet` needed until multi-shard). Per [ADR-0001](adr-0001-provider-api-permissions.md): includes the self-maintaining permission-claim-list controller and the `Maintain`-lifecycle `WorkspaceType` tenants use to onboard to CAPI. | D3 (Phase 0 only) |
+| P7 | done for a tenant workspace — the `cluster-api-admin` and `cluster-api-view` roles are written by the `WorkspaceType`'s initializer and kept covering whatever the tenant has enabled by a fleet-wide controller; nobody edits a role to onboard a provider ([design](site/content/en/docs/design/workspace-onboarding.md)). What is deliberately not done is identity provisioning *for the managers* — decision 2's single virtual-workspace identity is unchanged | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
 | P8 | done, on both backends — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently on the dev provider's in-memory backend and asserts isolation, both between the workspaces' objects and between the two tenants who own them; `test/integration/dockerbackend` reaches the same readiness on a real container runtime, Nodes included (#67, see below). Both run under `task verify`, the second as its own capability-gated step | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | partly — `internal/workspacetelemetry` attributes reconcile load to the workspace that caused it with a bounded exported series, and `cmd/core-manager` wires it; the other three binaries do not, and marker aggregation is untouched | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
-| P10 | in progress — user docs exist, plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
+| P10 | in progress — user docs exist, including [onboarding](site/content/en/docs/user/onboarding.md), plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
 P1–P3 were expected to be mechanically identical to Phase 1's core-provider
 port, and so the safest to parallelize — same recipe, different source

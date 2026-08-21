@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -39,6 +40,7 @@ import (
 	"github.com/kcp-dev/logicalcluster/v3"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/capiworkspaces"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
@@ -47,27 +49,11 @@ import (
 // demonstrates nothing about tenancy.
 var DefaultUsers = []string{"alice", "bob"}
 
-// Role names. One role per level, because the two levels grant genuinely
-// different things: a home is where a tenant sees their workspaces, and a
-// workspace is where they see their cluster.
-const (
-	HomeRoleName      = "demo-home-owner"
-	WorkspaceRoleName = "demo-workspace-owner"
-
-	// WorkspaceAccessRoleName is kcp's own ClusterRole for the right to be in
-	// a workspace at all. It is bound rather than reproduced: kcp bootstraps
-	// it into the local admin logical cluster and merges that cluster's roles
-	// when it resolves the check, so a binding in any workspace resolves it.
-	//
-	// The check it satisfies is kcp's rather than Kubernetes': before RBAC on
-	// the resource is consulted, the workspace content authorizer asks for the
-	// verb "access" on the non-resource URL "/". Writing that rule out here
-	// would work and would be a copy of kcp's policy, drifting silently the
-	// day kcp changes it. Binding the role by name is what kcp's own e2e
-	// framework does (AdmitWorkspaceAccess) and what its root workspace does
-	// for system:authenticated.
-	WorkspaceAccessRoleName = "system:kcp:workspace:access"
-)
+// HomeRoleName is what a user may do in their own home workspace. The roles
+// for the workspaces *inside* it are not named here: they are written by the
+// Cluster API WorkspaceType's initializer, and their names are
+// capiworkspaces.AdminRoleName and capiworkspaces.ViewRoleName.
+const HomeRoleName = "demo-home-owner"
 
 // The two owners in the access table that are not users.
 const (
@@ -208,6 +194,23 @@ func validateUsers(users []string) error {
 // this config is allowed or refused by exactly the RBAC that user has in that
 // workspace. That is what makes the denials the demo reports real ones rather
 // than a simulation, and it is why the printed kubectl commands say `--as`.
+//
+// # base must be privileged, and this is not a detail
+//
+// kcp *scopes* an impersonated user to the logical cluster the request
+// addresses, unless the impersonator is in `system:masters`
+// (pkg/server/filters/impersonation.go). A scoped user is refused everywhere
+// else, whatever RBAC says: the authorizer reports "NoOpinion" for the local
+// policy of any other workspace, because the scope excludes it.
+//
+// That makes an impersonated tenant *less* able than the real tenant they
+// stand in for, and it breaks exactly the thing worth demonstrating - enabling
+// a provider, which kcp authorizes as the verb "bind" on the APIExport, in the
+// workspace the export lives in rather than the tenant's own. Impersonated
+// from an ordinary admin, a tenant is refused with "no permission to bind to
+// export ...", and no RBAC anywhere will fix it.
+//
+// So the demo impersonates from the shard admin. See Options.ImpersonationConfig.
 func ConfigForUser(base *rest.Config, user, path string) *rest.Config {
 	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(path))
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: user}
@@ -242,121 +245,41 @@ func NewHomeRole() *rbacv1.ClusterRole {
 	}
 }
 
-// NewWorkspaceRole is what a user may do in each of their own workspaces: read
-// every Cluster API type bound there, and write exactly one of them, the
-// Cluster. Being in the workspace is WorkspaceAccessRoleName's grant, as in
-// the home.
+// GrantHomeOwner gives one user their two grants in the home workspace cl is
+// scoped to: the right to be in it, and the right to list the workspaces it
+// holds.
 //
-// # One writable type, because a demo cluster is a ClusterClass based cluster
-//
-// The Cluster names a class and a shape. The DevCluster, the
-// KubeadmControlPlane, the worker MachineDeployment and the templates each is
-// stamped from are created by the topology controller under the manager's
-// identity, never the tenant's, so a tenant who could write them would be
-// holding the grant the hand-built model needed against a demo that no longer
-// builds clusters that way. Scaling and version changes do not reopen it:
-// both are fields of spec.topology, which write on clusters already carries.
-//
-// The blueprint is the other half. The ClusterClass and the five templates it
-// refers to are seeded into the workspace by whoever runs the demo, the way a
-// platform operator seeds a tenant's - and are read-only once there, because
-// writing a class is deciding what a cluster in this installation is made of
-// rather than asking for one, and that answer is not a tenant's to give.
-//
-// Deleting a Machine to force a replacement is deliberately absent. It is a
-// real operation and a real temptation, but it is remediation, which is the
-// platform's job here; a tenant changes their cluster through spec.topology,
-// and a Machine deleted underneath the topology controller is a change it did
-// not make.
-//
-// # Why the shape of the rules
-//
-// The groups are named rather than granted as "*", for the reason the
-// permission claims are narrowed by verb: this is the place where what a
-// tenant may do is written down, so it should say it. Within them read is a
-// wildcard, so that an export publishing a new type does not silently fall
-// outside what an owner may watch, and write is one rule naming one resource,
-// because that is the whole claim and it should be readable as such.
-//
-// Secrets are readable because a cluster's admin kubeconfig is one, and are
-// not writable because a tenant never writes one - the control plane provider
-// does.
-func NewWorkspaceRole() *rbacv1.ClusterRole {
-	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: WorkspaceRoleName},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{
-					"cluster.x-k8s.io",
-					"bootstrap.cluster.x-k8s.io",
-					"controlplane.cluster.x-k8s.io",
-					"infrastructure.cluster.x-k8s.io",
-				},
-				Resources: []string{"*"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"cluster.x-k8s.io"},
-				Resources: []string{"clusters"},
-				Verbs:     []string{"create", "update", "patch", "delete"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"namespaces", "secrets", "configmaps", "events"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"apis.kcp.io"},
-				Resources: []string{"apibindings"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{"core.kcp.io"},
-				Resources: []string{"logicalclusters"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-		},
+// The home role is created here because nothing else creates it. The roles in
+// the workspaces *inside* a home are not: those are written by the Cluster API
+// WorkspaceType's initializer before the workspace is ready, and kept current
+// by the workspace manager. capiworkspaces.GrantRoles only says who holds
+// them.
+func GrantHomeOwner(ctx context.Context, cl client.Client, user string) error {
+	if err := createOrUpdateRole(ctx, cl, NewHomeRole()); err != nil {
+		return err
 	}
+	return capiworkspaces.GrantRoles(ctx, cl, user, HomeRoleName)
 }
 
-// NewOwnerBinding binds one of the roles above to one user in the workspace it
-// is created in.
-func NewOwnerBinding(role, user string) *rbacv1.ClusterRoleBinding {
-	return &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: role + ":" + user},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     role,
-		},
-		Subjects: []rbacv1.Subject{{
-			APIGroup: rbacv1.GroupName,
-			Kind:     rbacv1.UserKind,
-			Name:     user,
-		}},
-	}
-}
-
-// GrantOwner gives one user their two grants in the workspace cl is scoped to:
-// the right to be in it, and whatever role says they may do there. Idempotent,
-// like everything else the demo creates.
-//
-// Two bindings rather than one because they answer to different authorizers.
-// kcp's workspace content authorizer decides the first and refuses everything
-// before RBAC on the resource is reached; ordinary RBAC decides the second.
-// Granting only the second is the mistake that produces "access denied" on a
-// type the workspace plainly serves.
-func GrantOwner(ctx context.Context, cl client.Client, role *rbacv1.ClusterRole, user string) error {
-	access := NewOwnerBinding(WorkspaceAccessRoleName, user)
-	if err := create(ctx, cl, access); err != nil {
-		return fmt.Errorf("creating ClusterRoleBinding %s: %w", access.Name, err)
-	}
-	if err := create(ctx, cl, role); err != nil {
+func createOrUpdateRole(ctx context.Context, cl client.Client, role *rbacv1.ClusterRole) error {
+	err := cl.Create(ctx, role.DeepCopy())
+	switch {
+	case err == nil:
+		return nil
+	case !apierrors.IsAlreadyExists(err):
 		return fmt.Errorf("creating ClusterRole %s: %w", role.Name, err)
 	}
-	binding := NewOwnerBinding(role.Name, user)
-	if err := create(ctx, cl, binding); err != nil {
-		return fmt.Errorf("creating ClusterRoleBinding %s: %w", binding.Name, err)
+
+	got := &rbacv1.ClusterRole{}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(role), got); err != nil {
+		return fmt.Errorf("reading ClusterRole %s: %w", role.Name, err)
+	}
+	if reflect.DeepEqual(got.Rules, role.Rules) {
+		return nil
+	}
+	got.Rules = role.Rules
+	if err := cl.Update(ctx, got); err != nil {
+		return fmt.Errorf("updating ClusterRole %s: %w", role.Name, err)
 	}
 	return nil
 }

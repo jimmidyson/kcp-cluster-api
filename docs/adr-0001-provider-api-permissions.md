@@ -8,7 +8,11 @@
 > recorded here stand; only their locations moved. See
 > [`docs/site/content/en/docs/design/fork-architecture.md`](site/content/en/docs/design/fork-architecture.md).
 
-Status: **accepted**, verb scope now audited across all six core
+Status: **accepted and implemented**. Decision 1's mechanism (the
+self-maintaining claim list) and decision 3's (the `Maintain`-lifecycle
+`WorkspaceType`) both ship — see open questions 3 and 6 below, and
+[Workspace onboarding](site/content/en/docs/design/workspace-onboarding.md).
+Verb scope audited across all six core
 reconciler packages that touch provider-owned objects — `cluster`,
 `machine`, `machineset`, `machinedeployment`, `machinepool`, and
 `topology/cluster` (ClusterClass) — plus the automatic-claim-acceptance
@@ -307,10 +311,23 @@ rather than a true wildcard.
 2. **Confirm MachinePool's `patch`/`delete` behavior** against
    `machinepool_controller_phases.go` specifically (the audit confirmed
    `get`/`watch` but not the mutating verbs for this controller).
-3. **Design the provider-discovery convention** the claim-maintaining
-   controller uses to recognize a provider `APIExport` (label, annotation,
-   or something else) — not blocking this ADR, but needed before the
-   "Revised mechanism" is buildable.
+3. ~~Design the provider-discovery convention~~ — **done**. The convention is
+   the label `cluster.x-k8s.io/provider-contract`, whose value is one of
+   `core`, `bootstrap`, `control-plane` or `infrastructure`. An export
+   carrying it is a provider; an export whose value is outside that set is
+   ignored rather than guessed at. A label rather than an annotation because
+   it is a selector — the claim controller lists provider exports by it — and
+   in the `cluster.x-k8s.io` domain because it is a statement about Cluster
+   API rather than about kcp or this repository.
+
+   Implemented in `internal/capiexports` (`ContractLabel`, `Discover`,
+   `ReconcileClaims`) and run by `cmd/workspace-manager`. The split that fell
+   out of building it is worth recording: what a provider does with *core's
+   own* types stays declared, because a provider is written against `Cluster`
+   and `Machine` by name; what core does with *whatever answers a reference*
+   is discovered, because `spec.infrastructureRef` resolves at run time
+   against a type this repository may never have heard of. Only the verb set
+   is declared there.
 4. ~~Confirm claim-acceptance propagation timing~~ — **mechanism confirmed**
    against `kcp-dev/kcp` source (see "Automatic claim acceptance" above):
    propagation is informer-event-driven, not poll-based. Still worth an
@@ -324,10 +341,22 @@ rather than a true wildcard.
    `kcp-dev/kcp`'s default branch, so pin the exact server version
    alongside D1 and re-check this reconciler's behavior hasn't changed if
    D1 lands on a materially different version.
-6. **Ship the `Maintain`-mode `WorkspaceType`** tenants use to onboard to
-   CAPI (see "Requirements this imposes on implementation" above) — this
-   is new, concrete manifest work that should be folded into P6
-   (APIExport/APIBinding manifests) in `conversion-plan.md`, and its
-   existence/behavior documented in P10 (user docs), including the
-   opt-out trade-off (hand-created `APIBinding`s don't get automatic
-   propagation).
+6. ~~Ship the `Maintain`-mode `WorkspaceType`~~ — **done**, as
+   `internal/capiworkspaces`. It is `cluster-api`, it binds core's export with
+   `defaultAPIBindingLifecycle: Maintain`, and it carries an initializer so a
+   workspace is held out of `Ready` until the roles saying who may use those
+   types exist. The opt-out is documented in
+   [Onboarding a workspace](site/content/en/docs/user/onboarding.md) and is
+   exercised rather than only described: `demo.OnboardingManual` is the
+   hand-bound path, and `test/integration/teardown` uses it because a
+   workspace being taken apart is exactly the case where nothing should put a
+   binding back.
+
+   Three things had to be true that this ADR did not anticipate, all recorded
+   in [Workspace onboarding](site/content/en/docs/design/workspace-onboarding.md):
+   the onboarding export has to be bound **before** core, because kcp labels an
+   object with the claims its workspace had accepted when the object was
+   written; `initializerPermissions` has to grant the discovery non-resource
+   URLs, or every request fails before RBAC is consulted; and a claim on a
+   provider the workspace has not bound races the workspace becoming `Ready`,
+   which needs `capiworkspaces.NudgeUnappliedClaims` on kcp v0.32.3.

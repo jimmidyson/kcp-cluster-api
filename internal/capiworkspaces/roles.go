@@ -111,10 +111,39 @@ const (
 // fixed by a role of the tenant's own, not by a silent widening here.
 const ClusterAPIGroup = "cluster.x-k8s.io"
 
+// WritableResource is the one Cluster API type a tenant writes, and the group
+// it lives in.
+//
+// # Why exactly one
+//
+// A cluster here is a ClusterClass based cluster. The Cluster names a class and
+// a shape; the infrastructure cluster, the control plane, the worker
+// MachineDeployment and the templates each is stamped from are created by the
+// topology controller under the *manager's* identity, never the tenant's. A
+// tenant who could write them would be holding the grant the hand-built model
+// needed against a system that no longer builds clusters that way. Scaling and
+// version changes do not reopen it: both are fields of spec.topology, which
+// write on clusters already carries.
+//
+// The ClusterClass is the other half, and is deliberately read-only. Writing a
+// class decides what a cluster in this installation is made of, which is the
+// platform's answer rather than a tenant's - and because a tenant cannot
+// create one either, the only class spec.topology.classRef can name is one
+// they were given.
+//
+// Deleting a Machine to force a replacement is deliberately absent too. It is
+// a real operation and a real temptation, but it is remediation, and a Machine
+// deleted underneath the topology controller is a change it did not make.
+const (
+	WritableGroup    = ClusterAPIGroup
+	WritableResource = "clusters"
+)
+
 // Verb sets, named for what they let a subject do.
 var (
-	read = []string{"get", "list", "watch"}
-	use  = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+	read  = []string{"get", "list", "watch"}
+	write = []string{"create", "update", "patch", "delete"}
+	use   = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
 )
 
 // APIGroups returns the Cluster API groups the given APIBindings serve,
@@ -205,20 +234,25 @@ func Roles(bindings []apisv1alpha2.APIBinding) []*rbacv1.ClusterRole {
 		},
 	}
 
-	// The derived rule, and the only one that moves. Prepended rather than
+	// The derived rules, and the only ones that move. Prepended rather than
 	// appended so that the thing a reader of `kubectl describe clusterrole`
 	// came for is the first line.
+	//
+	// Read is a wildcard over the discovered groups, so that a provider
+	// publishing a new type does not silently fall outside what an owner may
+	// watch. Write is one rule naming one resource, because that is the whole
+	// of what a tenant writes and it should be readable as such - see
+	// WritableResource.
 	//
 	// Omitted entirely when nothing is bound: a rule naming no API group is
 	// not a narrower grant, it is a malformed one, and an empty workspace
 	// should carry a role that grants nothing rather than one that grants
 	// everything.
 	if len(groups) > 0 {
-		admin.Rules = append([]rbacv1.PolicyRule{{
-			APIGroups: groups,
-			Resources: []string{"*"},
-			Verbs:     use,
-		}}, admin.Rules...)
+		admin.Rules = append([]rbacv1.PolicyRule{
+			{APIGroups: groups, Resources: []string{"*"}, Verbs: read},
+			{APIGroups: []string{WritableGroup}, Resources: []string{WritableResource}, Verbs: write},
+		}, admin.Rules...)
 		view.Rules = append([]rbacv1.PolicyRule{{
 			APIGroups: groups,
 			Resources: []string{"*"},

@@ -89,13 +89,20 @@ except that it is cheap enough to have thousands of, and they are arranged in a
 tree. `root` is the top; `root:capi-demo:alice:capi-demo-1` is four levels down:
 
 ```
-root                     the four APIExports live here
-└── capi-demo            the org workspace
-    ├── alice            alice's home
-    │   └── capi-demo-1  alice's workspace: her Cluster
+root                     the APIExports and the cluster-api WorkspaceType live here
+└── capi-demo            the org workspace          universal
+    ├── alice            alice's home               universal
+    │   └── capi-demo-1  alice's workspace          cluster-api
     └── bob
-        └── capi-demo-1  bob's, with the same name
+        └── capi-demo-1  bob's, with the same name  cluster-api
 ```
+
+The type in the right-hand column is not decoration. The two workspaces that
+hold clusters are created with the **`cluster-api`** `WorkspaceType`, and that
+is the whole of how they came to serve Cluster API — see
+[section 6](#6-apibinding-a-workspace-opting-in). The ones above them are
+kcp's ordinary `universal` type, because they hold no Cluster API objects and
+need none of it.
 
 Walk it a level at a time — a `Workspace` object lives in its **parent**
 workspace, so a list returns that parent's direct children and nothing deeper:
@@ -110,8 +117,8 @@ NAME    TYPE        REGION   PHASE   URL
 alice   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice
 bob     universal            Ready   https://localhost:33799/clusters/root:capi-demo:bob
 
-NAME          TYPE        REGION   PHASE   URL
-capi-demo-1   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
+NAME          TYPE          REGION   PHASE   URL
+capi-demo-1   cluster-api            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
 ```
 
 Who may run each of those is [section 9](#9-two-users-and-what-neither-can-see),
@@ -341,15 +348,132 @@ kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 g
 
 ```
 NAME                               AGE   READY
-cluster-api-bootstrap-kubeadm      80s   True
-cluster-api-controlplane-kubeadm   80s   True
-cluster-api-core                   87s   True
-cluster-api-dev-infrastructure     81s   True
+cluster-api-bootstrap-kubeadm      71s   True
+cluster-api-controlplane-kubeadm   71s   True
+cluster-api-core-3m4h3             83s   True
+cluster-api-dev-infrastructure     72s   True
+cluster-api-workspace-55amf        83s   True
+tenancy.kcp.io-1gkz7               83s   True
+topology.kcp.io-8ed5z              83s   True
 ```
 
 `READY True` means the schemas are served *in this workspace* and the claims
 were accepted. That is what makes the next command work at all — before the
-binding, `kubectl get clusters` here would have said the type does not exist:
+binding, `kubectl get clusters` here would have said the type does not exist.
+
+Two things in that list are worth stopping on.
+
+**The names differ, and the difference says who made them.** The two with a
+random suffix — `cluster-api-core-3m4h3` and `cluster-api-workspace-55amf` —
+were created by **kcp**, not by anybody running `kubectl`. They come from the
+`cluster-api` `WorkspaceType` this workspace was created with:
+
+```sh
+kubectl --context base --server $KCP/clusters/root get workspacetype cluster-api \
+  -o jsonpath='{.spec.defaultAPIBindings}{"\n"}'
+```
+
+```
+[{"export":"cluster-api-workspace","path":"root"},{"export":"cluster-api-core","path":"root"}]
+```
+
+That is what "creating the workspace is the whole of onboarding" means: nobody
+wrote an `APIBinding` to get `Cluster` and `Machine` served here. The type also
+carries `defaultAPIBindingLifecycle: Maintain`, which is the subject of the
+next paragraph, and an initializer, which is [section 9](#9-two-users-and-what-neither-can-see)'s.
+
+**The three without a suffix were created by Alice**, by name, after the
+workspace existed:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get apibinding cluster-api-dev-infrastructure \
+  -o jsonpath='{.spec.reference.export}{"\n"}'
+```
+
+```
+{"name":"cluster-api-dev-infrastructure","path":"root"}
+```
+
+Which infrastructure, bootstrap and control plane provider a workspace uses is
+the tenant's decision, so the `WorkspaceType` does not make it for them.
+Enabling one is creating that object and nothing else.
+
+### She is allowed to, and only just
+
+Try it as Alice against an export nobody granted her — this project's own
+onboarding export, which is not a provider:
+
+```sh
+kubectl --context shard-base --as alice \
+  --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 create -f - <<'YAML'
+apiVersion: apis.kcp.io/v1alpha2
+kind: APIBinding
+metadata:
+  name: not-granted
+spec:
+  reference:
+    export:
+      path: root
+      name: cluster-api-workspace
+YAML
+```
+
+```
+Error from server (Forbidden): error when creating "STDIN": apibindings.apis.kcp.io
+"not-granted" is forbidden: unable to create APIBinding: no permission to bind to
+export root:cluster-api-workspace
+```
+
+Alice can create an `APIBinding` in her own workspace — `cluster-api-admin`
+grants her that. What she cannot do is bind *that* export, and the permission
+deciding it does not live in her workspace at all:
+
+```sh
+kubectl --context base --server $KCP/clusters/root \
+  get clusterrole cluster-api-provider-binder \
+  -o jsonpath='{.rules[0].verbs}{" on "}{.rules[0].resources}{" named "}{.rules[0].resourceNames}{"\n"}'
+```
+
+```
+["bind"] on ["apiexports"] named ["cluster-api-dev-infrastructure","cluster-api-bootstrap-kubeadm","cluster-api-controlplane-kubeadm"]
+```
+
+kcp authorises creating an `APIBinding` as the verb **`bind` on the
+`APIExport`**, evaluated in the workspace the *export* lives in — `root` — not
+where the binding is being created. So enabling a provider takes two grants in
+two places: an operator says which providers you may turn on, and you decide
+which of them you use. Granting `bind` in your own workspace does nothing at
+all, which is a confusing thing to debug the first time.
+
+(`--context shard-base` rather than `--context base` there, and it matters. kcp
+*scopes* an impersonated user to the workspace the request addresses unless the
+impersonator is privileged, and a scoped user is refused everywhere else
+whatever RBAC says — including in `root`, where the `bind` check happens. From
+`--context base` this same command fails with the same message for a reason
+that has nothing to do with Alice's permissions. A real tenant authenticates as
+themselves and is never scoped; this is an artefact of standing in for one.)
+
+### The claims keep themselves current
+
+Look at what Alice's core binding accepted:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get apibinding cluster-api-core-3m4h3 \
+  -o jsonpath='{range .spec.permissionClaims[*]}{.resource}{" "}{end}{"\n"}'
+```
+
+```
+configmaps secrets kubeadmconfigs kubeadmconfigtemplates kubeadmcontrolplanes kubeadmcontrolplanetemplates devclusters devclustertemplates devmachines devmachinetemplates
+```
+
+Alice accepted none of those. `Maintain` means kcp rebuilds that list from
+core's `APIExport` whenever the export changes, and the export's own list is
+maintained by a controller watching for providers — so installing a provider
+makes its types reachable by core's controllers in every existing workspace,
+with nobody accepting anything. [Onboarding a workspace](onboarding.md)
+covers what that costs you, including the two things it takes away.
 
 ```sh
 kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
@@ -550,8 +674,8 @@ kubectl --context base --as alice \
 ```
 
 ```
-NAME          TYPE        REGION   PHASE   URL
-capi-demo-1   universal            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
+NAME          TYPE          REGION   PHASE   URL
+capi-demo-1   cluster-api            Ready   https://localhost:33799/clusters/root:capi-demo:alice:capi-demo-1
 ```
 
 ```sh
@@ -572,8 +696,9 @@ other's.
 
 ### Where that comes from
 
-Two `ClusterRoleBinding`s per user per workspace, made by the demo when it
-creates the tree, and nothing else. Look at them:
+Two `ClusterRoleBinding`s per user per workspace. In a home workspace the demo
+makes both; in a workspace that holds clusters it makes only the bindings, and
+the roles they name were written for it. Start with the home:
 
 ```sh
 kubectl --context base --server $KCP/clusters/root:capi-demo:alice \
@@ -588,21 +713,74 @@ system:kcp:workspace:access:alice   system:kcp:workspace:access   alice
 ```
 
 The **first** is ordinary Kubernetes RBAC — a role the demo defines, granting
-`get`/`list`/`watch` on `tenancy.kcp.io` `workspaces`. In each workspace Alice
-owns it is `demo-workspace-owner` instead: read across the four Cluster API
-groups, write on `clusters` alone, and read access to Secrets, because a
-cluster's admin kubeconfig is one.
+`get`/`list`/`watch` on `tenancy.kcp.io` `workspaces`.
+
+In each workspace Alice *owns* it is a different role, and one the demo did not
+write:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get clusterrolebindings -o custom-columns='NAME:.metadata.name,ROLE:.roleRef.name,SUBJECT:.subjects[*].name' \
+  | grep -E 'NAME|alice'
+```
+
+```
+NAME                                ROLE                          SUBJECT
+cluster-api-admin:alice             cluster-api-admin             alice
+system:kcp:workspace:access:alice   system:kcp:workspace:access   alice
+```
+
+`cluster-api-admin` was written by the `cluster-api` `WorkspaceType`'s
+initializer, before kcp let the workspace become `Ready` — so a workspace you
+can enter is one that already grants somebody the use of what it serves. The
+demo only decided who holds it.
+
+Its first rule is the one that moves:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get clusterrole cluster-api-admin -o jsonpath='{.rules[0].apiGroups}{"\n"}'
+```
+
+```
+["bootstrap.cluster.x-k8s.io","cluster.x-k8s.io","controlplane.cluster.x-k8s.io","infrastructure.cluster.x-k8s.io"]
+```
+
+Nobody wrote that list either. It is derived from the `APIBinding`s this
+workspace holds — the ones from [section 6](#6-apibinding-a-workspace-opting-in)
+— and a controller rewrote the role when Alice's provider bindings appeared.
+Had she enabled only the infrastructure provider, the list would be two groups
+long. There is a `cluster-api-view` alongside it with the same groups and only
+`get`/`list`/`watch`, for somebody who should see the clusters without being
+able to read a kubeconfig `Secret`.
+
+That first rule is **read only**, across every type those groups publish. What
+Alice may *write* is one rule and one resource:
+
+```sh
+kubectl --context base --server $KCP/clusters/root:capi-demo:alice:capi-demo-1 \
+  get clusterrole cluster-api-admin \
+  -o jsonpath='{range .rules[?(@.verbs[0]=="create")]}{.apiGroups}{.resources}{"\n"}{end}'
+```
+
+```
+["cluster.x-k8s.io"]["clusters"]
+```
 
 Write on one type is all a ClusterClass based cluster needs. Alice's `Cluster`
 names a class and a shape, and everything under it — the `DevCluster`, the
 `KubeadmControlPlane`, the worker `MachineDeployment` — is created by the
-topology controller, not by her. Scaling and version bumps are edits to
-`spec.topology`, so they are edits to the `Cluster`. The `ClusterClass` and its
-templates were seeded into her workspace by the demo and she can read but not
-change them: choosing what a cluster here is made of is the platform's answer,
-not a tenant's.
+topology controller under the *manager's* identity, not hers. Scaling and
+version bumps are edits to `spec.topology`, so they are edits to the `Cluster`.
+The `ClusterClass` and its templates were seeded into her workspace by the demo
+and she can read but not change them: choosing what a cluster here is made of
+is the platform's answer, not a tenant's.
 
-The **second** is kcp's. Before RBAC on the resource is consulted at all,
+The one thing she may write that is not a `Cluster` is an `APIBinding` —
+[section 6](#6-apibinding-a-workspace-opting-in)'s subject. Enabling a provider
+is a tenant's decision, so the role carries it.
+
+The **second** binding is kcp's. Before RBAC on the resource is consulted at all,
 kcp's workspace content authorizer asks whether you may be in the workspace —
 the verb `access` on the **non-resource URL** `/`, which is what
 `system:kcp:workspace:access` grants. That role is kcp's own, bootstrapped into
@@ -700,8 +878,10 @@ you to start `core-manager` and friends the way you would run them for real. See
 
 ## Where to go from here
 
+- [Onboarding a workspace](onboarding.md) — getting one of your own, and turning on the providers you want
 - [Usage](usage.md) — what differs day to day from upstream Cluster API, and what does not
 - [Installation](installation.md) — running the managers against a kcp instance you already have
-- [One APIExport per provider](../design/provider-exports.md) — why four exports and how the claims are derived
+- [One APIExport per provider](../design/provider-exports.md) — why one export per provider and how the claims are derived
+- [Workspace onboarding](../design/workspace-onboarding.md) — the WorkspaceType, the roles it writes, and the controllers that keep them right
 - [The demo](../design/demo.md) — what the demo is for, and what it deliberately does not do
 - [Workspace resource usage](../design/workspace-resource-usage.md) — what a workspace costs, measured
