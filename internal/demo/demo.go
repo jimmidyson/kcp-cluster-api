@@ -180,6 +180,17 @@ type Options struct {
 	// DefaultKubernetesVersion.
 	KubernetesVersion string
 
+	// NutanixExport publishes the Nutanix infrastructure provider's APIExport
+	// alongside the others, so a workspace can bind its types.
+	//
+	// Off by default, for the reason the bootstrap and control plane exports
+	// are conditional: nothing in this repository reconciles the Nutanix
+	// types, so publishing them by default would bind types nothing uses into
+	// every workspace and move the per-workspace cost this project measures.
+	// It is a flag rather than an always-on because the export is real and
+	// worth being able to see, not because anything here can act on it.
+	NutanixExport bool
+
 	// Backend selects the DevCluster backend. Empty means BackendInMemory,
 	// the only one that needs neither a container runtime nor image pulls.
 	Backend Backend
@@ -263,13 +274,39 @@ func (o *Options) applyDefaults() {
 // class always names a KubeadmControlPlaneTemplate, and Blueprint creates one
 // unconditionally, so the types are always used and the condition had become a
 // way to publish a blueprint whose kinds nobody had bound.
+//
+// The Nutanix export is the exception, and is the case that condition was
+// wrongly generalising from: nothing here reconciles its types, so publishing
+// it by default would bind schemas into every workspace that no controller
+// acts on. It is asked for rather than assumed.
 func (o Options) providers() []capiexports.Provider {
-	return []capiexports.Provider{
+	providers := []capiexports.Provider{
 		capiexports.Core(),
 		capiexports.Infrastructure(),
 		capiexports.Bootstrap(),
 		capiexports.ControlPlane(),
 	}
+	if o.NutanixExport {
+		providers = append(providers, capiexports.NutanixInfrastructure())
+	}
+	return providers
+}
+
+// reconciled is the subset of providers this process runs controllers for.
+//
+// Every export the demo publishes has a manager except the Nutanix one, which
+// is published so its types can be bound and has nothing here to reconcile it.
+// Giving it a manager anyway would engage every workspace to watch nothing,
+// which is both a cost and a thing that reads as a wiring bug later.
+func reconciled(providers []capiexports.Provider) []capiexports.Provider {
+	out := make([]capiexports.Provider, 0, len(providers))
+	for _, p := range providers {
+		if p.Export == capiexports.NutanixInfraExport {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func (o Options) validate() error {
@@ -557,7 +594,15 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	var manager mcmanager.Manager
 	var byExport map[string]mcmanager.Manager
 	if opts.RunManager {
-		managers, err := startManagers(ctx, opts, providers, parentCfg, parentClient, scheme, log)
+		// One subset, derived once. Published and reconciled differ — an
+		// export can be published with nothing here to reconcile it — and
+		// deriving that twice is how the two come apart: startManagers built
+		// its map from the reconciled set while the wait loop below iterated
+		// the published one, so the export with no manager was waited on and
+		// WaitForManager was handed a nil.
+		running := reconciled(providers)
+
+		managers, err := startManagers(ctx, opts, running, parentCfg, parentClient, scheme, log)
 		if err != nil {
 			return Result{}, err
 		}
@@ -570,7 +615,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		// and never replayed. Waiting on one of them would leave the others
 		// racing the first object.
 		for _, ws := range workspaces {
-			for _, provider := range providers {
+			for _, provider := range running {
 				if _, err := coremanager.WaitForManager(ctx, managers[provider.Export],
 					multicluster.ClusterName(ws.LogicalCluster), time.Second, 2*time.Minute); err != nil {
 					return Result{}, fmt.Errorf("workspace %s was never engaged by %s: %w", ws.Path, provider.Export, err)

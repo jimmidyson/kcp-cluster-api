@@ -31,6 +31,11 @@ import (
 const (
 	ModuleClusterAPI     = "sigs.k8s.io/cluster-api"
 	ModuleClusterAPITest = "sigs.k8s.io/cluster-api/test"
+
+	// ModuleCAPX is the Nutanix infrastructure provider. It is a separate
+	// upstream repository rather than part of the Cluster API tree, and it is
+	// one Go module rather than three — see ADR-0004.
+	ModuleCAPX = "github.com/nutanix-cloud-native/cluster-api-provider-nutanix"
 )
 
 var (

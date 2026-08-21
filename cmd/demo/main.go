@@ -54,6 +54,7 @@ type options struct {
 	clusters        int
 	machines        int
 	workers         int
+	nutanixExport   bool
 	backend         demo.Backend
 	parent          string
 	workspacePrefix string
@@ -79,6 +80,7 @@ func main() {
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
 		workers         = flag.Int("worker-machines", demo.DefaultWorkerMachines, "Worker machines per cluster, as a MachineDeployment. Needs --control-plane-machines: a worker has no control plane to join otherwise.")
 		machines        = flag.Int("control-plane-machines", demo.DefaultControlPlaneMachines, "Control plane replicas per cluster, at least one. The ClusterClass every demo cluster is built from always names a control plane, so a run asking for none asks for a blueprint it cannot satisfy.")
+		nutanixExport   = flag.Bool("nutanix-export", false, "Also publish the Nutanix infrastructure provider's APIExport, so its types can be bound in each workspace. Nothing here reconciles them - this makes the export visible, not the provider live.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
 		workspacePrefix = flag.String("workspace-prefix", demo.DefaultWorkspacePrefix, "Prefix for the created workspace names.")
@@ -108,6 +110,7 @@ func main() {
 		clusters:        *clusters,
 		machines:        *machines,
 		workers:         *workers,
+		nutanixExport:   *nutanixExport,
 		backend:         demo.Backend(*backend),
 		parent:          *parent,
 		workspacePrefix: *workspacePrefix,
@@ -179,6 +182,7 @@ func run(ctx context.Context, opts options) error {
 		ControlPlaneMachines: opts.machines,
 		WorkerMachines:       opts.workers,
 		Backend:              opts.backend,
+		NutanixExport:        opts.nutanixExport,
 		RunManager:           opts.runManager,
 		Timeout:              opts.timeout,
 		PollInterval:         opts.pollInterval,

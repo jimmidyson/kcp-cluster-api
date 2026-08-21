@@ -187,12 +187,13 @@ list.
 | `--workspaces` | 2 | How many workspaces to create, bind and provision in, shared out between the users |
 | `--users` | `alice,bob` | Tenants to share the workspaces out between, one home workspace each. `""` means none: every workspace goes directly under `--parent` and only admin credentials touch it |
 | `--clusters` | 1 | Clusters per workspace |
-| `--control-plane-machines` | 1 | Control plane machines per cluster, as a `KubeadmControlPlane`. Zero stops the run at provisioned infrastructure |
-| `--worker-machines` | 1 | Worker machines per cluster, as a `MachineDeployment`. Needs `--control-plane-machines`: a worker has no control plane to join otherwise |
+| `--control-plane-machines` | 1 | Control plane machines per cluster, as a `KubeadmControlPlane`. At least one: the `ClusterClass` every demo cluster is built from always names a control plane |
+| `--worker-machines` | 1 | Worker machines per cluster, as a `MachineDeployment` |
 | `--backend` | `inmemory` | `inmemory` needs nothing; `docker` provisions real containers and pulls `kindest` images |
 | `--wait` | false | Stay up after every cluster is ready |
 | `--kcp-kubeconfig` | — | Run against a kcp server you already have, instead of starting one |
 | `--no-manager` | false | Create the workspaces and objects only, against a `core-manager` you started yourself |
+| `--nutanix-export` | false | Also publish and bind the Nutanix infrastructure provider's `APIExport`. See [The Nutanix provider](#the-nutanix-provider) |
 | `--timeout` | 5m | How long to wait for every cluster to be ready |
 
 Ten workspaces is as easy as two, and is the more interesting run:
@@ -248,6 +249,59 @@ task demo DEMO_FLAGS="--control-plane-machines 0"
 That stops at provisioned infrastructure rather than at ready, because a
 `Cluster` with no control plane has no readiness to reach: its `Available`
 condition summarises a remote connection and a control plane it does not have.
+
+## The Nutanix provider
+
+```sh
+task demo DEMO_FLAGS="--nutanix-export"
+```
+
+Adds a fifth `APIExport`, `cluster-api-nutanix-infrastructure`, and binds it
+into every workspace alongside the other four. `kubectl get nutanixclusters`
+then works in a workspace, and a `Cluster` can name a `NutanixCluster` as its
+infrastructure.
+
+**Nothing in the demo reconciles them.** The demo runs managers for the four
+providers it starts; the Nutanix one is a separate binary, and running it needs
+a Prism Central. So with this flag a `NutanixCluster` you create is stored and
+left alone — the types are there, the controller is not.
+
+To actually reconcile them, run the manager yourself against the same kcp:
+
+```sh
+cd providers/nutanix-infrastructure
+go run ./cmd/nutanix-infrastructure-manager \
+  --kubeconfig .demo/kcp/admin.kubeconfig \
+  --endpoint-slice-name cluster-api-nutanix-infrastructure
+```
+
+It is a separate Go module because the Nutanix SDK is large and belongs in its
+own dependency graph — see
+[The Nutanix infrastructure provider](../../design/nutanix-provider/) for what
+that costs and why.
+
+### Credentials are per cluster
+
+Every `NutanixCluster` must set `spec.prismCentral`, naming the Prism Central
+to use and a `Secret` holding the credentials for it:
+
+```yaml
+spec:
+  prismCentral:
+    address: pc.example.com
+    port: 9440
+    credentialRef:
+      kind: Secret
+      name: nutanix-creds
+```
+
+A `NutanixCluster` that names none is an error here, and that differs from
+CAPX running against an ordinary management cluster, where omitting it falls
+back to credentials mounted into the manager's own pod. That fallback cannot
+be offered to more than one tenant: it would let any workspace provision with
+the operator's Prism Central account by leaving a field out. The
+[design page](../../design/nutanix-provider/#credentials-are-per-cluster-or-absent)
+has the detail.
 
 ## Against your own kcp
 

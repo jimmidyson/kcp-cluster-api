@@ -6,6 +6,12 @@ set: [errexit, nounset, pipefail]
 
 vars:
   BIN: '{{.ROOT_DIR}}/bin'
+
+  # Provider modules are separate Go modules under providers/, one per Cluster
+  # API provider whose dependency graph does not belong in this one's. They are
+  # listed rather than globbed so that adding one is a deliberate edit here: a
+  # module nobody added is a module nothing builds.
+  PROVIDER_MODULES: providers/nutanix-infrastructure
   # Pinned. Tooling is installed at fixed versions with the Go toolchain only:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
@@ -46,16 +52,25 @@ tasks:
     desc: Compile all binaries
     cmds:
       - go build ./...
+      # Nested modules are not reached by ./... and so are not built, linted or
+      # tested by it. A provider module left out of these three is a module CI
+      # never compiles, which is how it stops compiling.
+      - for: {var: PROVIDER_MODULES}
+        cmd: cd {{.ITEM}} && go build ./...
 
   lint:
     desc: Static analysis
     cmds:
       - go vet ./...
+      - for: {var: PROVIDER_MODULES}
+        cmd: cd {{.ITEM}} && go vet ./...
 
   test:unit:
     desc: Unit tests
     cmds:
       - go test ./...
+      - for: {var: PROVIDER_MODULES}
+        cmd: cd {{.ITEM}} && go test ./...
 
   test:integration:
     desc: Integration tests against a real kcp server

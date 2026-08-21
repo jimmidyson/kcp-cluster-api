@@ -66,6 +66,7 @@ const (
 	BootstrapExport    = "cluster-api-bootstrap-kubeadm"
 	ControlPlaneExport = "cluster-api-controlplane-kubeadm"
 	InfraExport        = "cluster-api-dev-infrastructure"
+	NutanixInfraExport = "cluster-api-nutanix-infrastructure"
 )
 
 // Resource is a group and resource, with no version: an APIExport publishes
@@ -341,6 +342,47 @@ func Infrastructure() Provider {
 			// the union of its two Machine markers - it deletes a Machine
 			// whose backend has gone and patches the ones it provisions,
 			// and creates none.
+			CoreExport: {to(clusters, read), to(machines, adoptDelete)},
+		},
+	}
+}
+
+// NutanixInfrastructure publishes the Nutanix infrastructure provider's types.
+//
+// # Published, not yet reconciled
+//
+// This export makes the Nutanix types bindable in a workspace. Nothing in this
+// repository reconciles them yet: there is no Nutanix manager, because running
+// one needs a Prism Central that CI does not have. An export with no controller
+// is a real intermediate state rather than an oversight — a workspace can bind
+// the types and a cluster can name them, and what is missing is the thing that
+// would act on them.
+//
+// The claims are the dev provider's, for the same reasons: an infrastructure
+// provider reads the workload cluster's kubeconfig Secret and patches it, and
+// it watches Clusters while patching and adopting the Machines it provisions.
+// They are declared here rather than left empty so that the export a manager
+// eventually binds to is the one it needs, rather than one that has to change
+// underneath it.
+func NutanixInfrastructure() Provider {
+	return Provider{
+		Export: NutanixInfraExport,
+		Module: kcpfixtures.ModuleCAPX,
+		CRDs: []string{
+			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixclusters.yaml",
+			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixmachines.yaml",
+			// The templates are published for the same reason the dev
+			// provider's are: a ClusterClass names a NutanixClusterTemplate
+			// for the infrastructure cluster and a NutanixMachineTemplate per
+			// machine deployment class, and nothing reconciles either.
+			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixclustertemplates.yaml",
+			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixmachinetemplates.yaml",
+			// A NutanixCluster names failure domains, so the type has to be
+			// bindable wherever a NutanixCluster is.
+			"config/crd/bases/infrastructure.cluster.x-k8s.io_nutanixfailuredomains.yaml",
+		},
+		CoreClaims: []Resource{to(secrets, readPatch)},
+		ProviderClaims: map[string][]Resource{
 			CoreExport: {to(clusters, read), to(machines, adoptDelete)},
 		},
 	}
