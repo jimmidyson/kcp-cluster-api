@@ -30,8 +30,8 @@ import (
 	"text/template"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/tools/clientcmd"
@@ -83,16 +83,30 @@ const (
 
 	cniInstallTimeout = 10 * time.Minute
 	cniPollInterval   = 5 * time.Second
+
+	// cniFieldOwner is who server-side apply records as the owner of these
+	// objects. Named for the test rather than the CNI, because what it owns is
+	// this harness's copy of kind's manifest.
+	cniFieldOwner = "kcp-cluster-api-cni-install-test"
 )
 
-// installCNIWhileProvisioning applies a CNI to every workload cluster as it
-// comes up.
+// installCNIWhileProvisioning installs a CNI in every workload cluster as it
+// comes up, and does not call one installed until its pods are running.
 //
 // It polls rather than waits for a signal because there is no signal to wait
 // for: the kubeconfig Secret it needs is written by the control plane provider
 // partway through provisioning, and the container it reads the manifest from
 // exists a little before that. Errors are logged and retried rather than
 // returned, because a failure here is indistinguishable from being early.
+//
+// "Installed" means the DaemonSet has its pods ready, not that the manifest
+// applied. Those came apart in CI: an apply that reported success against an
+// API server still settling left one cluster's kindnet never running, and
+// because nothing looked past the apply the run reported the CNI installed and
+// then waited out the whole 20 minute readiness budget on a Node stuck at
+// "cni plugin not initialized". Whatever leaves the DaemonSet short now keeps
+// this loop retrying, and says which DaemonSet and how many pods short in
+// every line it logs.
 func installCNIWhileProvisioning(t *testing.T) func(context.Context, []demo.Workspace) {
 	t.Helper()
 	return func(ctx context.Context, workspaces []demo.Workspace) {
@@ -146,7 +160,11 @@ func installCNI(ctx context.Context, ws demo.Workspace) error {
 	if err != nil {
 		return err
 	}
-	return applyAll(ctx, workload, manifest)
+	daemonSets, err := applyAll(ctx, workload, manifest)
+	if err != nil {
+		return err
+	}
+	return waitForDaemonSets(ctx, workload, daemonSets)
 }
 
 // readCNIManifest reads the manifest out of one of the cluster's control plane
@@ -239,17 +257,28 @@ func workloadClient(ctx context.Context, ws demo.Workspace) (client.Client, erro
 	return client.New(cfg, client.Options{})
 }
 
-// applyAll creates every object in a multi-document manifest, treating one
-// that already exists as done.
-func applyAll(ctx context.Context, cl client.Client, manifest string) error {
+// applyAll applies every object in a multi-document manifest, and reports the
+// DaemonSets among them so the caller can wait for what it just asked for.
+//
+// Server-side apply rather than Create, because this runs against an API
+// server that has just come up and is still settling: a request can be
+// answered, refused, or cut off mid-flight, and the loop above simply tries
+// again. Create makes that retry a lie. It reports AlreadyExists for an object
+// the previous attempt got as far as writing and moves on, so a manifest that
+// applied in part is never completed and the next attempt calls it done. Apply
+// converges instead: every attempt states the whole desired object, whatever
+// the last one managed.
+func applyAll(ctx context.Context, cl client.Client, manifest string) ([]client.ObjectKey, error) {
+	var daemonSets []client.ObjectKey
+
 	docs := yaml.NewYAMLReader(bufio.NewReader(strings.NewReader(manifest)))
 	for {
 		doc, err := docs.Read()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return daemonSets, nil
 			}
-			return fmt.Errorf("reading the CNI manifest: %w", err)
+			return nil, fmt.Errorf("reading the CNI manifest: %w", err)
 		}
 		if len(bytes.TrimSpace(doc)) == 0 {
 			continue
@@ -257,13 +286,44 @@ func applyAll(ctx context.Context, cl client.Client, manifest string) error {
 
 		obj := &unstructured.Unstructured{}
 		if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(doc), 4096).Decode(obj); err != nil {
-			return fmt.Errorf("decoding a CNI object: %w", err)
+			return nil, fmt.Errorf("decoding a CNI object: %w", err)
 		}
 		if obj.GetKind() == "" {
 			continue
 		}
-		if err := cl.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		if err := cl.Patch(ctx, obj, client.Apply,
+			client.FieldOwner(cniFieldOwner), client.ForceOwnership); err != nil {
+			return nil, fmt.Errorf("applying %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		if obj.GetKind() == "DaemonSet" {
+			daemonSets = append(daemonSets, client.ObjectKeyFromObject(obj))
 		}
 	}
+}
+
+// waitForDaemonSets reports whether every DaemonSet the manifest carries has a
+// pod ready on every node it wants one on.
+//
+// This is the difference between the manifest having been accepted and the CNI
+// being installed. A DaemonSet whose pods never run leaves kubelet reporting
+// "cni plugin not initialized" for ever, and the object exists throughout, so
+// nothing about the apply says so.
+func waitForDaemonSets(ctx context.Context, cl client.Client, keys []client.ObjectKey) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("the CNI manifest carries no DaemonSet, so there is nothing to run")
+	}
+	for _, key := range keys {
+		ds := &appsv1.DaemonSet{}
+		if err := cl.Get(ctx, key, ds); err != nil {
+			return fmt.Errorf("reading DaemonSet %s: %w", key, err)
+		}
+		if ds.Status.DesiredNumberScheduled == 0 {
+			return fmt.Errorf("DaemonSet %s is not scheduled on any node yet", key)
+		}
+		if ds.Status.NumberReady < ds.Status.DesiredNumberScheduled {
+			return fmt.Errorf("DaemonSet %s has %d of %d pods ready",
+				key, ds.Status.NumberReady, ds.Status.DesiredNumberScheduled)
+		}
+	}
+	return nil
 }
