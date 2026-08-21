@@ -182,3 +182,33 @@ func TestEveryProviderClaimsSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryProvidersManifestsResolve is the check that catches a dependency
+// bump moving the CRDs out from under an export.
+//
+// ManifestPath deliberately does not search or fall back, because the layout is
+// not stable across releases — Cluster API's CRD bases moved between minor
+// versions once already. Without this test the failure surfaces at run time in
+// whatever was publishing the export, which is a long way from the go.mod line
+// that caused it.
+//
+// It covers the Nutanix provider as well as the wired ones. That export is
+// published from a module this repository imports no code from, so nothing else
+// would notice if `go mod tidy` dropped it: the manifest-dependency anchor in
+// internal/kcpfixtures is what keeps it in the build list, and this is what
+// proves the anchor is still doing its job.
+func TestEveryProvidersManifestsResolve(t *testing.T) {
+	providers := append(All(), NutanixInfrastructure())
+
+	for _, p := range providers {
+		t.Run(p.Export, func(t *testing.T) {
+			paths, err := p.manifestPaths()
+			if err != nil {
+				t.Fatalf("resolving manifests for %s: %v", p.Export, err)
+			}
+			if len(paths) != len(p.CRDs) {
+				t.Errorf("resolved %d manifests for %s, want %d", len(paths), p.Export, len(p.CRDs))
+			}
+		})
+	}
+}
