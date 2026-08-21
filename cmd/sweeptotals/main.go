@@ -50,7 +50,7 @@ const deploymentNameFact = "deploymentName"
 func main() {
 	dir := flag.String("reports", "bin", "Directory holding the sweep report JSON files.")
 	out := flag.String("out", "", "Where to write the totals report. Empty writes <reports>/sweep-report-total.md.")
-	require := flag.String("require", "core-manager,kubeadm-bootstrap-manager,kubeadm-control-plane-manager,dev-infrastructure-manager",
+	require := flag.String("require", "core-manager,kubeadm-bootstrap-manager,kubeadm-control-plane-manager,dev-infrastructure-manager,workspace-manager",
 		"Comma-separated deployments that must be present. A total missing one of them is not a total.")
 	flag.Parse()
 

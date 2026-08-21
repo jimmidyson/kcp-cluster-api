@@ -225,19 +225,52 @@ re-enqueueing the `APIBinding` when the bound CRD it was waiting for appears.
 
 ## Per-workspace cost
 
-**Not measured.** This adds a fifth deployment (`cmd/workspace-manager`) and a
-binding per workspace to the onboarding export, so the figures in
-[Workspace resource usage](workspace-resource-usage.md) — 2 goroutines per
-active workspace per deployment, 8 across the four providers — no longer add up
-to an installation's total. Re-running `task test:sweep` against a shape that
-includes this deployment is the work that would make a number quotable here,
-and until it is run there is no number.
+Measured, at twenty workspaces, by `test/integration/sweep`'s workspace shape —
+`bin/sweep-report-workspace.md` after a `task test:sweep`:
 
-What can be said without measuring, because it is structural: the initializer's
-fleet is only the workspaces that have not finished initializing, so it holds
-nothing per steady-state workspace; the maintainer engages every Cluster API
-workspace, so it costs whatever a deployment costs, which is the figure that
-has not been taken.
+| Per active workspace | `workspace-manager` | The four providers, added up |
+|---|--:|--:|
+| Goroutines | **7** | 8 |
+| Watch streams | **0** | 0 |
+| Discovery requests | **3** | 17 |
+| Reconcile requests | **5** | 103 |
+| Retained after departure | **1** | 0 |
+
+An installation of all five therefore pays 15 goroutines and 20 discovery
+requests per active workspace, and holds 32 streams on the shard at rest. The
+totals in [Workspace resource usage](workspace-resource-usage.md) add up to an
+installation's again.
+
+Two numbers are worth reading rather than quoting. **Five reconcile requests**
+is the smallest of any deployment, and it should be: what this one writes is
+two `ClusterRole`s that stop changing once a workspace's providers stop
+changing. **Seven goroutines** is the largest, and that is the wiring rather
+than the work — the role maintainer is built with `mcbuilder`, which engages a
+controller per cluster, where the providers put their watches on the shard's
+cache once through `capicontrollerutil.WildcardRegistry`. Five of the seven,
+and the one goroutine a departure retains, are that difference; moving the
+maintainer onto the registry is what would retire them, and it has not been
+done.
+
+The initializer is not in the figure and does not belong there: its fleet is
+only the workspaces that have not finished initializing, so it holds nothing
+per steady-state workspace. Neither is the permission-claim controller, which
+watches the one workspace the exports live in however many tenants there are.
+
+**A workspace leaves this deployment by being deleted, not by unbinding.** The
+onboarding `APIBinding` is written by the `WorkspaceType` with
+`defaultAPIBindingLifecycle: Maintain`, so kcp recreates one a tenant deletes.
+That is also the only departure this deployment *can* observe, and the reason
+is a kcp property worth knowing before designing against it: the apiexport
+virtual workspace skips the `APIBinding` check for wildcard requests, so a
+fleet-wide watch is filtered by the permission-claim label alone — and nothing
+ever removes that label, because `permissionclaimlabel`'s reconcile recomputes
+labels from the binding and returns early once the binding is gone. **No
+claimed object leaves a wildcard view when its binding is deleted** (kcp
+v0.32.3, observed). Deleting the workspace does delete its `LogicalCluster`,
+which is a real delete rather than a label going stale — which is why that is
+the object this deployment discovers workspaces by. See
+`providerwiring.WithLogicalClusterDiscovery`.
 
 ## Where the code is
 
