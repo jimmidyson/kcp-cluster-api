@@ -1,6 +1,9 @@
 ---
 title: kcp-cluster-api
 description: Workspace-aware Cluster API for KCP
+# This page only redirects, so a search hit on it would bounce the reader
+# straight back out again. Keep it out of the index.
+exclude_search: true
 ---
 
 <!--
