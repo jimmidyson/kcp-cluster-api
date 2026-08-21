@@ -16,6 +16,12 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # The release-please CLI, pinned to the version CI resolves:
+  # googleapis/release-please-action v5.0 — the pin in
+  # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
+  # Local and CI must run the same code, because two versions of this tool can
+  # reach two different answers about the next release from the same commits.
+  RELEASE_PLEASE_VERSION: 17.11.1
   GOOS_:
     sh: go env GOOS
   GOARCH_:
@@ -276,6 +282,52 @@ tasks:
           --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
           --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
+
+  release-please:
+    desc: Open the release pull request — run once from main to start a release
+    # Why this exists at all, when `.github/workflows/release-please.yaml` runs
+    # the same tool on every push to main: GitHub refuses the *creation* of a
+    # pull request by GITHUB_TOKEN unless "Allow GitHub Actions to create and
+    # approve pull requests" is enabled for the repository. Every run of that
+    # workflow does the entire job — parses the commits, writes the changelog,
+    # pushes `release-please--branches--main--*` — and then fails on the single
+    # API call it is not permitted to make.
+    #
+    # Updating a pull request that already exists is not creation, and is
+    # permitted. So one local run opens the pull request, and the workflow keeps
+    # its branch, title and changelog current for every commit that lands before
+    # it merges. Deciding to release is the human step; keeping the open release
+    # current is CI's.
+    #
+    # A maintainer's task, deliberately outside `verify` and `check`: it needs
+    # Node and a GitHub token, and the graded path may require neither
+    # (contracts/task-surface.md).
+    #
+    # Nothing here reads the working tree. release-please resolves the release
+    # entirely from the GitHub API against `--target-branch`, so an uncommitted
+    # change or a stale local main cannot affect what it opens. The branch guard
+    # below is about which branch you meant to release, not about local state.
+    preconditions:
+      - sh: '[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]'
+        msg: Release pull requests are opened from main. Check main out first.
+      - sh: command -v npx >/dev/null
+        msg: Needs Node for npx — https://nodejs.org. Nothing in `verify` needs it.
+      # `gh auth token` is only reached when GITHUB_TOKEN is unset, so gh is a
+      # convenience rather than a dependency. The token needs write access to
+      # contents and pull requests.
+      - sh: '[ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null'
+        msg: Needs a token — set GITHUB_TOKEN, or install gh and run `gh auth login`.
+    cmds:
+      # `task release-please -- --dry-run` reports what it would open without
+      # opening it.
+      - >-
+        npx --yes release-please@{{.RELEASE_PLEASE_VERSION}} release-pr
+        --repo-url "$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+        --target-branch "$(git rev-parse --abbrev-ref HEAD)"
+        --config-file release-please-config.json
+        --manifest-file .release-please-manifest.json
+        --token "${GITHUB_TOKEN:-$(gh auth token)}"
+        {{.CLI_ARGS}}
 
   docs:build:
     desc: Build the documentation site
