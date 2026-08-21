@@ -123,7 +123,55 @@ specs/            spec-driven feature specifications
 | `pr title` | pull requests, including edits | Enforces the Conventional Commits title format |
 | `drift` | daily, on demand, and on PRs touching the pin or the record | Runs `task drift` |
 | `docs` | pull requests touching `docs/site/`, pushes to `main` | Runs `task docs:build`; on `main` publishes the built site to [GitHub Pages](https://jimmidyson.github.io/kcp-cluster-api/) |
-| `release-please` | pushes to `main` | Opens release PRs and cuts tags from the squashed commit titles |
+| `release-please` | pushes to `main` | Keeps the open release pull request current, and cuts the tag when it merges |
+
+## Releases
+
+Versions and the changelog are derived from the Conventional Commits titles on
+`main` by [release-please](https://github.com/googleapis/release-please), which
+is why [the title format](AGENTS.md#pr-title-format) is enforced on every pull
+request.
+
+A release is started by hand and maintained by CI:
+
+```
+git checkout main
+task release-please           # opens the release pull request
+```
+
+Merging that pull request cuts the tag and publishes the release. Until it is
+merged, the `release-please` workflow rewrites its branch, title and changelog
+on every push to `main`, so it always describes everything landed so far —
+there is no window in which starting a release freezes what goes into it.
+
+### Where the history starts
+
+`main` carries 329 commits and only 38 of them are this project's: it is a fork
+of [kubernetes-sigs/cluster-api](https://github.com/kubernetes-sigs/cluster-api)
+and the other 291 are upstream's, which do not follow Conventional Commits and
+are not ours to release. With nothing to stop at, release-please walked back
+into them and pulled an upstream commit into the changelog as a feature of this
+project.
+
+So `release-please-config.json` pins `bootstrap-sha` to
+`281e4e3` — the last upstream commit, one before
+[`7b9ccb3`](https://github.com/jimmidyson/kcp-cluster-api/commit/7b9ccb30b1d6a9215cc06168162e409bd5347db0),
+where this project's own history begins. The named commit is excluded, so the
+38 that follow it are exactly what gets released. It applies only until the
+first release exists and is ignored afterwards; delete it once `v0.1.0` is
+tagged. The config is JSON and cannot hold a comment, which is why the
+reasoning is here.
+
+### Why CI cannot open the pull request
+
+The split above is not a preference. GitHub forbids `GITHUB_TOKEN` from
+*creating* a pull request unless "Allow GitHub Actions to create and approve
+pull requests" is enabled for the repository; updating one that already exists
+is allowed. So the workflow can do everything except the first step, and
+`task release-please` is that step.
+
+It runs from `main` and needs Node plus a GitHub token — set `GITHUB_TOKEN`, or
+authenticate `gh` and it will use that. Neither is required by `task verify`.
 
 ## Documentation
 

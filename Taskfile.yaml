@@ -16,6 +16,12 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # The release-please CLI, pinned to the version CI resolves:
+  # googleapis/release-please-action v5.0 — the pin in
+  # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
+  # Local and CI must run the same code, because two versions of this tool can
+  # reach two different answers about the next release from the same commits.
+  RELEASE_PLEASE_VERSION: 17.11.1
   GOOS_:
     sh: go env GOOS
   GOARCH_:
@@ -276,6 +282,128 @@ tasks:
           --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
           --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
+
+  release-please:
+    desc: Open the release pull request — run once from main to start a release
+    # Why this exists at all, when `.github/workflows/release-please.yaml` runs
+    # the same tool on every push to main: GitHub refuses the *creation* of a
+    # pull request by GITHUB_TOKEN unless "Allow GitHub Actions to create and
+    # approve pull requests" is enabled for the repository. Every run of that
+    # workflow does the entire job — parses the commits, writes the changelog,
+    # pushes `release-please--branches--main--*` — and then fails on the single
+    # API call it is not permitted to make.
+    #
+    # Updating a pull request that already exists is not creation, and is
+    # permitted. So one local run opens the pull request, and the workflow keeps
+    # its branch, title and changelog current for every commit that lands before
+    # it merges. Deciding to release is the human step; keeping the open release
+    # current is CI's.
+    #
+    # A maintainer's task, deliberately outside `verify` and `check`: it needs
+    # Node and a GitHub token, and the graded path may require neither
+    # (contracts/task-surface.md).
+    #
+    # Nothing here reads the working tree. release-please resolves the release
+    # entirely from the GitHub API against `--target-branch`, so an uncommitted
+    # change or a stale local main cannot affect what it opens. The branch guard
+    # below is about which branch you meant to release, not about local state.
+    preconditions:
+      - sh: '[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]'
+        msg: Release pull requests are opened from main. Check main out first.
+      - sh: command -v npx >/dev/null
+        msg: Needs Node for npx — https://nodejs.org. Nothing in `verify` needs it.
+      # `gh auth token` is only reached when GITHUB_TOKEN is unset, so gh is a
+      # convenience rather than a dependency. The token needs write access to
+      # contents and pull requests.
+      - sh: '[ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null'
+        msg: Needs a token — set GITHUB_TOKEN, or install gh and run `gh auth login`.
+    cmds:
+      # `task release-please -- --dry-run` reports what it would open without
+      # opening it.
+      - >-
+        npx --yes release-please@{{.RELEASE_PLEASE_VERSION}} release-pr
+        --repo-url "$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+        --target-branch "$(git rev-parse --abbrev-ref HEAD)"
+        --config-file release-please-config.json
+        --manifest-file .release-please-manifest.json
+        --token "${GITHUB_TOKEN:-$(gh auth token)}"
+        {{.CLI_ARGS}}
+
+  pr:sign:
+    desc: Re-sign a pull request branch's commits and push it, ready to merge
+    # An agent session commits in a container that has no signing key, so its
+    # commits reach the branch unsigned. That failure is silent rather than
+    # loud: this repository's container has `commit.gpgsign=true`, `gpg.format
+    # =ssh` and a `user.signingkey` pointing at a **zero-byte** placeholder, so
+    # `git commit` succeeds and produces a commit with no signature at all.
+    # Nothing says so until GitHub shows the branch Unverified next to a `main`
+    # whose commits are all signed.
+    #
+    # This pulls such a branch onto a machine that does have the key, rewrites
+    # every commit on it with a signature, and pushes the result.
+    #
+    # Rewriting history is the point here, not a side effect, so the usual rule
+    # against it applies with full force: run this only on a branch that is
+    # yours. The guard below refuses `main`; it cannot tell whose branch any
+    # other one is.
+    #
+    # The rebase is onto `origin/main` because that is how this project updates
+    # an open pull request branch anyway — see AGENTS.md, "Merging and keeping
+    # branches current". So one command both signs the branch and brings it
+    # current, which is what "ready to merge" means.
+    vars:
+      PR: '{{.PR | default ""}}'
+    # Without this the whole script is echoed before it runs, burying the git
+    # output that actually matters. Every command here reports for itself.
+    silent: true
+    cmds:
+      # `task pr:sign PR=97` fetches and checks that pull request out first;
+      # bare `task pr:sign` signs whatever branch is already checked out.
+      - |
+        if [ -n "{{.PR}}" ]; then
+          gh pr checkout "{{.PR}}"
+        fi
+
+        branch=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch" = "main" ]; then
+          echo "refusing to rewrite main. Check out the pull request branch first." >&2
+          exit 1
+        fi
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "working tree is dirty; commit or stash before rewriting history." >&2
+          exit 1
+        fi
+        if [ -z "$(git config --get user.signingkey)" ]; then
+          echo "no user.signingkey configured — this would rewrite every commit and sign none." >&2
+          exit 1
+        fi
+
+        git fetch origin main
+        # --force-rebase because a branch already on top of main is otherwise a
+        # no-op, and a no-op re-creates no commits and so signs nothing. The
+        # author and author date of each commit survive; the committer becomes
+        # whoever runs this, which is the truth about who signed it.
+        git rebase --force-rebase --gpg-sign origin/main
+
+        # Assert the outcome rather than trusting the command that produced it.
+        # This exists because the failure it catches has already happened here
+        # once, silently, with signing switched on the whole time.
+        #
+        # `git log %G?` reports N for no signature, and E when a signature is
+        # present but cannot be checked — which is the normal answer wherever
+        # gpg.ssh.allowedSignersFile is unset. E is therefore a pass: the claim
+        # being made is that a signature exists, not that this machine can
+        # establish who made it.
+        unsigned=$(git log --format='%h %G?' origin/main..HEAD | awk '$2 == "N" { print $1 }')
+        if [ -n "$unsigned" ]; then
+          echo "signing did not take. These commits still carry no signature:" >&2
+          echo "$unsigned" >&2
+          echo "Nothing has been pushed. Check that user.signingkey names a real key." >&2
+          exit 1
+        fi
+
+        git push --force-with-lease
+        echo "signed and pushed $(git rev-list --count origin/main..HEAD) commit(s) on $branch"
 
   docs:build:
     desc: Build the documentation site
