@@ -375,3 +375,31 @@ It **asserts the result rather than trusting the command**: if any commit is
 still unsigned afterwards it names them and pushes nothing. That check exists
 because the silent failure above has already happened in this repository, with
 signing switched on throughout.
+
+### The release pull request
+
+release-please cannot sign what it writes, and no setting will make it. Its
+only signing-adjacent flag is `--signoff`, which appends a `Signed-off-by:`
+line and is not a signature, and its commits go through the Git Data API —
+create tree, create commit, update ref — which signs nothing. So the release
+branch always carries one Unverified commit.
+
+**This usually does not matter.** GitHub signs the squash merge itself: the
+commit that lands on `main` is committed by `web-flow` and carries GitHub's
+signature whatever the branch looked like. `main` stays fully signed without
+anyone doing anything.
+
+To make the pull request itself read Verified:
+
+```sh
+task release-please:sign
+```
+
+It finds the release branch on `origin`, checks it out and signs it. Run it
+**immediately before merging**: every run of the release-please workflow
+replaces that branch's head with a fresh unsigned commit, so a signature
+applied any earlier is gone as soon as the next change lands on `main`.
+
+It refuses rather than guesses when there is no release branch, or more than
+one — with several release lines open, check out the one you mean and use
+`task pr:sign`.
