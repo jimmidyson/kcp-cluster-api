@@ -854,7 +854,118 @@ reached through two separate kubeconfigs, from two workspaces that never see
 each other. That command was the admin's; Bob is refused the Secret, so the
 kubeconfig for Alice's cluster is hers alone.
 
-## 11. Stopping, and what to change
+## 11. The same thing, in a UI
+
+Everything so far has been `kubectl` and a URL path. The same run is
+browsable, and a UI shows one thing the commands cannot: **the UI itself
+changes with the workspace**.
+
+### The kubeconfig the run already wrote
+
+Look in the demo's state directory:
+
+```sh
+kubectl --kubeconfig .demo/kcp/workspaces.kubeconfig config get-contexts -o name
+```
+
+```
+alice@root:capi-demo:bob:capi-demo-1
+root
+root:capi-demo
+root:capi-demo:alice
+root:capi-demo:alice:capi-demo-1
+root:capi-demo:bob
+root:capi-demo:bob:capi-demo-1
+```
+
+One context per workspace, named after the workspace path. They differ only in
+the `/clusters/<path>` on the end of the server URL — which, as
+[section 2](#2-workspaces-and-what-they-actually-are) showed, is all a
+workspace is. So a tool that picks a context picks a workspace, with nothing
+taught to it about kcp.
+
+Two details worth knowing before you open it:
+
+- **A tenant's workspaces are browsed as that tenant.** The contexts under
+  `root:capi-demo:alice` carry `as: alice`, so what the UI shows is Alice's
+  authorization rather than an admin's rehearsal of it. The workspaces above
+  them belong to nobody and use the demo's own credential — a tenant is
+  refused there, and a UI showing an empty tree would say nothing about why.
+- **`alice@root:capi-demo:bob:capi-demo-1` is refused on purpose.** It is
+  Bob's workspace, browsed as Alice. Everything in it fails the way
+  [section 9](#9-two-users-and-what-neither-can-see) showed at the command
+  line — which is the point: a refusal you can click on.
+
+The file carries the credentials it needs, including the shard admin's for the
+impersonating contexts, and is written `0600`. It is for a demo on one machine.
+
+### Two plugins
+
+[Headlamp](https://headlamp.dev) reads that kubeconfig as one cluster per
+workspace. Two plugins make the workspaces legible:
+
+```sh
+# The workspace navigator, and the sidebar that follows what a workspace serves
+git clone https://github.com/jimmidyson/headlamp-kcp-plugin
+cd headlamp-kcp-plugin && npm install && npm run build
+
+# Cluster API, from the branch that detects it by discovery
+git clone -b kcp/cluster-api-discovery https://github.com/jimmidyson/headlamp-plugins
+cd headlamp-plugins/cluster-api && npm install && npm run build
+```
+
+A plugin is `dist/main.js` plus its `package.json`, in a directory named after
+it. Headlamp desktop reads `~/.config/Headlamp/plugins`; a server build takes
+`-plugins-dir`:
+
+```sh
+headlamp-server \
+  -kubeconfig .demo/kcp/workspaces.kubeconfig \
+  -plugins-dir <the directory holding both plugins>
+```
+
+The **stock** Cluster API plugin will not do here, and the reason is worth
+understanding rather than working around: it decides whether Cluster API is
+installed by reading the `CustomResourceDefinition` for
+`clusters.cluster.x-k8s.io`. As [section 6](#6-apibinding-a-workspace-opting-in)
+showed, these types arrive through an `APIBinding` — there is no CRD for them
+in the workspace at all, so the plugin reports "Cluster API Not Detected" with
+the objects sitting in front of it. The branch above asks discovery instead,
+which has an answer in every workspace.
+
+### What to look at
+
+**The app bar** names the workspace you are in and the one above it. Click it
+for the navigator.
+
+**Move down the tree.** From `root:capi-demo`, Alice and Bob are one click
+each; from Alice's home, `capi-demo-1` is one more. The navigator's **Plugins**
+column says `Cluster-api` against `capi-demo-1` and nothing against the homes
+— before you go there, because it reads each workspace's bindings.
+
+**The sidebar changing.** In `capi-demo-1` there is a Cluster API section, with
+the `demo-00` cluster, its `KubeadmControlPlane` and its `Machine`s. Go one
+workspace up and the section is gone, along with its routes. Nothing is
+configured per workspace: the section is tied to the `cluster.x-k8s.io` API
+group, and the group is served there or it is not — which is the same fact
+`kubectl api-resources` reported in section 6, wearing a different hat.
+
+**What is missing everywhere.** No Pods, no Deployments, no Nodes. A workspace
+serves what is bound into it, and none of those are. The sidebar offers what
+the workspace answers for and nothing else.
+
+**What each workspace binds.** The navigator's last section lists the
+`APIBinding`s and the API groups each one serves — the join between "Alice
+enabled a provider" in section 6 and "this section appeared" here.
+
+**Being refused.** Switch to `alice@root:capi-demo:bob:capi-demo-1` and the
+same UI, pointed at the same shard, shows nothing but errors. That is not the
+UI failing; it is section 9's `Forbidden`, rendered.
+
+[The demo in a UI](headlamp.md) has the same material without the walkthrough
+around it.
+
+## 12. Stopping, and what to change
 
 `Ctrl-C` in the first terminal. The managers stop, the kcp server stops, and
 with the in-memory backend the workload clusters go with them. State lives
@@ -883,5 +994,6 @@ you to start `core-manager` and friends the way you would run them for real. See
 - [Installation](installation.md) — running the managers against a kcp instance you already have
 - [One APIExport per provider](../design/provider-exports.md) — why one export per provider and how the claims are derived
 - [Workspace onboarding](../design/workspace-onboarding.md) — the WorkspaceType, the roles it writes, and the controllers that keep them right
+- [The demo in a UI](headlamp.md) — browsing the same run in Headlamp, and what the UI shows that the tables cannot
 - [The demo](../design/demo.md) — what the demo is for, and what it deliberately does not do
 - [Workspace resource usage](../design/workspace-resource-usage.md) — what a workspace costs, measured
