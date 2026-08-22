@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-22
 
-**Status**: Draft
+**Status**: Shipped in [#106](https://github.com/jimmidyson/kcp-cluster-api/pull/106)
 
 **Input**: User description: "I want to include headlamp in the demo with the capi plugin enabled so users can view their capi resources in headlamp. I want the user to be able to move to different workspaces in the headlamp UI. [...] show that when I switch between workspaces the capi plugin is only enabled in workspaces where the capi API binding exists [...] strip non kcp resources such as pods from the sidebar [...] ensure the capi plugin doesn't list CRDs and doesn't error on missing provider versions, instead using API discovery for both."
 
