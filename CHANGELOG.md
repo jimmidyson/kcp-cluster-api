@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 (2026-08-22)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* feat: browse the demo's workspaces in a UI by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/106
+* fix: detect a signature by reading it, not by verifying it by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/105
+* ci: take release notes from GitHub's generator, labelled from commit titles by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/104
+* docs: mark the UI work shipped, and correct what the plan says it does by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/108
+
+
+**Full Changelog**: https://github.com/jimmidyson/kcp-cluster-api/compare/v0.1.0...v0.2.0
+
 ## 0.1.0 (2026-08-22)
 
 
