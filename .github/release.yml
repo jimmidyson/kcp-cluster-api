@@ -1,0 +1,41 @@
+# Categorises the notes GitHub generates for a release, which is what
+# release-please asks for once `changelog-type` is `github`.
+#
+# GitHub categorises by **pull request label**, not by Conventional Commits
+# type. This repository labels nothing by hand — every merged pull request to
+# date carries no label at all — so until labelling exists, everything below
+# falls through to the `*` catch-all and the notes are one flat list. The
+# category names are here so that adopting labels is a labelling change and
+# not a config change; they are not describing what happens today.
+#
+# `dependencies` is the exception and works immediately: Dependabot applies it
+# to its own pull requests without anyone doing anything.
+changelog:
+  exclude:
+    labels:
+      # release-please's own release pull request, which should never appear in
+      # the notes for the release it is creating.
+      - "autorelease: pending"
+      - "autorelease: tagged"
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+    - title: Features
+      labels:
+        - feature
+    - title: Bug Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Build and Dependencies
+      labels:
+        - dependencies
+        - build
+    # Everything not matched above. While nothing is labelled this is the only
+    # category that ever fires, and it holds the entire release.
+    - title: Other Changes
+      labels:
+        - "*"

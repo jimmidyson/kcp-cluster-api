@@ -127,10 +127,20 @@ specs/            spec-driven feature specifications
 
 ## Releases
 
-Versions and the changelog are derived from the Conventional Commits titles on
-`main` by [release-please](https://github.com/googleapis/release-please), which
-is why [the title format](AGENTS.md#pr-title-format) is enforced on every pull
+Versions are derived from the Conventional Commits titles on `main` by
+[release-please](https://github.com/googleapis/release-please), which is why
+[the title format](AGENTS.md#pr-title-format) is enforced on every pull
 request.
+
+The **changelog** is not. `changelog-type` is `github`, so the notes come from
+GitHub's own release-notes generator, which lists merged pull requests and
+groups them by **label** — see [`.github/release.yml`](.github/release.yml).
+Conventional Commits still decide the version; they no longer decide how the
+changelog reads, and `changelog-sections` in `release-please-config.json` is
+inert while this is set.
+
+That trade only pays off with labels. Nothing in this repository is labelled
+today, so every entry lands in `Other Changes` until that changes.
 
 A release is started by hand and maintained by CI:
 
