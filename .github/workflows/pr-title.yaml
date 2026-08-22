@@ -47,6 +47,11 @@ jobs:
       # ever looks at the title — failing every title, valid or not.
       pull-requests: read
     steps:
+      # `release` is in the type list for release-please's own pull request,
+      # which `pull-request-title-pattern` titles `release(main): X.Y.Z`.
+      # Without it that pull request fails this check and cannot merge. Note
+      # the list below is a literal block: every line is a type, so a comment
+      # inside it would be read as one.
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -60,6 +65,7 @@ jobs:
             build
             ci
             chore
+            release
           # Constitution VII: link issues in the body, never the title.
           subjectPattern: '^(?![^\s].*#\d+).+$'
           subjectPatternError: |
