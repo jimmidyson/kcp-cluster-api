@@ -150,6 +150,43 @@ The commit that reaches `main` is signed by GitHub regardless, so this is
 cosmetic — `task release-please:sign` fixes it for anyone who wants the pull
 request itself to read Verified, run immediately before merging.
 
+### Staying below 1.0.0 is a decision, not a default
+
+This project stays pre-1.0 until somebody decides otherwise, and release-please
+is configured so that it cannot decide otherwise on its own. `bump-minor-pre-major`
+is what does it — while the major version is `0`, a breaking change bumps the
+**minor**, not the major:
+
+```js
+if (breaking > 0) {
+  if (version.isPreMajor && this.bumpMinorPreMajor) {
+    return new MinorVersionUpdate();   // 0.3.0 + breaking → 0.4.0
+  } else {
+    return new MajorVersionUpdate();   // what happens without the flag
+  }
+}
+```
+
+There is no threshold, no commit count and no accumulation of breaking changes
+that graduates `0.x` to `1.0.0`. So within `0.x`: a `fix` bumps the patch, a
+`feat` bumps the minor, and a breaking change also bumps the minor.
+
+**Do not remove `bump-minor-pre-major` as tidying.** It reads like a default
+worth deleting, and deleting it means the next breaking change ships `1.0.0`
+with nobody having chosen that. The config is JSON and cannot hold a comment,
+which is why this is here.
+
+Reaching 1.0.0 takes one deliberate act — a `Release-As:` footer in a commit
+body on `main`:
+
+```sh
+git commit --allow-empty -m "chore: release 1.0.0" -m "Release-As: 1.0.0"
+```
+
+The next release pull request is then 1.0.0, and normal semantics resume from
+there: `bump-minor-pre-major` only applies below 1.0.0, so breaking changes
+bump the major from then on, as they should.
+
 ### Where the history starts
 
 `main` carries 329 commits and only 38 of them are this project's: it is a fork

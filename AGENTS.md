@@ -279,7 +279,11 @@ not parse produces a wrong release.
 | `chore` | Anything else with no release impact | none |
 
 Breaking changes take a `!` before the colon (`feat!: ...`) or a
-`BREAKING CHANGE:` footer, and cause a major bump.
+`BREAKING CHANGE:` footer. **While this project is below 1.0.0 they bump the
+minor**, not the major: `bump-minor-pre-major` is set, so `0.3.0` and a
+breaking change gives `0.4.0`. Nothing promotes `0.x` to `1.0.0` on its own —
+that takes a deliberate `Release-As: 1.0.0` commit, and only then do breaking
+changes start bumping the major. See [README.md](README.md#releases).
 
 The title must **not** contain an issue or PR number — link issues in the body
 instead (`Fixes #123`). Individual commits on a branch follow the same
