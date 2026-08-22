@@ -1,0 +1,56 @@
+name: conventional label
+
+# Labels every pull request from its Conventional Commits title, because that is
+# the only way GitHub's release-notes generator can be made to produce sections.
+# `.github/release.yml` categorises by **label** and has no key that matches a
+# title, a commit message or a commit type — so without this, every entry falls
+# into one flat `Other Changes` list. Adopted from
+# nutanix-cloud-native/cluster-api-runtime-extensions-nutanix.
+#
+# `pull_request_target`, not `pull_request`, because a pull request opened from
+# a fork gets a read-only token and this has to write a label. The usual hazard
+# of that trigger is running untrusted code with a writable token: this checks
+# nothing out and runs no repository code, reading only the title from the event
+# payload, so that hazard does not arise here. Keep it that way — adding a
+# checkout of the pull request's head to this workflow would be a real
+# vulnerability, not a style question.
+#
+# One consequence of the trigger: the workflow is always run from `main`, so a
+# change to this file has no effect on the pull request making the change. It
+# cannot be tested before it merges, and first runs on the next pull request
+# opened afterwards.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+# Least privilege by default; the job below says what it needs.
+permissions:
+  contents: read
+
+jobs:
+  label:
+    name: conventional label
+    runs-on: ubuntu-latest
+    permissions:
+      # Labels on a pull request fall under the pull-requests scope.
+      pull-requests: write
+    steps:
+      - uses: bcoe/conventional-release-labels@886f696738527c7be444262c327c89436dfb95a8 # v1.3.1
+        with:
+          # The action's defaults cover feat, fix and breaking only, which would
+          # leave docs, refactor and build unlabelled and so uncategorised.
+          # Every label named here has a matching category in
+          # `.github/release.yml`; the two lists are edited together or the
+          # changelog quietly loses a section.
+          type_labels: >-
+            {"feat": "feature",
+             "fix": "bug",
+             "breaking": "breaking-change",
+             "docs": "documentation",
+             "refactor": "refactor",
+             "build": "build"}
+          # `changelog-sections` hides these from the changelog today.
+          # `ignore-for-release` — the action's default ignore label, excluded in
+          # `.github/release.yml` — is how they stay hidden once GitHub generates
+          # the notes instead. `release` is release-please's own pull request.
+          ignored_types: '["ci", "test", "chore", "release"]'

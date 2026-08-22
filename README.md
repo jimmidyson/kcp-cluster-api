@@ -132,15 +132,30 @@ Versions are derived from the Conventional Commits titles on `main` by
 [the title format](AGENTS.md#pr-title-format) is enforced on every pull
 request.
 
-The **changelog** is not. `changelog-type` is `github`, so the notes come from
-GitHub's own release-notes generator, which lists merged pull requests and
-groups them by **label** — see [`.github/release.yml`](.github/release.yml).
-Conventional Commits still decide the version; they no longer decide how the
-changelog reads, and `changelog-sections` in `release-please-config.json` is
-inert while this is set.
+The **changelog** comes from elsewhere. `changelog-type` is `github`, so the
+notes are GitHub's own generated release notes: a list of merged pull requests,
+grouped by **label**, with contributor credit. `changelog-sections` in
+`release-please-config.json` is inert while this is set.
 
-That trade only pays off with labels. Nothing in this repository is labelled
-today, so every entry lands in `Other Changes` until that changes.
+GitHub has no way to group by commit type — `.github/release.yml` matches
+labels and authors and nothing else. So the Conventional Commits title is
+bridged to a label by
+[`conventional-label.yaml`](.github/workflows/conventional-label.yaml), and
+[`.github/release.yml`](.github/release.yml) turns those labels back into
+sections. Three files have to agree:
+
+| Title prefix | Label | Section |
+|---|---|---|
+| `feat` | `feature` | Features |
+| `fix` | `bug` | Bug Fixes |
+| `refactor` | `refactor` | Refactoring |
+| `docs` | `documentation` | Documentation |
+| `build` | `build` | Build and Dependencies |
+| `!` / `BREAKING CHANGE` | `breaking-change` | Breaking Changes |
+| `ci`, `test`, `chore`, `release` | `ignore-for-release` | excluded |
+
+Editing one without the others loses a section quietly, which is why each file
+says so at its top.
 
 A release is started by hand and maintained by CI:
 

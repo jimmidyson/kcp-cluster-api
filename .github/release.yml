@@ -1,18 +1,21 @@
 # Categorises the notes GitHub generates for a release, which is what
 # release-please asks for once `changelog-type` is `github`.
 #
-# GitHub categorises by **pull request label**, not by Conventional Commits
-# type. This repository labels nothing by hand — every merged pull request to
-# date carries no label at all — so until labelling exists, everything below
-# falls through to the `*` catch-all and the notes are one flat list. The
-# category names are here so that adopting labels is a labelling change and
-# not a config change; they are not describing what happens today.
+# GitHub categorises by **pull request label** — there is no key here that
+# matches a title, a commit message or a Conventional Commits type. The labels
+# come from `.github/workflows/conventional-label.yaml`, which derives them from
+# the Conventional Commits title already enforced on every pull request. The two
+# files are edited together: a label produced there with no category here lands
+# in `Other Changes`, and a category here whose label nothing produces is dead.
 #
-# `dependencies` is the exception and works immediately: Dependabot applies it
-# to its own pull requests without anyone doing anything.
+# `dependencies` is the exception, applied by Dependabot itself rather than by
+# that workflow.
 changelog:
   exclude:
     labels:
+      # Applied by the labelling workflow to ci, test, chore and release pull
+      # requests — the types `changelog-sections` hides today.
+      - ignore-for-release
       # release-please's own release pull request, which should never appear in
       # the notes for the release it is creating.
       - "autorelease: pending"
@@ -27,6 +30,9 @@ changelog:
     - title: Bug Fixes
       labels:
         - bug
+    - title: Refactoring
+      labels:
+        - refactor
     - title: Documentation
       labels:
         - documentation
@@ -34,8 +40,8 @@ changelog:
       labels:
         - dependencies
         - build
-    # Everything not matched above. While nothing is labelled this is the only
-    # category that ever fires, and it holds the entire release.
+    # Anything unmatched. A pull request opened before the labelling workflow
+    # merged carries no label and lands here.
     - title: Other Changes
       labels:
         - "*"
