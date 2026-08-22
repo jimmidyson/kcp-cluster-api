@@ -21,3 +21,18 @@ which says `capi-demo-1` lights up Cluster API before it is opened.
 `evidence/cluster-api-in-a-bound-workspace.png` is that workspace's
 Cluster API overview, reading the demo's cluster through an `APIBinding`
 with no `CustomResourceDefinition` anywhere in the workspace.
+## Reaching a workspace nobody configured
+
+A second Headlamp, given only the `root` context on its backend and alice's
+home workspace as a kubeconfig held in the browser:
+
+| Step | Result |
+|---|---|
+| Navigator in `root:capi-demo:alice` | lists `capi-demo-1`, type `cluster-api`, plugins column `no context` |
+| Its **Open** button | enabled, because Headlamp holds a kubeconfig to copy |
+| Clicking it | lands on `/c/root:capi-demo:alice:capi-demo-1/`, a cluster that did not exist a moment earlier |
+| The sidebar there | has the Cluster API section |
+
+Where the credentials live on the backend instead - which is how the demo runs
+- there is nothing for a plugin to copy, the button says so, and the contexts
+the run wrote are what makes the tree navigable.
