@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -119,10 +120,10 @@ func installCNIWhileProvisioning(t *testing.T) func(context.Context, []demo.Work
 					continue
 				}
 				if err := installCNI(ctx, ws); err != nil {
-					t.Logf("CNI not installed in %s yet (%v); retrying", ws.Path, err)
+					logf(t, "CNI not installed in %s yet (%v); retrying", ws.Path, err)
 					continue
 				}
-				t.Logf("CNI installed in %s", ws.Path)
+				logf(t, "CNI installed in %s", ws.Path)
 				done[ws.Path] = true
 			}
 			if len(done) == len(workspaces) {
@@ -133,7 +134,7 @@ func installCNIWhileProvisioning(t *testing.T) func(context.Context, []demo.Work
 			case <-ctx.Done():
 				return
 			case <-deadline:
-				t.Logf("gave up installing a CNI after %s; %d of %d workspaces done",
+				logf(t, "gave up installing a CNI after %s; %d of %d workspaces done",
 					cniInstallTimeout, len(done), len(workspaces))
 				return
 			case <-time.After(cniPollInterval):
@@ -237,9 +238,13 @@ func controlPlaneContainer(ctx context.Context, runtime container.Runtime, clust
 	return containers[0].Name, nil
 }
 
-// workloadClient builds a client for the workload cluster from the kubeconfig
-// Secret its control plane provider wrote.
-func workloadClient(ctx context.Context, ws demo.Workspace) (client.Client, error) {
+// workloadRESTConfig builds a REST config for the workload cluster from the
+// kubeconfig Secret its control plane provider wrote.
+//
+// Separate from workloadClient because reading a pod's log is not a
+// client.Client operation - the diagnostics dump needs a clientset built from
+// the same config.
+func workloadRESTConfig(ctx context.Context, ws demo.Workspace) (*rest.Config, error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: demo.Namespace, Name: demo.KubeconfigSecretName(demo.ClusterName(0))}
 	if err := ws.Client.Get(ctx, key, secret); err != nil {
@@ -253,6 +258,16 @@ func workloadClient(ctx context.Context, ws demo.Workspace) (client.Client, erro
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing the workload kubeconfig: %w", err)
+	}
+	return cfg, nil
+}
+
+// workloadClient builds a client for the workload cluster from the kubeconfig
+// Secret its control plane provider wrote.
+func workloadClient(ctx context.Context, ws demo.Workspace) (client.Client, error) {
+	cfg, err := workloadRESTConfig(ctx, ws)
+	if err != nil {
+		return nil, err
 	}
 	return client.New(cfg, client.Options{})
 }

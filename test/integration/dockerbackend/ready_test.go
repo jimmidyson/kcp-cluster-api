@@ -30,6 +30,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 	"github.com/jimmidyson/kcp-cluster-api/internal/verify"
+	"github.com/jimmidyson/kcp-cluster-api/internal/workloaddiag"
 	kcpenvtest "github.com/jimmidyson/kcp-cluster-api/test/integration/envtest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
@@ -89,7 +90,10 @@ func TestTwoWorkspacesReachReadyOnTheDockerBackend(t *testing.T) {
 	}
 	ensureKindDockerNetwork(t)
 
-	ctrl.SetLogger(testr.New(t))
+	// Timestamped: a buffered test log prints every line at the moment the run
+	// gave up, and what this suite needs from a failure is the order things
+	// happened in. See logf.
+	ctrl.SetLogger(testr.NewWithOptions(t, testr.Options{LogTimestamp: true}))
 	ctx := t.Context()
 
 	_, server := kcpenvtest.EnvironmentAndServer(t, "")
@@ -109,12 +113,21 @@ func TestTwoWorkspacesReachReadyOnTheDockerBackend(t *testing.T) {
 		WhileProvisioning: installCNIWhileProvisioning(t),
 		Timeout:           readyTimeout,
 		PollInterval:      5 * time.Second,
-		Log:               ctrl.Log.WithName("demo"),
+		// The status tables, deduplicated. Unset they go to io.Discard, which
+		// is how a twenty minute wait came to leave no record of when either
+		// cluster reached which state - the one thing a timeout needs.
+		Out: workloaddiag.NewChangeWriter(func(line string) { logf(t, "%s", line) }),
+		Log: ctrl.Log.WithName("demo"),
 	})
 	if err != nil {
+		// Before the fatal, because the fixture's cleanup runs after it and
+		// takes the containers - and every account of why they never came up -
+		// with it.
+		dumpWorkloadDiagnostics(ctx, t, result.Workspaces)
 		t.Fatalf("bringing two container-backed clusters up failed: %v\n%s", err, tables(result))
 	}
 	if !result.Ready() {
+		dumpWorkloadDiagnostics(ctx, t, result.Workspaces)
 		t.Fatalf("not every cluster reached ready:\n%s", tables(result))
 	}
 
