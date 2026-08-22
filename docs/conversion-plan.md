@@ -16,6 +16,25 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The demo has a UI, and it changes with the workspace.** A run writes
+  `.demo/kcp/workspaces.kubeconfig`, one context per workspace from the top of
+  the tree down, each browsed as whoever owns it — plus one deliberate
+  wrong-tenant context, so a refusal is something a person can click on.
+  Headlamp reads it as one cluster per workspace, and two plugins make the
+  workspaces legible: the Cluster API section appears only in workspaces whose
+  `APIBinding`s serve `cluster.x-k8s.io`, and no workspace offers Pods, Nodes
+  or Workloads, because none of them serve those. Both are decided by
+  discovery, which is the only question with an answer in a workspace: a bound
+  API has no `CustomResourceDefinition` there, so the upstream Cluster API
+  plugin's CRD lookup reports "not detected" in exactly the workspaces holding
+  the objects. See [The demo in a UI](site/content/en/docs/user/headlamp.md);
+  spec in
+  [`specs/20260822-070000-headlamp-workspace-navigation`](../specs/20260822-070000-headlamp-workspace-navigation/spec.md).
+
+  The UI lives outside this repository — a Headlamp plugin of its own, and a
+  patch to the upstream Cluster API plugin carried until it lands there. What
+  is here is the kubeconfig the demo writes and the documentation for using it.
+
 - **Onboarding a workspace is creating one.** A tenant creates a `Workspace` of
   the `cluster-api` `WorkspaceType` and it comes up already bound to Cluster
   API's core `APIExport` and already carrying the roles that say who may use

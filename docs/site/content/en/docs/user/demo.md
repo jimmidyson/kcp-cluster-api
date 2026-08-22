@@ -52,6 +52,14 @@ names are what makes a cross-workspace confusion visible rather than plausible.
 One shard, one manager per provider, every workspace served by all of them —
 and each workspace's objects stay its own.
 
+## Browsing it instead
+
+The run also writes a kubeconfig per audience — `workspaces.kubeconfig` for
+the operator, `alice.kubeconfig` and `bob.kubeconfig` for the tenants — each
+holding one context per workspace, named after the workspace path. A UI that
+picks a context picks a workspace, and being the other tenant means loading
+the other tenant's file. See [The demo in a UI](headlamp.md).
+
 ## How each workspace came to serve Cluster API
 
 Before the clusters, the run says how each workspace was set up — read back

@@ -33,6 +33,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,6 +56,7 @@ type options struct {
 	machines        int
 	workers         int
 	nutanixExport   bool
+	uiKubeconfig    string
 	backend         demo.Backend
 	parent          string
 	workspacePrefix string
@@ -80,6 +82,7 @@ func main() {
 		clusters        = flag.Int("clusters", demo.DefaultClusters, "How many clusters per workspace. They are named identically in every workspace, on purpose.")
 		workers         = flag.Int("worker-machines", demo.DefaultWorkerMachines, "Worker machines per cluster, as a MachineDeployment. Needs --control-plane-machines: a worker has no control plane to join otherwise.")
 		machines        = flag.Int("control-plane-machines", demo.DefaultControlPlaneMachines, "Control plane replicas per cluster, at least one. The ClusterClass every demo cluster is built from always names a control plane, so a run asking for none asks for a blueprint it cannot satisfy.")
+		uiKubeconfig    = flag.String("workspace-kubeconfig-dir", "", "Where to write the kubeconfigs a UI browses workspaces with: one holding the whole tree as the admin, and one per tenant holding theirs. Empty writes them beside the server's own kubeconfig.")
 		nutanixExport   = flag.Bool("nutanix-export", false, "Also publish the Nutanix infrastructure provider's APIExport, so its types can be bound in each workspace. Nothing here reconciles them - this makes the export visible, not the provider live.")
 		backend         = flag.String("backend", string(demo.BackendInMemory), "DevCluster backend: inmemory (needs no container runtime) or docker (real containers, pulls kindest images).")
 		parent          = flag.String("parent", demo.DefaultParent, "Workspace the APIExport is published in and the demo workspaces are created under.")
@@ -111,6 +114,7 @@ func main() {
 		machines:        *machines,
 		workers:         *workers,
 		nutanixExport:   *nutanixExport,
+		uiKubeconfig:    *uiKubeconfig,
 		backend:         demo.Backend(*backend),
 		parent:          *parent,
 		workspacePrefix: *workspacePrefix,
@@ -242,7 +246,12 @@ func run(ctx context.Context, opts options) error {
 		return errors.New("the clusters are ready but the workspaces are not isolated: see the access table above")
 	}
 
-	printNextSteps(result, baseConfig, kubeconfigPath)
+	written, err := writeWorkspaceKubeconfigs(opts, result, kubeconfigPath)
+	if err != nil {
+		return err
+	}
+
+	printNextSteps(result, baseConfig, kubeconfigPath, written)
 
 	if opts.wait {
 		fmt.Println("Running until interrupted. Ctrl-C stops the manager and, if the demo started it, the kcp server.")
@@ -285,7 +294,39 @@ func connect(ctx context.Context, opts options) (cfg, impersonation *rest.Config
 	return server.BaseConfig, server.ImpersonationConfig, server.KubeconfigPath, server.Stop, nil
 }
 
-func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath string) {
+// writtenKubeconfig is one file the run produced, and who it is for.
+type writtenKubeconfig struct {
+	path  string
+	owner string
+}
+
+// writeWorkspaceKubeconfigs writes the kubeconfigs a UI browses workspaces
+// with and says where each went.
+//
+// Beside the server's own kubeconfig by default, because that is the directory
+// a demo-started run already owns and cleans up, and because they are read
+// together: these are derived from that one's credentials.
+func writeWorkspaceKubeconfigs(opts options, result demo.Result, kubeconfigPath string) ([]writtenKubeconfig, error) {
+	dir := opts.uiKubeconfig
+	if dir == "" {
+		dir = filepath.Dir(kubeconfigPath)
+	}
+
+	var written []writtenKubeconfig
+	for _, set := range demo.WorkspaceKubeconfigs(result) {
+		if len(set.Entries) == 0 {
+			continue
+		}
+		path := filepath.Join(dir, set.Name+".kubeconfig")
+		if err := demo.WriteWorkspaceKubeconfig(path, kubeconfigPath, set.Entries); err != nil {
+			return nil, err
+		}
+		written = append(written, writtenKubeconfig{path: path, owner: set.Owner})
+	}
+	return written, nil
+}
+
+func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath string, written []writtenKubeconfig) {
 	fmt.Println("One shard, one manager per provider, every workspace above served by all of them.")
 	fmt.Println()
 	fmt.Println("Look around, one workspace at a time:")
@@ -293,6 +334,24 @@ func printNextSteps(result demo.Result, baseConfig *rest.Config, kubeconfigPath 
 	for _, ws := range result.Workspaces {
 		fmt.Printf("  kubectl --kubeconfig %s --context %s --server %s/clusters/%s get clusters,machines -A\n",
 			kubeconfigPath, demo.BaseContext, host, ws.Path)
+	}
+
+	if len(written) > 0 {
+		fmt.Println()
+		fmt.Println("Or look around in a UI. Headlamp reads these as one cluster per workspace:")
+		for _, file := range written {
+			switch file.owner {
+			case "":
+				fmt.Printf("  %s   # every workspace, as the admin\n", file.path)
+			default:
+				fmt.Printf("  %s   # what %s can reach, as %s\n", file.path, file.owner, file.owner)
+			}
+		}
+		if len(written) > 1 {
+			fmt.Println("One file per tenant, on purpose: being the other tenant means loading the")
+			fmt.Println("other tenant's kubeconfig, not picking them from a menu.")
+		}
+		fmt.Println("See docs/site/content/en/docs/user/headlamp.md.")
 	}
 
 	printUserSteps(result, host, kubeconfigPath)
