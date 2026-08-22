@@ -440,16 +440,31 @@ tasks:
         # This exists because the failure it catches has already happened here
         # once, silently, with signing switched on the whole time.
         #
-        # `git log %G?` reports N for no signature, and E when a signature is
-        # present but cannot be checked — which is the normal answer wherever
-        # gpg.ssh.allowedSignersFile is unset. E is therefore a pass: the claim
-        # being made is that a signature exists, not that this machine can
-        # establish who made it.
-        unsigned=$(git log --format='%h %G?' origin/main..HEAD | awk '$2 == "N" { print $1 }')
+        # The question is whether a signature *exists*, so read the commit
+        # object and look for the header that carries one. `gpgsig` covers an
+        # OpenPGP or an SSH signature alike, and `gpgsig-sha256` the same in a
+        # SHA-256 repository. Only the header block is searched — everything
+        # before the first blank line — so a message quoting `gpgsig` cannot
+        # pass a commit off as signed.
+        #
+        # This deliberately does not use `git log %G?`, which answers a
+        # different question: whether the signature can be *verified*. With SSH
+        # signing and no `gpg.ssh.allowedSignersFile` — the normal state on a
+        # machine that signs but has never set up a trust store — verification
+        # cannot be attempted at all and `%G?` reports `N`, the same letter it
+        # uses for a commit that carries no signature. That made this check
+        # reject correctly signed commits and refuse to push them.
+        unsigned=
+        for commit in $(git rev-list origin/main..HEAD); do
+          if ! git cat-file commit "$commit" | sed -n '/^$/q;p' | grep -q '^gpgsig'; then
+            unsigned="$unsigned $(git rev-parse --short "$commit")"
+          fi
+        done
         if [ -n "$unsigned" ]; then
-          echo "signing did not take. These commits still carry no signature:" >&2
-          echo "$unsigned" >&2
-          echo "Nothing has been pushed. Check that user.signingkey names a real key." >&2
+          echo "signing did not take. These commits carry no signature:" >&2
+          for c in $unsigned; do echo "  $c" >&2; done
+          echo "Nothing has been pushed. Check that user.signingkey names a real key," >&2
+          echo "and that gpg.format matches it (ssh for an SSH key)." >&2
           exit 1
         fi
 
