@@ -101,6 +101,46 @@ scoped to `workspace` (a context name from the server's kubeconfig, e.g.
 `"root"` — pass `""` to default to `"root"`), which is what plain
 client-go and controller-runtime clients expect.
 
+### When a container-backed cluster does not come up
+
+`test/integration/dockerbackend` waits 20 minutes for two real clusters to
+reach ready. When one does not, the management side has already said
+everything it knows — the Machine is `NotReady`, and kubelet's reason is
+usually `cni plugin not initialized` — and the reason is inside the workload
+cluster, which the fixture is about to tear down.
+
+So the failure path dumps it first, per workspace, before the test fails:
+
+- every Node's conditions, with the Ready condition's reason and message;
+- the DaemonSets in `kube-system`, and every pod there that is not ready;
+- container logs for those pods and for the CNI's, including the log of a
+  container that died before the one running now;
+- and two questions its API server cannot answer, asked of the control plane
+  container itself: what is in `/etc/cni/net.d`, and what kubelet's journal
+  says. A CNI that reported its pods ready and wrote no configuration file
+  looks identical from the API server and is obvious from those two.
+
+The dump is written to `ARTIFACT_DIR` when set and `bin/` otherwise, as
+`diagnostics-<TestName>.md`, and repeated in the test log. `ARTIFACT_DIR` is
+the kcp fixture's own variable — it puts `kcp.log`, the audit log and its
+object dumps there — so one setting collects both; `task
+test:integration:container-runtime` sets it to `bin/artifacts`.
+
+CI uploads that directory as the `verify-artifacts` artifact when a run fails,
+minus the audit logs, which are large and only readable against a specific
+question. Re-run the suite locally with `ARTIFACT_DIR` set to keep them.
+
+**Suite log lines carry a wall-clock stamp.** `go test` buffers a package's
+output and prints it when the test fails, so every line otherwise appears to
+have happened at the moment the run gave up — and the interval between "the
+CNI reported itself installed" and "the Node never came up" is usually the
+question being asked.
+
+The wait's own status tables are logged too, deduplicated: the demo re-renders
+them every five seconds, so a twenty minute wait would otherwise repeat the
+same rows 240 times. Each row is logged the first time it says what it says,
+which makes the log the timeline of what reached which state, and when.
+
 ## Running everything
 
 ```sh

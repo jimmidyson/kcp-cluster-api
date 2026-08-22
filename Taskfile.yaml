@@ -185,7 +185,13 @@ tasks:
       # real containers: two control planes coming up concurrently, after
       # pulling images a fresh runner does not have. The other suites' 15m
       # would fail on a slow runner rather than on a defect.
-      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=45m ./test/integration/dockerbackend/...
+      #
+      # ARTIFACT_DIR is read by the kcp test fixture — it puts the server's
+      # log, its audit log and its object dumps there — and by this suite's
+      # own workload diagnostics. Unset, both land in a t.TempDir that Go
+      # deletes when the test ends, which is why the CI failure that prompted
+      # this could be described and not diagnosed.
+      - PATH="{{.BIN}}:$PATH" ARTIFACT_DIR="{{.BIN}}/artifacts" go test -tags=integration -timeout=45m ./test/integration/dockerbackend/...
 
   test:scale:
     desc: Measure this environment's workspace ceiling and reconcile throughput — evidence, not a gate

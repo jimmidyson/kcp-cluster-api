@@ -45,6 +45,23 @@ jobs:
       - name: Verify
         run: task verify
 
+      # What a failed run leaves behind: the kcp server's log, the workload
+      # cluster diagnostics the docker backend suite dumps when a cluster does
+      # not come up, and the sweep reports. Audit logs are excluded — they are
+      # the largest thing in the directory by an order of magnitude and are
+      # readable only against a specific question.
+      - name: Collect artifacts
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: verify-artifacts
+          path: |
+            bin/artifacts/**
+            !bin/artifacts/**/*.audit*
+            bin/*.md
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Report outcome
         # Runs even when the previous step failed, because the distinction
         # this project cares about is not visible in an exit status: go-task
