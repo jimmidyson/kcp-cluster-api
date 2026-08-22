@@ -52,6 +52,14 @@ names are what makes a cross-workspace confusion visible rather than plausible.
 One shard, one manager per provider, every workspace served by all of them —
 and each workspace's objects stay its own.
 
+## Browsing it instead
+
+The run also writes `.demo/kcp/workspaces.kubeconfig`: one context per
+workspace, named after the workspace path, each browsed as whoever owns it. A
+UI that picks a context picks a workspace, which is what makes the demo
+something to look at rather than something to read. See
+[The demo in a UI](headlamp.md).
+
 ## How each workspace came to serve Cluster API
 
 Before the clusters, the run says how each workspace was set up — read back
