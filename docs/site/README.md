@@ -32,6 +32,26 @@ itself:
   needs it changed to match, or every link on the published site points at
   this repository.
 
+## Search
+
+The site's search box — in the navbar and at the top of the sidebar — is
+Docsy's offline search. The build writes a [Lunr](https://lunrjs.com/) index
+of every page to `public/offline-search-index.*.json`, and the browser
+queries that file directly: no crawler, no search service, nothing to
+re-index after a deploy and nothing to configure beyond `hugo.toml`.
+
+Two things follow from that:
+
+- A page becomes searchable when it is published, not when it is written —
+  the index is built from the rendered site.
+- Docsy pulls Lunr from `unpkg.com`, next to the jQuery it already loads for
+  the rest of the theme. A reader who cannot reach that CDN gets the whole
+  site minus the search box's results.
+
+To keep a page out of the index, set `exclude_search: true` in its front
+matter — `content/en/_index.md` does, being a redirect rather than a page
+anyone should land on from a search result.
+
 ## Local development
 
 Requires Node.js 18+ and internet access to fetch the Hugo module (Docsy

@@ -37,11 +37,20 @@ disableAliases = false
 
   # Repo config used by the "Edit this page" / "Create issue" links in Docsy.
   github_repo = "https://github.com/jimmidyson/kcp-cluster-api"
-  github_subdir = "kcp/docs/site"
+  github_subdir = "docs/site"
   github_branch = "main"
 
-  # First one is picked as the Twitter card image.
-  offlineSearch = false
+  # Site search. Docsy offers Google CSE, Algolia DocSearch and this: a Lunr
+  # index built at publish time and searched in the browser. It is the only
+  # one of the three that needs no account, no crawler and no third-party
+  # service to keep working, and the site is small enough that the index it
+  # produces is a few tens of kilobytes.
+  offlineSearch = true
+  # The default summary is 70 characters, which truncates mid-phrase on most
+  # of this site's descriptions. Long enough here to show a whole sentence.
+  offlineSearchSummaryLength = 200
+  offlineSearchMaxResults = 10
+
   prism_syntax_highlighting = false
 
   [params.ui]
