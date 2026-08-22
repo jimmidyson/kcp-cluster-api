@@ -30,8 +30,9 @@ UI, and seeing the UI itself change with the workspace.
 
 **In scope**
 
-1. The demo writes a kubeconfig with one context per workspace, from the top
-   of the tree down, each browsed as whoever owns it.
+1. The demo writes a kubeconfig per audience - the operator's, holding the
+   whole tree, and one per tenant holding theirs - each with one context per
+   workspace.
 2. A Headlamp plugin - a separate repository - that navigates the workspace
    tree, hides what the workspace does not serve, and shows a plugin's
    section only in workspaces whose bindings back it.
@@ -78,14 +79,19 @@ all gone is gone too.
 
 ## Functional requirements
 
-- **FR-001** A demo run writes a kubeconfig containing one context per
-  workspace it created, plus the parent and org workspaces, named after the
-  workspace path.
-- **FR-002** A workspace owned by a tenant is browsed as that tenant. A
-  workspace owned by nobody is browsed with the demo's own credential.
-- **FR-003** The run also writes one context that is refused - a tenant in
-  another tenant's workspace - because a refusal that can be clicked on is
-  the only part of the isolation story a UI can show.
+- **FR-001** A demo run writes one kubeconfig holding every workspace it
+  created as the admin, and one per tenant holding that tenant's home and
+  workspaces. Contexts are named after the workspace path.
+- **FR-002** A tenant's workspaces are browsed as that tenant. The workspaces
+  above them are in the operator's file only, because nothing grants a tenant
+  anything there.
+- **FR-003** A tenant's file offers no route into another tenant's
+  workspaces, not even a context that would be refused: a UI cannot enter a
+  workspace it is refused, so it asks for a login token instead, which reads
+  as "you are not signed in" rather than "this is not yours".
+- **FR-003a** Being another tenant is loading that tenant's file. No file
+  offers a choice of tenant, because a UI shows what it was given and a
+  chooser listing both would make identity a menu item.
 - **FR-004** Credentials are copied into the generated kubeconfig, so it
   stands alone.
 - **FR-005** The plugin determines what a workspace serves from discovery,

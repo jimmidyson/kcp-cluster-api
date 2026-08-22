@@ -54,11 +54,11 @@ and each workspace's objects stay its own.
 
 ## Browsing it instead
 
-The run also writes `.demo/kcp/workspaces.kubeconfig`: one context per
-workspace, named after the workspace path, each browsed as whoever owns it. A
-UI that picks a context picks a workspace, which is what makes the demo
-something to look at rather than something to read. See
-[The demo in a UI](headlamp.md).
+The run also writes a kubeconfig per audience — `workspaces.kubeconfig` for
+the operator, `alice.kubeconfig` and `bob.kubeconfig` for the tenants — each
+holding one context per workspace, named after the workspace path. A UI that
+picks a context picks a workspace, and being the other tenant means loading
+the other tenant's file. See [The demo in a UI](headlamp.md).
 
 ## How each workspace came to serve Cluster API
 

@@ -19,6 +19,7 @@ package demo
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -158,8 +159,26 @@ func TestWriteWorkspaceKubeconfigRejectsAnEmptyEntryList(t *testing.T) {
 	}
 }
 
-func TestWorkspaceContextsCoverTheTreeAndBrowseAsTheOwner(t *testing.T) {
-	result := Result{
+func setOf(sets []KubeconfigSet, name string) (KubeconfigSet, bool) {
+	for _, set := range sets {
+		if set.Name == name {
+			return set, true
+		}
+	}
+	return KubeconfigSet{}, false
+}
+
+func entryFor(set KubeconfigSet, path string) (KubeconfigEntry, bool) {
+	for _, entry := range set.Entries {
+		if entry.Path == path {
+			return entry, true
+		}
+	}
+	return KubeconfigEntry{}, false
+}
+
+func demoResult() Result {
+	return Result{
 		Parent: "root",
 		Org:    "root:capi-demo",
 		Users: []User{
@@ -171,70 +190,109 @@ func TestWorkspaceContextsCoverTheTreeAndBrowseAsTheOwner(t *testing.T) {
 			{Path: "root:capi-demo:bob:capi-demo-1", Owner: "bob"},
 		},
 	}
+}
 
-	byName := map[string]KubeconfigEntry{}
-	for _, entry := range WorkspaceContexts(result) {
-		if _, seen := byName[entry.Name]; seen {
-			t.Errorf("context %q generated twice", entry.Name)
-		}
-		byName[entry.Name] = entry
+// The operator's file is the whole tree, as the admin. It is the only one that
+// can see the workspaces above the tenants, because nothing grants a tenant
+// anything there.
+func TestWorkspaceKubeconfigsGiveTheOperatorTheWholeTree(t *testing.T) {
+	sets := WorkspaceKubeconfigs(demoResult())
+
+	operator, ok := setOf(sets, OperatorKubeconfigName)
+	if !ok {
+		t.Fatalf("no %s set: got %v", OperatorKubeconfigName, sets)
 	}
-
-	// Every workspace in the tree is reachable, top to bottom: a navigator
-	// that cannot reach the parent cannot show what is under it.
+	if operator.Owner != "" {
+		t.Errorf("the operator set belongs to %q", operator.Owner)
+	}
 	for _, path := range []string{
 		"root", "root:capi-demo",
 		"root:capi-demo:alice", "root:capi-demo:bob",
 		"root:capi-demo:alice:capi-demo-1", "root:capi-demo:bob:capi-demo-1",
 	} {
-		entry, ok := byName[path]
+		entry, ok := entryFor(operator, path)
 		if !ok {
-			t.Fatalf("no context named %s", path)
+			t.Fatalf("the operator set has no context for %s", path)
 		}
-		if entry.Path != path {
-			t.Errorf("context %q addresses %q", path, entry.Path)
+		if entry.Impersonate != "" {
+			t.Errorf("the operator's context for %s impersonates %q", path, entry.Impersonate)
 		}
-	}
-
-	// A tenant's own workspaces are browsed as the tenant, so what the UI
-	// shows is that tenant's authorization rather than the admin's.
-	if got := byName["root:capi-demo:alice:capi-demo-1"].Impersonate; got != "alice" {
-		t.Errorf("alice's workspace is browsed as %q, want alice", got)
-	}
-	if got := byName["root:capi-demo:alice"].Impersonate; got != "alice" {
-		t.Errorf("alice's home is browsed as %q, want alice", got)
-	}
-	// The workspaces above them belong to nobody and no tenant can read
-	// them, so browsing those as a tenant would show an empty tree and say
-	// nothing about why.
-	if got := byName["root:capi-demo"].Impersonate; got != "" {
-		t.Errorf("the org workspace is browsed as %q, want the admin", got)
-	}
-
-	// One deliberate wrong-tenant context, because a refusal somebody can
-	// click on is the only part of the isolation story a UI can show.
-	refused, ok := byName["alice@root:capi-demo:bob:capi-demo-1"]
-	if !ok {
-		t.Fatal("no context browsing bob's workspace as alice")
-	}
-	if refused.Impersonate != "alice" || refused.Path != "root:capi-demo:bob:capi-demo-1" {
-		t.Errorf("the wrong-tenant context is %+v", refused)
 	}
 }
 
-func TestWorkspaceContextsWithoutUsers(t *testing.T) {
-	result := Result{
-		Parent:     "root",
-		Workspaces: []Workspace{{Path: "root:capi-demo-1"}},
+// A tenant's file holds that tenant and nothing else. Seeing the other one
+// means being handed the other one's kubeconfig, which is the whole point of
+// there being two files.
+func TestWorkspaceKubeconfigsAreOnePerTenant(t *testing.T) {
+	sets := WorkspaceKubeconfigs(demoResult())
+
+	alice, ok := setOf(sets, "alice")
+	if !ok {
+		t.Fatalf("no alice set: got %v", sets)
+	}
+	if alice.Owner != "alice" {
+		t.Errorf("the alice set belongs to %q", alice.Owner)
+	}
+	for _, entry := range alice.Entries {
+		if entry.Impersonate != "alice" {
+			t.Errorf("alice's file has a context for %s as %q", entry.Path, entry.Impersonate)
+		}
+	}
+	if _, ok := entryFor(alice, "root:capi-demo:alice"); !ok {
+		t.Error("alice's file cannot reach her own home")
+	}
+	if _, ok := entryFor(alice, "root:capi-demo:alice:capi-demo-1"); !ok {
+		t.Error("alice's file cannot reach her own workspace")
+	}
+	// Not the org workspace, and not the parent: a tenant is refused in both,
+	// and a context that only ever errors is noise rather than a lesson.
+	if _, ok := entryFor(alice, "root:capi-demo"); ok {
+		t.Error("alice's file has a context for the org workspace")
+	}
+	if _, ok := entryFor(alice, "root"); ok {
+		t.Error("alice's file has a context for the parent workspace")
 	}
 
-	entries := WorkspaceContexts(result)
-	for _, entry := range entries {
+	if _, ok := setOf(sets, "bob"); !ok {
+		t.Error("no bob set")
+	}
+}
+
+// A tenant's file offers no way into another tenant's workspaces - not even a
+// context that would be refused. Headlamp cannot enter such a workspace at
+// all, so it asks for a login token rather than reporting a refusal, and a
+// login box teaches the opposite of what it should. The isolation is in there
+// being one file per tenant.
+func TestWorkspaceKubeconfigsGiveATenantNoRouteToAnother(t *testing.T) {
+	sets := WorkspaceKubeconfigs(demoResult())
+
+	alice, _ := setOf(sets, "alice")
+	for _, entry := range alice.Entries {
+		if strings.HasPrefix(entry.Path, "root:capi-demo:bob") {
+			t.Errorf("alice's file has a context for %s", entry.Path)
+		}
+	}
+	if len(alice.Entries) != 2 {
+		t.Errorf("alice's file has %d contexts, want her home and her workspace: %+v",
+			len(alice.Entries), alice.Entries)
+	}
+}
+
+func TestWorkspaceKubeconfigsWithoutUsers(t *testing.T) {
+	sets := WorkspaceKubeconfigs(Result{
+		Parent:     "root",
+		Workspaces: []Workspace{{Path: "root:capi-demo-1"}},
+	})
+
+	if len(sets) != 1 {
+		t.Fatalf("got %d sets, want only the operator's: %+v", len(sets), sets)
+	}
+	for _, entry := range sets[0].Entries {
 		if entry.Impersonate != "" {
 			t.Errorf("context %q impersonates %q in a run with no users", entry.Name, entry.Impersonate)
 		}
 	}
-	if len(entries) != 2 {
-		t.Fatalf("got %d contexts, want root and the workspace: %+v", len(entries), entries)
+	if len(sets[0].Entries) != 2 {
+		t.Fatalf("got %d contexts, want root and the workspace: %+v", len(sets[0].Entries), sets[0].Entries)
 	}
 }

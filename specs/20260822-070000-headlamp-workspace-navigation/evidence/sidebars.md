@@ -36,3 +36,25 @@ home workspace as a kubeconfig held in the browser:
 Where the credentials live on the backend instead - which is how the demo runs
 - there is nothing for a plugin to copy, the button says so, and the contexts
 the run wrote are what makes the tree navigable.
+
+## One kubeconfig per tenant
+
+The run writes `workspaces.kubeconfig` (every workspace, as the admin) and one
+file per tenant. Two Headlamps, one given each tenant's file:
+
+| Given | Clusters it has | Its `capi-demo-1` | Its home's sidebar |
+|---|---|---|---|
+| `alice.kubeconfig` | `root:capi-demo:alice`, `…alice:capi-demo-1` | Cluster API section present | no Cluster API |
+| `bob.kubeconfig` | `root:capi-demo:bob`, `…bob:capi-demo-1` | Cluster API section present | no Cluster API |
+
+Alice's file has no context for anything of Bob's, so typing his workspace
+into her Headlamp gets "Something went wrong with cluster …" and a login
+prompt — an absence, not a refusal. That is why no such context is written:
+Headlamp cannot enter a workspace it is refused, so it asks for a token, and a
+login box reads as "you are not signed in" rather than "this is not yours".
+
+A refusal *inside* a workspace she can enter renders properly. Her own
+`capi-demo-1` says `Forbidden - workspaces.tenancy.kcp.io is forbidden: User
+"alice" cannot list resource "workspaces"` where the child list would be:
+she owns the workspace, and listing what is inside it is a right she was not
+given.

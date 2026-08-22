@@ -27,17 +27,17 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-// WorkspaceKubeconfigName is what a demo run calls the kubeconfig it writes
-// for tools that address a workspace by choosing a context rather than by
-// rewriting a URL.
-const WorkspaceKubeconfigName = "workspaces.kubeconfig"
+// OperatorKubeconfigName is the file stem of the kubeconfig holding the whole
+// tree, as the demo's own admin.
+const OperatorKubeconfigName = "workspaces"
 
 // KubeconfigEntry is one context in a generated kubeconfig: a workspace, and
 // the identity requests to it are made as.
 type KubeconfigEntry struct {
 	// Name is the context name, which is the name a UI shows. The workspace
-	// path is the obvious answer and the one WorkspaceContexts uses, because
-	// a chooser listing `root:capi-demo:alice:capi-demo-1` needs no key.
+	// path is the obvious answer and the one WorkspaceKubeconfigs uses,
+	// because a chooser listing `root:capi-demo:alice:capi-demo-1` needs no
+	// key.
 	Name string
 
 	// Path is the workspace this context addresses.
@@ -54,50 +54,76 @@ type KubeconfigEntry struct {
 	SourceContext string
 }
 
-// WorkspaceContexts is the set of contexts a run's tree deserves: every
-// workspace from the parent down, each browsed as whoever owns it.
+// KubeconfigSet is one file to write: who it is for, and what it can reach.
+type KubeconfigSet struct {
+	// Name is the file's stem: OperatorKubeconfigName, or a tenant's name.
+	Name string
+
+	// Owner is the tenant the file belongs to, empty for the operator's.
+	Owner string
+
+	Entries []KubeconfigEntry
+}
+
+// WorkspaceKubeconfigs is the set of files a run's tree deserves: one holding
+// the whole tree as the admin, and one per tenant holding theirs.
 //
-// Ordered from the top of the tree down, so a chooser that keeps the order it
-// was given reads as the tree does.
-func WorkspaceContexts(result Result) []KubeconfigEntry {
+// One file per tenant rather than one file with everybody's contexts in it,
+// because a UI shows what it was given: a chooser offering both tenants makes
+// switching between them a menu item, when the thing being demonstrated is
+// that they are separate. Being somebody else means being handed somebody
+// else's kubeconfig.
+func WorkspaceKubeconfigs(result Result) []KubeconfigSet {
+	sets := []KubeconfigSet{{Name: OperatorKubeconfigName, Entries: operatorEntries(result)}}
+	for _, user := range result.Users {
+		sets = append(sets, KubeconfigSet{
+			Name:    user.Name,
+			Owner:   user.Name,
+			Entries: tenantEntries(result, user),
+		})
+	}
+	return sets
+}
+
+// operatorEntries is every workspace in the tree, top down, as the admin.
+func operatorEntries(result Result) []KubeconfigEntry {
 	var (
 		entries []KubeconfigEntry
 		seen    = map[string]bool{}
 	)
-	add := func(path, impersonate string) {
+	add := func(path string) {
 		if path == "" || seen[path] {
 			return
 		}
 		seen[path] = true
-		entries = append(entries, KubeconfigEntry{Name: path, Path: path, Impersonate: impersonate})
+		entries = append(entries, KubeconfigEntry{Name: path, Path: path})
 	}
 
-	// The parent and the org workspace are nobody's: a tenant is refused in
-	// both, so browsing them as a tenant would show an empty tree and say
-	// nothing about why. The admin credential is what makes them navigable.
-	add(result.Parent, "")
-	add(result.Org, "")
+	add(result.Parent)
+	add(result.Org)
 	for _, user := range result.Users {
-		add(user.Home, user.Name)
+		add(user.Home)
 	}
 	for _, ws := range result.Workspaces {
-		add(ws.Path, ws.Owner)
+		add(ws.Path)
 	}
+	return entries
+}
 
-	// And one context that is refused, because a refusal somebody can click
-	// on is the only part of the isolation story a UI can show. The first
-	// user, in the first workspace that is not theirs.
-	if len(result.Users) > 0 {
-		user := result.Users[0].Name
-		for _, ws := range result.Workspaces {
-			if ws.Owner != "" && ws.Owner != user {
-				entries = append(entries, KubeconfigEntry{
-					Name:        user + "@" + ws.Path,
-					Path:        ws.Path,
-					Impersonate: user,
-				})
-				break
-			}
+// tenantEntries is what one tenant can reach, browsed as them.
+//
+// Only what they can reach. Nothing grants a tenant anything above their home
+// or inside another tenant's workspaces, and a context for one of those is
+// not a demonstration of isolation: a UI cannot enter the workspace at all,
+// so it reports the refusal the only way it knows how - by asking for a
+// login token, which reads as "you are not signed in" rather than "this is
+// not yours". The isolation is in there being one file per tenant. Being the
+// other tenant means being handed the other tenant's kubeconfig.
+func tenantEntries(result Result, user User) []KubeconfigEntry {
+	entries := []KubeconfigEntry{{Name: user.Home, Path: user.Home, Impersonate: user.Name}}
+	for _, ws := range result.Workspaces {
+		if ws.Owner == user.Name {
+			entries = append(entries, KubeconfigEntry{Name: ws.Path, Path: ws.Path, Impersonate: user.Name})
 		}
 	}
 	return entries

@@ -10,47 +10,45 @@ one thing the tables cannot: **the UI itself changes with the workspace**.
 
 ## What the run gives you
 
-Every demo run writes a second kubeconfig beside the server's own:
+Every demo run writes a kubeconfig per audience beside the server's own:
 
 ```
-.demo/kcp/workspaces.kubeconfig
+.demo/kcp/workspaces.kubeconfig   every workspace, as the admin
+.demo/kcp/alice.kubeconfig        what alice can reach, as alice
+.demo/kcp/bob.kubeconfig          what bob can reach, as bob
 ```
 
-It has one context per workspace, named after the workspace path, from the top
-of the tree down:
+Each context is named after the workspace path, and the contexts differ only
+in the `/clusters/<path>` on the end of the server URL, which is all a
+workspace is. `--workspace-kubeconfig-dir` writes them somewhere else.
 
-```
-root
-root:capi-demo
-root:capi-demo:alice
-root:capi-demo:alice:capi-demo-1
-root:capi-demo:bob
-root:capi-demo:bob:capi-demo-1
-alice@root:capi-demo:bob:capi-demo-1
-```
+**One file per tenant, on purpose.** A UI shows what it was given: a chooser
+listing both tenants' workspaces would make being somebody else a menu item,
+when the thing worth demonstrating is that they are separate. Being alice
+means loading alice's kubeconfig, and being bob means loading bob's.
 
-The contexts differ only in the `/clusters/<path>` on the end of the server
-URL, which is all a workspace is. A tenant's own workspaces are browsed **as
-that tenant**, so what the UI shows is that tenant's authorization rather than
-an admin's rehearsal of it; the workspaces above them, which belong to nobody,
-use the demo's own credential.
+A tenant's file holds their home workspace and the workspaces they own, all
+browsed **as them**, so what the UI shows is that tenant's authorization
+rather than an admin's rehearsal of it. The workspaces above their home are
+left out: nothing grants a tenant anything there, so those contexts would only
+ever error.
 
-The last one is deliberate. It browses **bob's** workspace **as alice**, and
-everything in it is refused — a refusal you can click on, which is the only
-part of the isolation story a UI can show.
+There is deliberately **no route into the other tenant's workspaces** — not
+even a context that would be refused. Headlamp cannot enter such a workspace
+at all, so it reports the 403 the only way it knows how, by asking for a login
+token, and a login box reads as "you are not signed in" rather than "this is
+not yours". The isolation is in there being one file each.
 
-Point Headlamp at the file:
+Refusals *inside* a workspace you can enter do render properly: alice's own
+workspace shows `Forbidden - alice cannot list workspaces` where the child
+list would be, because listing children is a right she was not given.
 
-```sh
-headlamp-server -kubeconfig .demo/kcp/workspaces.kubeconfig -plugins-dir <plugins>
-```
-
-Use `--workspace-kubeconfig` to write it somewhere else.
-
-{{% alert title="It carries credentials" color="warning" %}}
-The file contains the demo's admin certificate, and — for the impersonating
-contexts — the shard admin's, which can act as anybody. It is written `0600`
-beside the kubeconfig it was derived from. It is for a demo on one machine.
+{{% alert title="They carry credentials" color="warning" %}}
+The demo's tenants have no credentials of their own — kcp evaluates each
+request as the impersonated user, from the shard admin. So a tenant's file
+embeds the shard admin's certificate, which can act as anybody, and is *not* a
+credential to hand to that tenant. Every file is written `0600`. This is for a
+demo on one machine.
 {{% /alert %}}
 
 ## The plugins
@@ -67,16 +65,54 @@ Two, both loaded from Headlamp's plugins directory:
   workspace, because a bound API has no CRD in the workspace serving it. See
   [Carried changes](#carried-changes).
 
+## Two ways to point Headlamp at it
+
+**Hand the file to the backend.** Nothing to click, and every workspace the
+run created is there:
+
+```sh
+headlamp-server -kubeconfig .demo/kcp/alice.kubeconfig -plugins-dir <plugins>
+```
+
+The credentials stay on the backend, which is also the limit: a plugin cannot
+read them, so the workspaces reachable are exactly the contexts in the file.
+The navigator lists workspaces it has no context for and says so rather than
+offering them.
+
+**Load the file into Headlamp itself**, from the desktop app's *Load
+KubeConfig*, or a server run with `-enable-dynamic-clusters` and the file
+imported through the UI. Now the kubeconfig is in front of the plugin, and the
+tree becomes properly dynamic: the navigator copies the context you are using,
+rewrites its server URL, and opens **any** workspace it can list — including
+ones created after Headlamp started. One context is enough to reach the whole
+subtree under it.
+
+This is the mode that shows what the plugin is actually doing. The demo writes
+whole trees because it cannot click *Load KubeConfig* for you, not because the
+contexts are needed.
+
+Switching tenant is loading the other tenant's file, in both modes. That is
+the point of there being two.
+
 ## What to look at
 
 **The workspace chooser.** The app bar names the workspace you are in and the
 one above it. Clicking it opens the navigator: where you are, what is inside,
 and what each of those workspaces serves.
 
-**Moving down the tree.** From `root:capi-demo`, alice and bob are one click
-each. From alice's home, `capi-demo-1` is one more — and the navigator says it
-lights up **Cluster API** before you go there, because the workspace's
-`APIBinding`s say so.
+**Moving down the tree.** With the admin's file, alice and bob are one click
+each from `root:capi-demo`; with alice's, her home is where you start. Either
+way `capi-demo-1` is one more click, and the navigator says it lights up
+**Cluster API** before you go there, because the workspace's `APIBinding`s say
+so.
+
+**A refusal, rendered.** In alice's own `capi-demo-1`, the navigator says
+`Forbidden - alice cannot list workspaces` where the child list would be. She
+owns the workspace; listing what is inside it is a right she was not given.
+
+**Being the other tenant.** Stop Headlamp, point it at `bob.kubeconfig`, and
+the same UI shows Bob's workspace and none of Alice's. Nothing about the shard
+changed — only who is asking.
 
 **The sidebar changing.** In `capi-demo-1` there is a Cluster API section with
 the demo's cluster in it. One workspace up there is not. Nothing about that is
