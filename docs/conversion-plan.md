@@ -16,20 +16,32 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
-- **The demo has a UI, and it changes with the workspace.** A run writes
-  `.demo/kcp/workspaces.kubeconfig`, one context per workspace from the top of
-  the tree down, each browsed as whoever owns it — plus one deliberate
-  wrong-tenant context, so a refusal is something a person can click on.
-  Headlamp reads it as one cluster per workspace, and two plugins make the
-  workspaces legible: the Cluster API section appears only in workspaces whose
-  `APIBinding`s serve `cluster.x-k8s.io`, and no workspace offers Pods, Nodes
-  or Workloads, because none of them serve those. Both are decided by
-  discovery, which is the only question with an answer in a workspace: a bound
-  API has no `CustomResourceDefinition` there, so the upstream Cluster API
-  plugin's CRD lookup reports "not detected" in exactly the workspaces holding
-  the objects. See [The demo in a UI](site/content/en/docs/user/headlamp.md);
-  spec in
+- **The demo has a UI, and it changes with the workspace.** A run writes a
+  kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as
+  the admin, and one per tenant holding their home and the workspaces they
+  own, browsed as them. One file per tenant rather than one holding everybody,
+  because a UI shows what it was given and a chooser listing both would make
+  being somebody else a menu item: being the other tenant is loading the other
+  tenant's kubeconfig. Headlamp reads each as one cluster per workspace, and
+  two plugins make the workspaces legible: the Cluster API section appears
+  only in workspaces whose `APIBinding`s serve `cluster.x-k8s.io`, and no
+  workspace offers Pods, Nodes or Workloads, because none of them serve those.
+  Both are decided by discovery, which is the only question with an answer in
+  a workspace: a bound API has no `CustomResourceDefinition` there, so the
+  upstream Cluster API plugin's CRD lookup reports "not detected" in exactly
+  the workspaces holding the objects. See
+  [The demo in a UI](site/content/en/docs/user/headlamp.md); shipped in
+  [#106](https://github.com/jimmidyson/kcp-cluster-api/pull/106), spec in
   [`specs/20260822-070000-headlamp-workspace-navigation`](../specs/20260822-070000-headlamp-workspace-navigation/spec.md).
+
+  **A refusal a person can click on turned out not to exist.** The first shape
+  wrote a tenant a context into another tenant's workspace, on the grounds
+  that a refusal is the only part of the isolation story a UI can show. It is
+  not: a UI cannot enter a workspace it is refused, so Headlamp reports the
+  403 by asking for a login token, which reads as "you are not signed in"
+  rather than "this is not yours". Refusals *inside* a workspace a tenant can
+  enter do render — alice's own workspace declining to list its children — and
+  the isolation a UI can show is in there being one file each.
 
   The UI lives outside this repository — a Headlamp plugin of its own, and a
   patch to the upstream Cluster API plugin carried until it lands there. What
