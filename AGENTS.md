@@ -277,6 +277,7 @@ not parse produces a wrong release.
 | `build` | Build, tooling or dependencies | none |
 | `ci` | CI configuration | none |
 | `chore` | Anything else with no release impact | none |
+| `release` | **release-please's own pull request. Do not use it by hand.** | none |
 
 Breaking changes take a `!` before the colon (`feat!: ...`) or a
 `BREAKING CHANGE:` footer. **While this project is below 1.0.0 they bump the

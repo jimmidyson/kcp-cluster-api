@@ -139,6 +139,13 @@ git checkout main
 task release-please           # opens the release pull request
 ```
 
+That pull request is titled `release(main): X.Y.Z`, from
+`pull-request-title-pattern` — release-please's default would be
+`chore(main): release X.Y.Z`. `release` is therefore in the allowed type list
+in `pr-title.yaml`, without which release-please's own pull request would fail
+the title check and be unable to merge. It bumps nothing on its own, which is
+what a release commit should do.
+
 Merging that pull request cuts the tag and publishes the release. Until it is
 merged, the `release-please` workflow rewrites its branch, title and changelog
 on every push to `main`, so it always describes everything landed so far —
@@ -152,10 +159,33 @@ request itself to read Verified, run immediately before merging.
 
 ### Staying below 1.0.0 is a decision, not a default
 
-This project stays pre-1.0 until somebody decides otherwise, and release-please
-is configured so that it cannot decide otherwise on its own. `bump-minor-pre-major`
-is what does it — while the major version is `0`, a breaking change bumps the
-**minor**, not the major:
+This project stays pre-1.0 until somebody decides otherwise. That takes **two**
+settings, because the first release and every release after it are decided by
+different code.
+
+**The first release** does not bump anything — with no release to bump from,
+release-please ignores the versioning strategy and returns a fixed starting
+version:
+
+```js
+protected initialReleaseVersion(): Version {
+  if (this.initialVersion) {
+    return Version.parse(this.initialVersion);
+  }
+  return Version.parse('1.0.0');   // the default
+}
+```
+
+So `initial-version` is set to `0.1.0`. Without it the first release is
+`1.0.0` however the rest of the config reads, and no amount of
+`bump-minor-pre-major` prevents it — this repository opened a
+`chore(main): release 1.0.0` pull request that way before the setting was
+added. The manifest version does not help either: with no release found, this
+path is taken regardless of what `.release-please-manifest.json` says.
+
+**Every release after it** is a bump, and there `bump-minor-pre-major` governs:
+while the major version is `0`, a breaking change bumps the **minor**, not the
+major:
 
 ```js
 if (breaking > 0) {

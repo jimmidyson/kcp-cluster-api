@@ -3,6 +3,8 @@
   "release-type": "go",
   "include-component-in-tag": false,
   "bootstrap-sha": "281e4e3ed2af1d6852651d69e1207a3073b478c2",
+  "initial-version": "0.1.0",
+  "pull-request-title-pattern": "release${scope}:${component} ${version}",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "packages": {
@@ -18,6 +20,7 @@
     { "type": "build", "section": "Build and Dependencies", "hidden": false },
     { "type": "ci", "section": "CI", "hidden": true },
     { "type": "test", "section": "Tests", "hidden": true },
-    { "type": "chore", "section": "Miscellaneous", "hidden": true }
+    { "type": "chore", "section": "Miscellaneous", "hidden": true },
+    { "type": "release", "section": "Releases", "hidden": true }
   ]
 }
