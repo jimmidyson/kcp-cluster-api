@@ -4,6 +4,7 @@
   "include-component-in-tag": false,
   "bootstrap-sha": "281e4e3ed2af1d6852651d69e1207a3073b478c2",
   "initial-version": "0.1.0",
+  "changelog-type": "github",
   "pull-request-title-pattern": "release${scope}:${component} ${version}",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,

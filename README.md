@@ -127,10 +127,35 @@ specs/            spec-driven feature specifications
 
 ## Releases
 
-Versions and the changelog are derived from the Conventional Commits titles on
-`main` by [release-please](https://github.com/googleapis/release-please), which
-is why [the title format](AGENTS.md#pr-title-format) is enforced on every pull
+Versions are derived from the Conventional Commits titles on `main` by
+[release-please](https://github.com/googleapis/release-please), which is why
+[the title format](AGENTS.md#pr-title-format) is enforced on every pull
 request.
+
+The **changelog** comes from elsewhere. `changelog-type` is `github`, so the
+notes are GitHub's own generated release notes: a list of merged pull requests,
+grouped by **label**, with contributor credit. `changelog-sections` in
+`release-please-config.json` is inert while this is set.
+
+GitHub has no way to group by commit type — `.github/release.yml` matches
+labels and authors and nothing else. So the Conventional Commits title is
+bridged to a label by
+[`conventional-label.yaml`](.github/workflows/conventional-label.yaml), and
+[`.github/release.yml`](.github/release.yml) turns those labels back into
+sections. Three files have to agree:
+
+| Title prefix | Label | Section |
+|---|---|---|
+| `feat` | `feature` | Features |
+| `fix` | `bug` | Bug Fixes |
+| `refactor` | `refactor` | Refactoring |
+| `docs` | `documentation` | Documentation |
+| `build` | `build` | Build and Dependencies |
+| `!` / `BREAKING CHANGE` | `breaking-change` | Breaking Changes |
+| `ci`, `test`, `chore`, `release` | `ignore-for-release` | excluded |
+
+Editing one without the others loses a section quietly, which is why each file
+says so at its top.
 
 A release is started by hand and maintained by CI:
 
