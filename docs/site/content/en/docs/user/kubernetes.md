@@ -103,6 +103,65 @@ cluster-unaware endpoint, `root` scoped to the workspace the exports live in,
 `shard-base` for the privileged credential — because everything that reads one
 of these already knows those names.
 
+## Talking to a workload cluster
+
+The clusters the run builds are not in the cluster you deployed into, and they
+are not anywhere else either. The dev infrastructure provider's in-memory
+backend **serves each workload cluster's API server from inside its own pod**,
+on a port it allocates as the cluster is created. There are no nodes, no VMs
+and no containers: a `kubectl get nodes` against one of them is answered by
+that pod out of memory.
+
+Two lookups get you in, both inside the workspace that owns the cluster:
+
+```sh
+kubectl -n kcp-demo port-forward svc/kcp 6443:6443 &
+
+WS=https://localhost:6443/clusters/root:capi-demo:alice:capi-demo-1
+KC=".demo/kubernetes/kcp.kubeconfig --context base"
+
+# the port that provider chose for this cluster
+kubectl --kubeconfig $KC --server $WS -n default   get cluster demo-00 -o jsonpath='{.spec.controlPlaneEndpoint}'
+
+# the kubeconfig the control plane provider wrote for it
+kubectl --kubeconfig $KC --server $WS -n default   get secret demo-00-kubeconfig -o jsonpath='{.data.value}' | base64 -d > /tmp/demo-00.kubeconfig
+```
+
+**From inside the cluster**, that kubeconfig works unchanged: it names the
+provider's pod IP, which any pod can reach.
+
+**From outside**, the pod IP is not routable, so forward the port and point the
+same kubeconfig at localhost:
+
+```sh
+kubectl -n kcp-demo port-forward deploy/cluster-api-dev-infrastructure 20000:20000 &
+kubectl --kubeconfig /tmp/demo-00.kubeconfig --server https://localhost:20000 get nodes
+```
+
+Ports are allocated from 20000 upwards as clusters are created, one per
+cluster, so a two-workspace run serves 20000 and 20001 — one process, both
+tenants' clusters, which is the same fact the rest of this page is about.
+
+Nothing has to be skipped to make that verify. The backend's listener binds
+every interface, and the serving certificate it issues names `localhost` and
+`127.0.0.1` alongside the pod's address — so the forwarded connection is
+verified against the cluster's own CA, exactly as the in-cluster one is.
+
+Every listener and its port, when you would rather ask than look them up one
+cluster at a time:
+
+```sh
+kubectl -n kcp-demo port-forward deploy/cluster-api-dev-infrastructure 19000:19000 &
+curl -s http://localhost:19000/listeners
+```
+
+**They are in memory, and that is the whole of their durability.** Restart the
+dev infrastructure pod and every workload cluster it was serving is gone, its
+port is gone, and the pod IP in every kubeconfig it wrote is wrong. Cluster API
+notices and reports the clusters as unreachable; nothing rebuilds them. That is
+a property of this backend rather than of the deployment — the docker backend
+provisions real containers and needs a container runtime the pod does not have.
+
 ## What it deploys
 
 | Object | What it is |

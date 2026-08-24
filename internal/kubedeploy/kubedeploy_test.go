@@ -394,3 +394,18 @@ func TestDefaultKcpImageMatchesThePinnedVersion(t *testing.T) {
 			DefaultKcpImage, match[1])
 	}
 }
+
+// The in-memory backend's debug endpoint is the only fixed port it serves: the
+// workload clusters' own are allocated as clusters are created, so the pod
+// spec cannot name them and the debug endpoint is how they are found.
+func TestInfrastructureDeploymentDeclaresTheDebugPort(t *testing.T) {
+	t.Parallel()
+
+	infra := find[*appsv1.Deployment](t, build(t, Options{}), capiexports.InfraExport)
+	if !slices.ContainsFunc(infra.Spec.Template.Spec.Containers[0].Ports, func(p corev1.ContainerPort) bool {
+		return p.ContainerPort == DevInfrastructureDebugPort
+	}) {
+		t.Errorf("the dev infrastructure provider does not declare its debug port: %v",
+			infra.Spec.Template.Spec.Containers[0].Ports)
+	}
+}

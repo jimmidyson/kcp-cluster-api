@@ -44,6 +44,26 @@ PATH=/nonexistent`, which is the container's situation — no Go toolchain to
 resolve a module with. What that does not cover is ko's own copy into the
 image.
 
+## Reaching a workload cluster
+
+The run ends by doing what the deployment tells a person to do with the
+clusters it built: read the control plane endpoint off the `Cluster`, read the
+kubeconfig the control plane provider wrote into the workspace, and use it —
+first as written, which is the provider's own address and is what a client
+inside the Kubernetes cluster has, and then with the host rewritten to
+`localhost`, which is what a `kubectl port-forward` gives a client outside it.
+
+Both list the cluster's two nodes, and both verify TLS against the cluster's
+own CA with nothing skipped: the backend's listener binds every interface, and
+the serving certificate it issues names `localhost` and `127.0.0.1` alongside
+the pod's address. That is the whole basis for the port-forward instruction on
+[On Kubernetes](../../../docs/site/content/en/docs/user/kubernetes.md), and it
+is checked rather than assumed.
+
+The program that does it is a throwaway, not committed: it reads the two
+objects with the repository's own client libraries and lists nodes twice. What
+is committed is what it printed.
+
 ## What it found
 
 Three faults, none of which the single-process demo can have:

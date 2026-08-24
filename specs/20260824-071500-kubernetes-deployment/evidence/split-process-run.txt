@@ -1,16 +1,16 @@
 WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
-root:capi-demo:alice:capi-demo-1  b9lgyb438y7jaate  demo-00  yes          yes    cluster ready
-root:capi-demo:bob:capi-demo-1    34mwp6nlycnlzbo9  demo-00  yes          yes    cluster ready
+root:capi-demo:alice:capi-demo-1  1mcj5maubksfhgm9  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    2xfzvyspuigglbjs  demo-00  yes          yes    cluster ready
 
 WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
 root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
 root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
 
 WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
-root:capi-demo:alice:capi-demo-1  demo-00-cp-4dg7z        yes           yes    demo-00-cp-4dg7z        Running  machine ready
-root:capi-demo:alice:capi-demo-1  demo-00-md-rxj9l-hrl7w  yes           yes    demo-00-md-rxj9l-hrl7w  Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-cp-4t2jz        yes           yes    demo-00-cp-4t2jz        Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-md-jhxxs-bjsbs  yes           yes    demo-00-md-jhxxs-bjsbs  Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-cp-9l86r        yes           yes    demo-00-cp-9l86r        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-b47bj-k2lbr  yes           yes    demo-00-md-b47bj-k2lbr  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-tmllm        yes           yes    demo-00-cp-tmllm        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-bvrl5-mxpnq  yes           yes    demo-00-md-bvrl5-mxpnq  Running  machine ready
 
 How each workspace came to serve Cluster API. Nothing in the last three
 columns was written out by hand:
@@ -93,3 +93,16 @@ bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluste
 9443/readyz -> 200
 9450/healthz -> 200
 9450/readyz -> 200
+
+--- workload cluster ---
+control plane endpoint: 127.0.0.1:20000
+kubeconfig secret: demo-00-kubeconfig (5526 bytes)
+as written, server: https://127.0.0.1:20000
+  as written (the provider's own address): 2 nodes
+    demo-00-cp-9l86r
+    demo-00-md-b47bj-k2lbr
+through a port-forward, server: https://localhost:20000
+  through a port-forward (localhost): 2 nodes
+    demo-00-cp-9l86r
+    demo-00-md-b47bj-k2lbr
+demo exited 0

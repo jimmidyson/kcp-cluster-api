@@ -97,5 +97,15 @@ set -e
 # APIExport to have an endpoint, which is what the demo gave it.
 echo "--- health probes ---"
 sh "$S/probes.sh"
+
+# Reaching a workload cluster, the way the deployment's printed instructions
+# say to: the endpoint off the Cluster, the kubeconfig out of the workspace,
+# and the same credentials again with the host rewritten to localhost, which is
+# what a port-forward gives you. The program is not committed - see README.md.
+echo "--- workload cluster ---"
+"$S/bin/workloadcheck" \
+  --kcp-kubeconfig "$S/base.kubeconfig" \
+  --workspace root:capi-demo:alice:capi-demo-1 \
+  --cluster demo-00 || echo "workload cluster check FAILED"
 echo "demo exited $demo_status"
 exit $demo_status

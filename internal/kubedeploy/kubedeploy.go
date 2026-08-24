@@ -105,6 +105,20 @@ const (
 	kubeconfigFileName  = "kubeconfig"
 )
 
+// The in-memory backend's ports, which are upstream's defaults because nothing
+// here overrides them.
+//
+// Only the debug endpoint is declared in the pod spec. The workload clusters'
+// own ports are allocated from the range below as clusters are created - the
+// first cluster gets DevInfrastructureMinPort, the next the one after it - so
+// there is no fixed list to write down, which is what the debug endpoint is
+// for: it says which listener is on which port.
+const (
+	DevInfrastructureDebugPort = 19000
+	DevInfrastructureMinPort   = 20000
+	DevInfrastructureMaxPort   = 30000
+)
+
 // Where the shard keeps what it is given and what it writes.
 const (
 	kcpRootDirectory   = "/var/lib/kcp"
@@ -618,6 +632,8 @@ func managerDeployment(opts Options, manager Manager) *appsv1.Deployment {
 		},
 	}
 	if manager.PodIP {
+		container.Ports = append(container.Ports,
+			corev1.ContainerPort{Name: "wcl-debug", ContainerPort: DevInfrastructureDebugPort})
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name: "POD_IP",
 			ValueFrom: &corev1.EnvVarSource{

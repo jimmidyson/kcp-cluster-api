@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 	"github.com/jimmidyson/kcp-cluster-api/internal/kubedeploy"
 )
@@ -408,9 +409,53 @@ func printNextSteps(opts options, kubeconfig string, ranDemo bool) {
 		}
 	}
 
+	printWorkloadClusterSteps(opts, kubeconfig, ranDemo)
+
 	fmt.Println()
 	fmt.Println("Take it all down again:")
 	fmt.Printf("  go run ./cmd/deploy --delete --namespace %s\n", opts.namespace)
+}
+
+// printWorkloadClusterSteps says how to reach the clusters the run built.
+//
+// They are not in the cluster this deployed into, and they are not anywhere
+// else either: the dev infrastructure provider's in-memory backend serves each
+// workload cluster's API server from inside its own pod, on a port it chose,
+// and writes the kubeconfig for it into the kcp workspace that owns the
+// cluster. So reaching one is two lookups and, from outside, a port-forward -
+// which is worth printing, because nothing about it is guessable.
+func printWorkloadClusterSteps(opts options, kubeconfig string, ranDemo bool) {
+	users := splitUsers(opts.users)
+	if !ranDemo || kubeconfig == "" || opts.controlPlaneMachines == 0 || len(users) == 0 {
+		return
+	}
+
+	workspace := fmt.Sprintf("%s:%s:%s:%s-1", opts.parent, demo.DefaultWorkspacePrefix, users[0], demo.DefaultWorkspacePrefix)
+	cluster := demo.ClusterName(0)
+	inWorkspace := fmt.Sprintf("kubectl --kubeconfig %s --context %s --server https://localhost:%d/clusters/%s -n %s",
+		kubeconfig, demo.BaseContext, kubedeploy.KcpPort, workspace, demo.Namespace)
+
+	fmt.Println()
+	fmt.Println("Talk to a workload cluster. Its API server is served from inside the dev")
+	fmt.Println("infrastructure provider's pod - in memory, on a port that provider chose - and")
+	fmt.Println("its kubeconfig is a Secret in the workspace that owns it. With the port-forward")
+	fmt.Println("above running:")
+	fmt.Printf("  %s get cluster %s -o jsonpath='{.spec.controlPlaneEndpoint}'\n", inWorkspace, cluster)
+	fmt.Printf("  %s get secret %s -o jsonpath='{.data.value}' | base64 -d > /tmp/%s.kubeconfig\n",
+		inWorkspace, demo.KubeconfigSecretName(cluster), cluster)
+	fmt.Println()
+	fmt.Println("That kubeconfig names the provider's pod IP, which is reachable from inside the")
+	fmt.Println("cluster and not from here. Forward the port it names - the first cluster gets")
+	fmt.Printf("%d, the next %d - and use localhost, which its serving certificate covers:\n",
+		kubedeploy.DevInfrastructureMinPort, kubedeploy.DevInfrastructureMinPort+1)
+	fmt.Printf("  kubectl -n %s port-forward deploy/%s %d:%d &\n",
+		opts.namespace, capiexports.InfraExport, kubedeploy.DevInfrastructureMinPort, kubedeploy.DevInfrastructureMinPort)
+	fmt.Printf("  kubectl --kubeconfig /tmp/%s.kubeconfig --server https://localhost:%d get nodes\n",
+		cluster, kubedeploy.DevInfrastructureMinPort)
+	fmt.Println()
+	fmt.Printf("  kubectl -n %s port-forward deploy/%s %d:%d &   # every listener and its port\n",
+		opts.namespace, capiexports.InfraExport, kubedeploy.DevInfrastructureDebugPort, kubedeploy.DevInfrastructureDebugPort)
+	fmt.Printf("  curl -s http://localhost:%d/listeners\n", kubedeploy.DevInfrastructureDebugPort)
 }
 
 // splitUsers turns a comma-separated list into the demo's users, treating an
