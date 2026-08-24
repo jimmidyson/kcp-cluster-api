@@ -186,8 +186,28 @@ survived because nothing ran those binaries against a real cluster: the
 integration tests wire the same reconcilers in-process, through the demo,
 which is the arrangement that does not have the bug.
 
-That is the argument for this whole shape in two bugs: the single-process demo
-cannot fail either way, and an installation can.
+**The health endpoint served nothing.** Every manager bound `--health-addr` and
+answered 404 on it. controller-runtime creates its probe handler when the first
+check is registered and routes nothing when there is none, so a flag that looks
+like it configures a health endpoint configured a port that refuses every
+request. The kubelet reads that as a container that failed to start:
+
+```
+Warning  Unhealthy  1s (x5 over 41s)  kubelet  Startup probe failed:
+HTTP probe failed with statuscode: 404
+```
+
+A pod that would never become ready however long it waited, for a manager that
+was working. Each of the four now registers a liveness and a readiness check.
+They say the process is up and its manager was constructed and no more than
+that — a fleet-wide controller with no workspaces engaged is correct, so
+readiness cannot wait for one.
+
+Nothing consulted that endpoint before there were probes, which is why three
+releases of a flag called `--health-addr` never served a byte.
+
+That is the argument for this whole shape in three bugs: the single-process
+demo cannot fail any of those ways, and an installation can.
 
 ## What it deliberately does not do
 

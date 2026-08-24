@@ -63,6 +63,13 @@ having to reconstruct the answer from the commit log.
   reads until something is wrong. In pods it happens not to collide, which is
   why it would have stayed hidden. `--metrics-addr` is now a flag on all four.
 
+  The health endpoint was the same kind of thing: every manager bound
+  `--health-addr` and answered 404 on it, because controller-runtime routes
+  nothing until a check is registered and none was. A kubelet reads that as a
+  container that failed to start, so every manager pod would have stayed
+  unready forever while working perfectly. All four now register a liveness
+  and a readiness check.
+
   Worse, and nothing to do with Kubernetes: every provider manager handed the
   ClusterCache its own `--kubeconfig` config as the *shard's* config. That one
   addresses the workspace the exports live in, and the ClusterCache scopes what

@@ -1,24 +1,61 @@
-root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
-root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
-WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
-root:capi-demo:alice:capi-demo-1  demo-00-cp-vjh5f        yes           yes    demo-00-cp-vjh5f        Running  machine ready
-root:capi-demo:alice:capi-demo-1  demo-00-md-xzql4-gxvp4  yes           yes    demo-00-md-xzql4-gxvp4  Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-cp-5j9q9        yes           yes    demo-00-cp-5j9q9        Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-md-9g7ck-krbgq  yes           yes    demo-00-md-9g7ck-krbgq  Running  machine ready
-
 WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
-root:capi-demo:alice:capi-demo-1  1vo9wcqn52uzgc8x  demo-00  yes          yes    cluster ready
-root:capi-demo:bob:capi-demo-1    i660m15uv1qi8wzz  demo-00  yes          yes    cluster ready
+root:capi-demo:alice:capi-demo-1  b9lgyb438y7jaate  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    34mwp6nlycnlzbo9  demo-00  yes          yes    cluster ready
 
 WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
 root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
 root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
 
 WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
-root:capi-demo:alice:capi-demo-1  demo-00-cp-vjh5f        yes           yes    demo-00-cp-vjh5f        Running  machine ready
-root:capi-demo:alice:capi-demo-1  demo-00-md-xzql4-gxvp4  yes           yes    demo-00-md-xzql4-gxvp4  Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-cp-5j9q9        yes           yes    demo-00-cp-5j9q9        Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-md-9g7ck-krbgq  yes           yes    demo-00-md-9g7ck-krbgq  Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-cp-4dg7z        yes           yes    demo-00-cp-4dg7z        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-rxj9l-hrl7w  yes           yes    demo-00-md-rxj9l-hrl7w  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-4t2jz        yes           yes    demo-00-cp-4t2jz        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-jhxxs-bjsbs  yes           yes    demo-00-md-jhxxs-bjsbs  Running  machine ready
+
+How each workspace came to serve Cluster API. Nothing in the last three
+columns was written out by hand:
+WORKSPACE                         OWNER  FROM THE TYPE    ENABLED                                                      ENABLED BY  ROLE COVERS
+root:capi-demo:alice:capi-demo-1  alice  core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  alice       bootstrap, core, controlplane, infrastructure
+root:capi-demo:bob:capi-demo-1    bob    core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  bob         bootstrap, core, controlplane, infrastructure
+
+What each provider's controllers may reach. A "discovered" claim exists
+because a provider published a labelled APIExport, not because anybody
+named it - and every workspace accepted it without being asked:
+EXPORT                            CLAIMS                                                      PUBLISHED BY                      VERBS                                      SOURCE
+cluster-api-bootstrap-kubeadm     clusters.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch                             declared
+cluster-api-bootstrap-kubeadm     configmaps                                                  (built in)                        get,list,watch,create,update,patch,delete  declared
+cluster-api-bootstrap-kubeadm     kubeadmcontrolplanes.controlplane.cluster.x-k8s.io          cluster-api-controlplane-kubeadm  get,list,watch                             discovered
+cluster-api-bootstrap-kubeadm     kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io  cluster-api-controlplane-kubeadm  get,list,watch                             discovered
+cluster-api-bootstrap-kubeadm     machinedeployments.cluster.x-k8s.io                         cluster-api-core                  get,list,watch                             declared
+cluster-api-bootstrap-kubeadm     machines.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch                             declared
+cluster-api-bootstrap-kubeadm     machinesets.cluster.x-k8s.io                                cluster-api-core                  get,list,watch                             declared
+cluster-api-bootstrap-kubeadm     secrets                                                     (built in)                        get,list,watch,create,update,patch,delete  declared
+cluster-api-controlplane-kubeadm  clusters.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch                             declared
+cluster-api-controlplane-kubeadm  configmaps                                                  (built in)                        get,list,watch                             declared
+cluster-api-controlplane-kubeadm  devclusters.infrastructure.cluster.x-k8s.io                 cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  devclustertemplates.infrastructure.cluster.x-k8s.io         cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  devmachines.infrastructure.cluster.x-k8s.io                 cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  devmachinetemplates.infrastructure.cluster.x-k8s.io         cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  kubeadmconfigs.bootstrap.cluster.x-k8s.io                   cluster-api-bootstrap-kubeadm     get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io           cluster-api-bootstrap-kubeadm     get,list,watch,create,update,patch,delete  discovered
+cluster-api-controlplane-kubeadm  machines.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch,create,update,patch,delete  declared
+cluster-api-controlplane-kubeadm  secrets                                                     (built in)                        get,list,watch,create,update,patch,delete  declared
+cluster-api-core                  configmaps                                                  (built in)                        get,list,watch                             declared
+cluster-api-core                  devclusters.infrastructure.cluster.x-k8s.io                 cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  devclustertemplates.infrastructure.cluster.x-k8s.io         cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  devmachines.infrastructure.cluster.x-k8s.io                 cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  devmachinetemplates.infrastructure.cluster.x-k8s.io         cluster-api-dev-infrastructure    get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  kubeadmconfigs.bootstrap.cluster.x-k8s.io                   cluster-api-bootstrap-kubeadm     get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io           cluster-api-bootstrap-kubeadm     get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  kubeadmcontrolplanes.controlplane.cluster.x-k8s.io          cluster-api-controlplane-kubeadm  get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io  cluster-api-controlplane-kubeadm  get,list,watch,create,update,patch,delete  discovered
+cluster-api-core                  secrets                                                     (built in)                        get,list,watch,create,update,patch,delete  declared
+cluster-api-dev-infrastructure    clusters.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch                             declared
+cluster-api-dev-infrastructure    machines.cluster.x-k8s.io                                   cluster-api-core                  get,list,watch,update,patch,delete         declared
+cluster-api-dev-infrastructure    secrets                                                     (built in)                        get,list,watch,patch                       declared
+cluster-api-workspace             apibindings.apis.kcp.io                                     (built in)                        get,list,watch                             declared
+cluster-api-workspace             clusterroles.rbac.authorization.k8s.io                      (built in)                        get,list,watch,create,update,patch         declared
+cluster-api-workspace             logicalclusters.core.kcp.io                                 (built in)                        get,list,watch                             declared
 
 USER   WORKSPACE                         OWNER     RESOURCE    ALLOWED  DETAIL
 alice  root                              everyone  workspaces  yes      1 workspace: capi-demo
@@ -33,4 +70,26 @@ bob    root:capi-demo:alice              alice     workspaces  no       forbidde
 bob    root:capi-demo:alice:capi-demo-1  alice     clusters    no       forbidden
 bob    root:capi-demo:bob                bob       workspaces  yes      1 workspace: capi-demo-1
 bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluster: demo-00
+USER   WORKSPACE                         OWNER     RESOURCE    ALLOWED  DETAIL
+alice  root                              everyone  workspaces  yes      1 workspace: capi-demo
+alice  root:capi-demo                    nobody    workspaces  no       forbidden
+alice  root:capi-demo:alice              alice     workspaces  yes      1 workspace: capi-demo-1
+alice  root:capi-demo:alice:capi-demo-1  alice     clusters    yes      1 cluster: demo-00
+alice  root:capi-demo:bob                bob       workspaces  no       forbidden
+alice  root:capi-demo:bob:capi-demo-1    bob       clusters    no       forbidden
+bob    root                              everyone  workspaces  yes      1 workspace: capi-demo
+bob    root:capi-demo                    nobody    workspaces  no       forbidden
+bob    root:capi-demo:alice              alice     workspaces  no       forbidden
+bob    root:capi-demo:alice:capi-demo-1  alice     clusters    no       forbidden
+bob    root:capi-demo:bob                bob       workspaces  yes      1 workspace: capi-demo-1
+bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluster: demo-00
 
+--- health probes, the request a kubelet makes ---
+9441/healthz -> 200
+9441/readyz -> 200
+9442/healthz -> 200
+9442/readyz -> 200
+9443/healthz -> 200
+9443/readyz -> 200
+9450/healthz -> 200
+9450/readyz -> 200

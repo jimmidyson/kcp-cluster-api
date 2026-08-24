@@ -120,6 +120,8 @@ included.
   by waiting - a forbidden read - is reported at once.
 - **FR-009** A container that is waiting is not killed for waiting: the
   startup probe's budget covers the startup timeout.
+- **FR-009a** A probe that a deployment makes is answered. A manager that
+  binds a health address serves the endpoints the probes ask for.
 - **FR-010** Every manager's metrics endpoint is configurable. Several
   managers on one machine cannot all take controller-runtime's default port.
 - **FR-011** One replica per manager, and `Recreate` rather than

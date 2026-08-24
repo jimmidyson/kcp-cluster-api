@@ -5,8 +5,7 @@
 set -eu
 S="$(dirname "$0")"
 S="$(cd "$S" && pwd)"
-KCP="${KCP:-$(git rev-parse --show-toplevel)/bin/kcp}"   # task tools puts it there
-REPO="${REPO:-$(git rev-parse --show-toplevel)}"
+KCP=$REPO/bin/kcp
 
 # Anything left from a previous run holds the ports this one needs.
 pkill -f "$S/bin/" 2>/dev/null || true
@@ -92,5 +91,11 @@ env -i PATH=/nonexistent HOME="$S" \
   --timeout=10m
 demo_status=$?
 set -e
+
+# The probe a kubelet makes. After the run, because a manager binds its health
+# address when it starts its controllers - which is after it has waited for its
+# APIExport to have an endpoint, which is what the demo gave it.
+echo "--- health probes ---"
+sh "$S/probes.sh"
 echo "demo exited $demo_status"
 exit $demo_status

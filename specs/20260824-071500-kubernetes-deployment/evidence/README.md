@@ -46,7 +46,7 @@ image.
 
 ## What it found
 
-Two faults, neither of which the single-process demo can have:
+Three faults, none of which the single-process demo can have:
 
 1. **Every provider manager took controller-runtime's default metrics port**
    (`:8080`) with no way to change it. Three of the four died at startup with
@@ -68,6 +68,21 @@ Two faults, neither of which the single-process demo can have:
    directly against the running shard: the single-scoped path answers 200 and
    the double-scoped one 404. The shard's config is now derived from the
    manager's (`providerwiring.ShardConfig`).
+
+3. **The health endpoint served nothing.** Every manager bound
+   `--health-addr` and answered 404 on it: controller-runtime creates its probe
+   handler when the first check is registered and routes nothing when there is
+   none. A kubelet reads that as a container that failed to start —
+
+   ```
+   Warning  Unhealthy  1s (x5 over 41s)  kubelet  Startup probe failed:
+   HTTP probe failed with statuscode: 404
+   ```
+
+   — so every manager pod would have stayed unready forever while working. All
+   four now register a liveness and a readiness check, and the run ends by
+   making the same request the kubelet makes against each manager's health
+   address.
 
 The second one is the reason to keep this run. It was a fault in the path
 every provider takes to reach a workload cluster, in all four binaries, and it

@@ -56,6 +56,7 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
@@ -183,6 +184,24 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")
+		os.Exit(1)
+	}
+
+	// Without these the health endpoint serves nothing. controller-runtime
+	// creates its handler when the first check is registered and routes
+	// nothing when there is none, so --health-addr accepts connections and
+	// answers 404 - which a kubelet reads as a container that failed to
+	// start, and a person reads as a manager that is broken.
+	//
+	// They say the process is up and its manager was constructed, and no more
+	// than that: a fleet-wide controller with no workspaces engaged is
+	// correct, so readiness cannot wait for one.
+	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+		setupLog.Error(err, "Unable to register the health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+		setupLog.Error(err, "Unable to register the readiness check")
 		os.Exit(1)
 	}
 
