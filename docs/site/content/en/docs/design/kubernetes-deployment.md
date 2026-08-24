@@ -15,9 +15,10 @@ an installation has — a shard as a `StatefulSet`, one `Deployment` per
 provider, and the demo as a `Job` with its manager half switched off. The
 objects are built in Go (`internal/kubedeploy`) rather than written as YAML,
 for the same reason the `APIExport`s are: they are derived from the provider
-list, so a provider that gains an export gains a deployment, and one that gains
-neither fails the build of the installation rather than producing a shard that
-serves types nothing reconciles.
+list. Adding a provider adds its deployment, and a provider with no manager in
+this image fails the build of an installation rather than producing a shard
+that serves types nothing reconciles — which is the Nutanix provider's case,
+and is why it is published without being deployed.
 
 Three things had to be solved that a process on a laptop never meets. None of
 them is about Cluster API; all three are about kcp being a server somebody else
