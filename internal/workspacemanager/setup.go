@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -207,10 +209,9 @@ func (r *Runner) startMaintainer(ctx context.Context) error {
 // newInitializerManager builds the manager that serves workspaces waiting on
 // the Cluster API initializer.
 func newInitializerManager(ctx context.Context, opts Options, providerCfg *rest.Config, providerClient client.Client) (mcmanager.Manager, error) {
-	workspaceType := &tenancyv1alpha1.WorkspaceType{}
-	key := client.ObjectKey{Name: string(capiworkspaces.WorkspaceTypeName)}
-	if err := providerClient.Get(ctx, key, workspaceType); err != nil {
-		return nil, fmt.Errorf("reading WorkspaceType %s in %s: %w", key.Name, opts.ProviderPath, err)
+	workspaceType, err := waitForWorkspaceType(ctx, providerClient, opts.ProviderPath, opts.Timeout)
+	if err != nil {
+		return nil, err
 	}
 
 	// Read off the live object rather than rebuilt from the path. kcp derives
@@ -240,6 +241,45 @@ func newInitializerManager(ctx context.Context, opts Options, providerCfg *rest.
 		return nil, fmt.Errorf("wiring the workspace initializer: %w", err)
 	}
 	return mgr, nil
+}
+
+// waitForWorkspaceType reads the Cluster API WorkspaceType, waiting for it to
+// be published rather than requiring that it already is.
+//
+// The wait is what makes this a deployment rather than a script. A process
+// somebody starts by hand runs after the exports have been published, because
+// they published them; a Deployment starts when Kubernetes starts it, which is
+// as likely to be before the type exists as after. Exiting there is not
+// harmless - the pod backs off exponentially, so an installation applied in one
+// go takes minutes to converge on a step that took seconds - and it reads as a
+// broken deployment rather than as one waiting for its input.
+//
+// Only "not found" is waited out. Anything else - forbidden, a server that
+// does not serve the type - will not resolve itself by being asked again, and
+// waiting out the timeout would bury the reason under a deadline.
+func waitForWorkspaceType(ctx context.Context, cl client.Client, providerPath string, timeout time.Duration) (*tenancyv1alpha1.WorkspaceType, error) {
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	key := client.ObjectKey{Name: string(capiworkspaces.WorkspaceTypeName)}
+	workspaceType := &tenancyv1alpha1.WorkspaceType{}
+
+	err := wait.PollUntilContextTimeout(ctx, time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		err := cl.Get(ctx, key, workspaceType)
+		switch {
+		case err == nil:
+			return true, nil
+		case apierrors.IsNotFound(err):
+			return false, nil
+		default:
+			return false, fmt.Errorf("reading WorkspaceType %s in %s: %w", key.Name, providerPath, err)
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("WorkspaceType %s was not published in %s after %s: %w",
+			key.Name, providerPath, timeout, err)
+	}
+	return workspaceType, nil
 }
 
 // newMaintainerManager builds the fleet-wide manager that keeps every Cluster

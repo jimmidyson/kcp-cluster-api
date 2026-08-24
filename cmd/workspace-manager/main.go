@@ -68,9 +68,12 @@ func initFlags(fs *pflag.FlagSet) {
 		"Path of the workspace holding the Cluster API APIExports and the cluster-api WorkspaceType. "+
 			"This is where permission claims are maintained and where the WorkspaceType's initializer is registered.")
 	fs.DurationVar(&timeout, "startup-timeout", time.Minute,
-		"How long to wait for the things kcp populates asynchronously: the WorkspaceType's initializing "+
-			"virtual workspace URL, and the onboarding APIExport's endpoint. The latter appears only once "+
-			"a workspace has bound the export, so a process started before its first tenant waits here.")
+		"How long to wait for the things this manager cannot create for itself: the cluster-api "+
+			"WorkspaceType being published, the initializing virtual workspace URL kcp puts on it, and "+
+			"the onboarding APIExport's endpoint. The last appears only once a workspace has bound the "+
+			"export, so a process started before its first tenant waits here - and so does a Deployment "+
+			"applied alongside the run that publishes the type. Raise it for an installation whose "+
+			"tenants arrive later than its controllers.")
 }
 
 func main() {

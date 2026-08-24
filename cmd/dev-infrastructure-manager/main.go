@@ -38,6 +38,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/pflag"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -50,6 +51,7 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
@@ -74,10 +76,12 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	endpointSliceName       string
+	startupTimeout          time.Duration
 	webhookWorkspace        string
 	webhookPort             int
 	webhookCertDir          string
 	healthAddr              string
+	metricsAddr             string
 	maxConcurrentReconciles int
 
 	logOptions = logs.NewOptions()
@@ -109,8 +113,20 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&webhookPort, "webhook-port", 9443, "Webhook server port.")
 	fs.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs/", "Webhook cert dir.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+
+	fs.StringVar(&metricsAddr, "metrics-addr", ":8080",
+		"The address the metrics endpoint binds to. \"0\" disables it. It is a flag because a "+
+			"deployment scrapes it and a machine running several of these managers at once cannot give "+
+			"them all the same port - controller-runtime's default is one every manager would take.")
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultFleetMaxConcurrentReconciles,
 		"Worker goroutines per controller. One pool for the process, shared by every workspace it serves.")
+
+	fs.DurationVar(&startupTimeout, "startup-timeout", time.Minute,
+		"How long to wait for --endpoint-slice-name to have a virtual workspace endpoint before giving "+
+			"up. kcp gives an APIExport an endpoint only once a workspace has bound it, so a manager "+
+			"started before the first tenant - which is what a Deployment applied alongside everything "+
+			"else is - waits here. Raise it for an installation whose workspaces arrive later than its "+
+			"controllers; a process run by hand against a shard that is already set up wants the default.")
 
 	// This project's defaults, set before the flag is defined so that
 	// --feature-gates overrides them rather than the other way round. See
@@ -157,7 +173,7 @@ func main() {
 		setupLog.Error(err, "Unable to build a client for the shard")
 		os.Exit(1)
 	}
-	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, 0)
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, startupTimeout)
 	if err != nil {
 		setupLog.Error(err, "Unable to resolve the APIExport's virtual workspace")
 		os.Exit(1)
@@ -166,6 +182,7 @@ func main() {
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
+		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:    webhookPort,
 			CertDir: webhookCertDir,

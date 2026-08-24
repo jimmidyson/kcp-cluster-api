@@ -53,6 +53,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
@@ -78,6 +79,7 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	endpointSliceName  string
+	startupTimeout     time.Duration
 	webhookWorkspace   string
 	engageTimeout      time.Duration
 	engagePollInterval time.Duration
@@ -86,6 +88,7 @@ var (
 	webhookCertName    string
 	webhookKeyName     string
 	healthAddr         string
+	metricsAddr        string
 
 	maxConcurrentReconciles int
 
@@ -112,6 +115,13 @@ func initFlags(fs *pflag.FlagSet) {
 		"Name of the APIExportEndpointSlice (in the workspace targeted by --kubeconfig/in-cluster config) "+
 			"whose virtual workspace URLs are used to discover and cache bound workspaces.")
 
+	fs.DurationVar(&startupTimeout, "startup-timeout", time.Minute,
+		"How long to wait for --endpoint-slice-name to have a virtual workspace endpoint before giving "+
+			"up. kcp gives an APIExport an endpoint only once a workspace has bound it, so a manager "+
+			"started before the first tenant - which is what a Deployment applied alongside everything "+
+			"else is - waits here. Raise it for an installation whose workspaces arrive later than its "+
+			"controllers; a process run by hand against a shard that is already set up wants the default.")
+
 	fs.StringVar(&webhookWorkspace, "webhook-workspace-cluster-name", "",
 		"Internal logical cluster name (not the human-readable workspace path) of the one workspace "+
 			"whose admission and conversion webhooks this process serves. Serving more than one "+
@@ -131,6 +141,11 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "Webhook cert name.")
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key", "Webhook key name.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+
+	fs.StringVar(&metricsAddr, "metrics-addr", ":8080",
+		"The address the metrics endpoint binds to. \"0\" disables it. It is a flag because a "+
+			"deployment scrapes it and a machine running several of these managers at once cannot give "+
+			"them all the same port - controller-runtime's default is one every manager would take.")
 
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultMaxConcurrentReconciles,
 		"Worker goroutines per controller, per workspace. This is paid once for every engaged workspace, "+
@@ -209,7 +224,7 @@ func main() {
 		setupLog.Error(err, "Unable to build a client for the shard")
 		os.Exit(1)
 	}
-	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, 0)
+	localCfg, err := providerwiring.VirtualWorkspaceConfig(ctx, shardClient, endpointSliceName, cfg, startupTimeout)
 	if err != nil {
 		setupLog.Error(err, "Unable to resolve the APIExport's virtual workspace")
 		os.Exit(1)
@@ -218,6 +233,7 @@ func main() {
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
+		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:     webhookPort,
 			CertDir:  webhookCertDir,
