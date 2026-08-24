@@ -284,3 +284,24 @@ func find[T client.Object](t *testing.T, objects []client.Object, name string) T
 	t.Fatalf("no %T named %q", zero, name)
 	return zero
 }
+
+// An installation with no credentials applies cleanly and does not work: the
+// shard serves with an empty certificate and refuses every client. Refusing to
+// build it is the cheaper failure.
+func TestObjectsRefusesAnInstallationThatWouldNotWork(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Objects(Options{}); err == nil {
+		t.Error("an installation with no credentials was built")
+	}
+
+	creds, err := NewCredentials(KcpName, ServerNames(DefaultNamespace), nil, time.Hour)
+	if err != nil {
+		t.Fatalf("issuing the credentials: %v", err)
+	}
+	// A typo in --storage-size reaches a Quantity parser, which panics. The
+	// flag is the place to hear about it.
+	if _, err := Objects(Options{Credentials: creds, StorageSize: "2 gigabytes"}); err == nil {
+		t.Error("an installation was built with a storage size that is not a quantity")
+	}
+}

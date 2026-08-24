@@ -35,6 +35,7 @@ limitations under the License.
 package kubedeploy
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -292,6 +293,19 @@ func (o *Options) applyDefaults() {
 	}
 }
 
+// validate refuses an installation that would apply cleanly and not work.
+func (o *Options) validate() error {
+	if len(o.Credentials.Serving.CertPEM) == 0 || len(o.Credentials.ClientCA) == 0 {
+		return errors.New("no credentials: build them with NewCredentials, or read an existing installation's with LoadCredentials")
+	}
+	// Parsed here rather than where it is used, because the only other place
+	// to find out is a panic inside a Quantity parser, from a typo in a flag.
+	if _, err := resource.ParseQuantity(o.StorageSize); err != nil {
+		return fmt.Errorf("the shard's storage size %q is not a quantity: %w", o.StorageSize, err)
+	}
+	return nil
+}
+
 // ServerURL is how everything inside the cluster reaches the shard.
 func ServerURL(namespace string) string {
 	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", KcpName, namespace, KcpPort)
@@ -320,6 +334,9 @@ func ServerNames(namespace string) []string {
 // the ordering to be enough.
 func Objects(opts Options) ([]client.Object, error) {
 	opts.applyDefaults()
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
 
 	managers, err := Managers(opts.Providers)
 	if err != nil {
