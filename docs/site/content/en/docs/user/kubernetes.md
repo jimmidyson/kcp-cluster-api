@@ -73,15 +73,8 @@ task demo:kubernetes            # deploy into whatever kubectl is pointed at
 That works where the cluster's nodes are the local daemon. Anywhere else,
 build to a registry they can pull from, as above.
 
-Everything lands in one namespace, `kcp-demo` by default, and
-
-```sh
-task demo:kubernetes:clean
-```
-
-takes it away again — the namespace and everything in it, the shard's volume
-included. After a kind run, `task demo:kubernetes:kind:clean` takes the whole
-cluster instead, which is the thing that run created.
+Everything lands in one namespace, `kcp-demo` by default. See
+[Cleaning up](#cleaning-up) for taking it away again.
 
 ## Talking to the deployed shard
 
@@ -226,6 +219,39 @@ port is gone, and the pod IP in every kubeconfig it wrote is wrong. Cluster API
 notices and reports the clusters as unreachable; nothing rebuilds them. That is
 a property of this backend rather than of the deployment — the docker backend
 provisions real containers and needs a container runtime the pod does not have.
+
+## Cleaning up
+
+Two ways down, depending on what the run created:
+
+```sh
+task demo:kubernetes:kind:clean   # after a kind run: the whole cluster
+task demo:kubernetes:clean        # against your own cluster: the namespace
+```
+
+| | `kind:clean` | `clean` |
+|---|---|---|
+| The kind cluster, and the images ko loaded into its nodes | removed | untouched |
+| The `kcp-demo` namespace, its pods and the shard's volume | removed with the cluster | removed |
+| `bin/kind-<cluster>.kubeconfig` | removed | — |
+| `.demo/kubernetes/*.kubeconfig` | removed | removed |
+
+The kubeconfigs go because they are credentials for a shard that no longer
+exists — held against a client CA nothing will accept again — and a private key
+left on disk to go stale is worse than a delete removing what its own deploy
+created. A redeploy issues a new set.
+
+What neither removes, deliberately:
+
+- **Images in your local Docker daemon**, if you ran `task image` without
+  `KO_REPO=kind.local`. They are yours to keep or `docker image rm`.
+- **The base images ko and kind pulled.** They are a cache, and the next run
+  wants them.
+- **A registry you pushed to.** Nothing here deletes anything remote.
+
+`task clean` is separate and is about this repository rather than a run: it
+removes `bin/` and the CRD manifests `task image` generates into the demo's
+kodata.
 
 ## What it deploys
 

@@ -147,6 +147,14 @@ func run(ctx context.Context, opts options, log logr.Logger) error {
 			return err
 		}
 		fmt.Printf("Deleted namespace %s.\n", opts.namespace)
+
+		removed, err := removeLocalKubeconfigs(opts)
+		if err != nil {
+			return err
+		}
+		if removed > 0 {
+			fmt.Printf("Removed %d kubeconfig(s) from %s.\n", removed, filepath.Dir(opts.kubeconfigOut))
+		}
 		return nil
 	}
 
@@ -461,6 +469,42 @@ func printNextSteps(opts options, kubeconfig string, ranDemo bool) {
 	fmt.Println()
 	fmt.Println("Take it all down again:")
 	fmt.Printf("  go run ./cmd/deploy --delete --namespace %s\n", opts.namespace)
+}
+
+// removeLocalKubeconfigs deletes the files a run wrote for a person to use.
+//
+// They are credentials, and once the installation is gone they are credentials
+// for a shard that does not exist - held against a client CA nothing will ever
+// accept again. Leaving a private key on disk to go stale is worse than the
+// small surprise of a delete removing what its own deploy created.
+//
+// Only the files this command writes, named rather than globbed, and the
+// directory itself only if that empties it.
+func removeLocalKubeconfigs(opts options) (int, error) {
+	if opts.kubeconfigOut == "" {
+		return 0, nil
+	}
+
+	dir := filepath.Dir(opts.kubeconfigOut)
+	paths := []string{opts.kubeconfigOut}
+	for _, set := range demo.PlannedKubeconfigs(
+		opts.parent, demo.DefaultWorkspacePrefix, splitUsers(opts.users), opts.workspaces) {
+		paths = append(paths, filepath.Join(dir, set.Name+".kubeconfig"))
+	}
+
+	var removed int
+	for _, path := range paths {
+		switch err := os.Remove(path); {
+		case err == nil:
+			removed++
+		case os.IsNotExist(err):
+		default:
+			return removed, fmt.Errorf("removing %s: %w", path, err)
+		}
+	}
+	// Only when it is empty, which is what os.Remove on a directory does.
+	_ = os.Remove(dir)
+	return removed, nil
 }
 
 // printWorkspaceKubeconfigs says which file walks the tree as whom.

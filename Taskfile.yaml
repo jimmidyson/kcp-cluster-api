@@ -258,11 +258,18 @@ tasks:
     deps: [tools:kind]
     vars:
       CLUSTER: '{{.CLUSTER | default "kcp-cluster-api"}}'
+      KUBECONFIG_DIR: '{{.KUBECONFIG_DIR | default ".demo/kubernetes"}}'
     cmds:
-      # The cluster rather than the namespace: everything the run created is
-      # in it, and it was created by the run.
+      # The cluster rather than the namespace: everything the run created is in
+      # it, and it was created by the run. The images ko built are in its nodes
+      # and go with it.
       - '{{.BIN}}/kind delete cluster --name {{.CLUSTER}}'
+      # And the credentials the run wrote for a person to use. They are
+      # credentials for a shard that no longer exists, and a private key left
+      # to go stale on disk is worse than a delete that removes what its own
+      # deploy created. `demo:kubernetes:clean` removes the same files.
       - rm -f {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig
+      - rm -rf {{.KUBECONFIG_DIR}}
 
   test:sweep:
     desc: Measure per-workspace resource usage across a sweep of active workspaces
@@ -688,6 +695,10 @@ tasks:
       - npm run build
 
   clean:
-    desc: Remove installed tooling
+    desc: Remove installed tooling and generated build inputs
     cmds:
       - rm -rf {{.BIN}}
+      # The CRD manifests `task image` copies out of the module cache for ko to
+      # put in the demo's image. Generated, gitignored, and re-made by the
+      # target that needs them.
+      - rm -rf {{.ROOT_DIR}}/cmd/demo/kodata
