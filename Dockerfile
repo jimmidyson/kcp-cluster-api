@@ -45,6 +45,7 @@ RUN set -eux; \
     for module in sigs.k8s.io/cluster-api \
                   sigs.k8s.io/cluster-api/test \
                   github.com/nutanix-cloud-native/cluster-api-provider-nutanix; do \
+      go mod download "${module}"; \
       dir="$(go list -m -f '{{.Dir}}' "${module}")"; \
       [ -n "${dir}" ]; \
       find "${dir}" -type f -path '*/config/crd/*' -name '*.yaml' | while read -r manifest; do \

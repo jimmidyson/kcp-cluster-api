@@ -26,6 +26,19 @@ in each, control planes ready 1/1, every machine ready and bootstrapped, and
 the isolation table with the shape a passing run has — each tenant reading
 their own workspaces and refused every other tenant's. The demo exited 0.
 
+## The image's manifest layer, checked without the image
+
+The other thing a container changes is where the CRD manifests come from:
+publishing an `APIExport` reads them out of the pinned modules, and a container
+has no Go toolchain to resolve them with. The image copies them in at build
+time and points `KCP_CLUSTER_API_MANIFEST_ROOT` at them.
+
+That step is a shell loop over the module cache, so it was run outside Docker
+exactly as the `Dockerfile` runs it — 75 files, 3.1 MB — and the packages that
+read them (`internal/capiexports`, `internal/kcpfixtures`,
+`internal/contractmetadata`) pass with the environment variable pointed at the
+result. What that does not cover is the `COPY` into the final stage.
+
 ## What it found
 
 Two faults, neither of which the single-process demo can have:

@@ -78,12 +78,18 @@ func ModuleDir(module string) (string, error) {
 		return dir, nil
 	}
 
-	// The manifest root wins where it is set, and is not checked for
-	// existence here: whether it holds the manifest asked for is
-	// ManifestPath's question, and it answers it by naming the path it looked
-	// at - which is the message somebody debugging an image needs.
+	// The manifest root wins where it is set. The directory has to be there:
+	// without that check any module name at all resolves to a path, and
+	// ModuleDir's contract - that it reports modules this build was compiled
+	// against and nothing else - would hold outside a container and not
+	// inside one, which is the difference least likely to be noticed.
 	if root := os.Getenv(ManifestRootEnv); root != "" {
 		dir := filepath.Join(root, filepath.FromSlash(module))
+		if _, err := os.Stat(dir); err != nil {
+			return "", fmt.Errorf("module %s has no manifests under %s=%s: %w; "+
+				"the image copies them in at build time, so a module missing here was not copied",
+				module, ManifestRootEnv, root, err)
+		}
 		moduleDirCache[module] = dir
 		return dir, nil
 	}

@@ -69,6 +69,24 @@ func TestModuleDirUnknownModule(t *testing.T) {
 	}
 }
 
+// The same contract under a manifest root: a module this build was not
+// compiled against does not resolve to a path just because a directory name
+// can be joined together. Without this, ModuleDir means one thing outside a
+// container and another inside one.
+func TestModuleDirUnknownModuleUnderAManifestRoot(t *testing.T) {
+	t.Setenv(ManifestRootEnv, t.TempDir())
+	resetModuleDirCache()
+
+	const unknown = "example.com/definitely/not/in/the/build/list"
+	got, err := ModuleDir(unknown)
+	if err == nil {
+		t.Fatalf("ModuleDir(%q) = %q, want an error", unknown, got)
+	}
+	if !strings.Contains(err.Error(), ManifestRootEnv) {
+		t.Errorf("error %q does not name %s, which is where it looked", err, ManifestRootEnv)
+	}
+}
+
 // A container has no Go toolchain and no module cache, so `go list -m` has
 // nothing to answer with - and the binary that publishes the APIExports reads
 // CRD manifests out of the pinned modules. The image copies them in at build
