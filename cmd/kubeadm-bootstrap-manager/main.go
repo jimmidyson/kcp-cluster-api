@@ -176,8 +176,9 @@ func main() {
 	fleet, err := coremanager.NewFleet(ctx, mgr, wildcardRegistry, coremanager.SetupOptions{
 		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
 		// The shard, not the manager's config: the ClusterCache reads
-		// kubeconfig Secrets from the workspaces themselves.
-		ShardConfig: cfg,
+		// kubeconfig Secrets from the workspaces themselves, and scopes the
+		// config to each one itself. See providerwiring.ShardConfig.
+		ShardConfig: providerwiring.ShardConfig(cfg),
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to build the fleet")

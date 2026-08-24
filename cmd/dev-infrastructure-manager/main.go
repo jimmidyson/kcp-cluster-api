@@ -192,7 +192,9 @@ func main() {
 	setupLog.Info("Wiring the fleet-wide dev infrastructure reconcilers")
 	fleet, err := coremanager.NewFleet(ctx, mgr, wildcardRegistry, coremanager.SetupOptions{
 		FleetMaxConcurrentReconciles: maxConcurrentReconciles,
-		ShardConfig:                  cfg,
+		// The shard, not the manager's config: what reads a tenant workspace
+		// scopes the config itself. See providerwiring.ShardConfig.
+		ShardConfig: providerwiring.ShardConfig(cfg),
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to build the fleet")

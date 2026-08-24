@@ -248,7 +248,13 @@ func main() {
 		// Secrets live in the workspaces on the shard, and the virtual
 		// workspace above serves only what the core export publishes and
 		// claims.
-		ShardConfig: cfg,
+		//
+		// Derived rather than passed straight through, because --kubeconfig
+		// addresses the workspace the exports live in and everything reading a
+		// tenant's Secrets scopes the config itself. See
+		// providerwiring.ShardConfig for what passing the scoped one looks
+		// like when it goes wrong.
+		ShardConfig: providerwiring.ShardConfig(cfg),
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to build the fleet")
