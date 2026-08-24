@@ -117,14 +117,17 @@ Two lookups get you in, both inside the workspace that owns the cluster:
 ```sh
 kubectl -n kcp-demo port-forward svc/kcp 6443:6443 &
 
-WS=https://localhost:6443/clusters/root:capi-demo:alice:capi-demo-1
-KC=".demo/kubernetes/kcp.kubeconfig --context base"
+KUBECONFIG_FILE=.demo/kubernetes/kcp.kubeconfig     # written by the deploy run
+WORKSPACE=https://localhost:6443/clusters/root:capi-demo:alice:capi-demo-1
 
 # the port that provider chose for this cluster
-kubectl --kubeconfig $KC --server $WS -n default   get cluster demo-00 -o jsonpath='{.spec.controlPlaneEndpoint}'
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context base --server "$WORKSPACE" \
+  -n default get cluster demo-00 -o jsonpath='{.spec.controlPlaneEndpoint}'
 
 # the kubeconfig the control plane provider wrote for it
-kubectl --kubeconfig $KC --server $WS -n default   get secret demo-00-kubeconfig -o jsonpath='{.data.value}' | base64 -d > /tmp/demo-00.kubeconfig
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context base --server "$WORKSPACE" \
+  -n default get secret demo-00-kubeconfig -o jsonpath='{.data.value}' \
+  | base64 -d > /tmp/demo-00.kubeconfig
 ```
 
 **From inside the cluster**, that kubeconfig works unchanged: it names the
