@@ -30,45 +30,50 @@ and that record disagree.
 
 ## Getting started
 
-You need a Go toolchain (the version in [`go.mod`](go.mod)) and, for the
-integration tests, a container runtime. Nothing else: tooling installs itself
-at pinned versions — `task test:integration` downloads the pinned kcp server
-binary into `bin/` first.
+You need a Go toolchain (the version in [`go.mod`](go.mod)) and a container
+runtime. Nothing else: tooling installs itself at pinned versions — the kcp
+server binary, kind and ko are downloaded into `bin/` by the targets that need
+them.
 
 ```sh
 go install github.com/go-task/task/v3/cmd/task@latest
 
-task --list      # what you can run
-task demo        # see it work: ready clusters in several workspaces, one manager
-task check       # the fast subset: build, lint, unit tests
-task verify      # everything, including integration tests
+task --list                  # what you can run
+task demo:kubernetes:kind    # see it work, deployed: a kind cluster, kcp and every provider as pods
+task check                   # the fast subset: build, lint, unit tests
+task verify                  # everything, including integration tests
 ```
 
-`task demo` is the quickest answer to what this repository does. It starts its
-own single-shard kcp server, creates two workspaces bound to each provider's
-`APIExport`, runs the same controllers the four manager binaries run, and
-builds a cluster in each — a control plane machine and a worker apiece, waited
-on until every one of them is ready. About a minute, no container runtime, no
-images pulled. See [the demo docs](docs/site/content/en/docs/user/demo.md).
+`task demo:kubernetes:kind` is the answer to what this repository does, in the
+shape an installation has. It creates a kind cluster, builds this repository's
+images into it with [ko](https://ko.build), and deploys a kcp shard as a
+`StatefulSet` with **one `Deployment` per Cluster API provider** — then runs
+the demo as a `Job` against them: two tenants, a workspace each, and a ready
+cluster in every one, control plane machine and worker apiece. Six pods rather
+than one process, each manager holding only its own credentials and told about
+no workspace. See [On Kubernetes](docs/site/content/en/docs/user/kubernetes.md).
 
-`task demo:kubernetes:kind` is the same demo in the topology an installation
-has: a kcp shard as a `StatefulSet`, one `Deployment` per provider, and the
-demo itself as a `Job` — six pods rather than one process, each manager
-holding only its own credentials. That needs a container runtime, and it is
-where the parts that only a deployment meets get exercised: the shard's
-certificate naming its Service, credentials that exist before the shard does,
-and managers that start before anything they watch exists. See
-[On Kubernetes](docs/site/content/en/docs/user/kubernetes.md).
+```sh
+task demo        # the same demo in one process, in about a minute
+```
+
+`task demo` is the inner-loop version of it: one process, its own kcp server
+under `.demo/`, no container runtime and no images. It demonstrates the same
+wiring and is the faster thing to run while changing code — but it cannot show
+whether that wiring survives being split across pods, which is the question
+the deployed run answers, and which is where three of this project's bugs were
+found. See [the demo in one process](docs/site/content/en/docs/user/demo.md).
 
 Every operation is a named `task` target, and CI invokes those same targets
 and nothing else — so anything CI does is reproducible locally by name.
 
 | Target | What it does |
 |---|---|
-| `demo` | Build a ready cluster in each of several kcp workspaces from one manager, in one command |
-| `demo:kubernetes:kind` | The same demo on Kubernetes: a kind cluster, a kcp shard and one deployment per provider, as pods |
+| `demo:kubernetes:kind` | **The demo.** A kind cluster, a kcp shard and one deployment per provider, as pods |
 | `demo:kubernetes` | The same, against a cluster you already have |
 | `demo:kubernetes:clean` | Remove a deployed demo — the namespace and everything in it |
+| `demo:kubernetes:kind:clean` | Remove the kind cluster a kind run created |
+| `demo` | The same demo in one process, in about a minute, with no container runtime |
 | `image` | Build this repository's images — one per binary, with ko |
 | `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |

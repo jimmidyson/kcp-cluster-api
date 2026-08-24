@@ -100,8 +100,10 @@ sh "$S/probes.sh"
 
 # Reaching a workload cluster, the way the deployment's printed instructions
 # say to: the endpoint off the Cluster, the kubeconfig out of the workspace,
-# and the same credentials again with the host rewritten to localhost, which is
-# what a port-forward gives you. The program is not committed - see README.md.
+# and the same credentials again through what a port-forward would look like.
+echo "--- walking the tree as each tenant ---"
+"$S/bin/tenantcheck" --kcp-kubeconfig "$S/base.kubeconfig" --dir "$S/out" || echo "tenant walk FAILED"
+
 echo "--- workload cluster ---"
 "$S/bin/workloadcheck" \
   --kcp-kubeconfig "$S/base.kubeconfig" \

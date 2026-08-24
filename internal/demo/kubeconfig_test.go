@@ -19,6 +19,7 @@ package demo
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -294,5 +295,55 @@ func TestWorkspaceKubeconfigsWithoutUsers(t *testing.T) {
 	}
 	if len(sets[0].Entries) != 2 {
 		t.Fatalf("got %d contexts, want root and the workspace: %+v", len(sets[0].Entries), sets[0].Entries)
+	}
+}
+
+// A run that happened somewhere else deserves the same files as one that
+// happened here. The deployed demo runs in a Job, in a pod that exits, so the
+// kubeconfigs it would have written are gone - the deployment writes them
+// instead, and has only the plan to write them from.
+//
+// This asserts the two agree, which is what keeps "what files a run deserves"
+// one description rather than two.
+func TestPlannedKubeconfigsMatchARunsOwn(t *testing.T) {
+	t.Parallel()
+
+	const (
+		parent = "root"
+		prefix = DefaultWorkspacePrefix
+	)
+	users := []string{"alice", "bob"}
+
+	// The Result a run with this shape produces.
+	result := Result{Parent: parent, Org: OrgPath(parent, prefix)}
+	for _, name := range users {
+		result.Users = append(result.Users, User{Name: name, Home: HomePath(parent, prefix, name)})
+	}
+	for _, plan := range PlanWorkspaces(parent, prefix, users, 4) {
+		result.Workspaces = append(result.Workspaces, Workspace{Path: plan.Path, Owner: plan.Owner})
+	}
+
+	want := WorkspaceKubeconfigs(result)
+	got := PlannedKubeconfigs(parent, prefix, users, 4)
+
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("the planned kubeconfigs differ from the ones a run writes:\n  run:     %+v\n  planned: %+v", want, got)
+	}
+}
+
+// A run with no tenants has no tenant files, and the operator's holds the
+// workspaces anyway.
+func TestPlannedKubeconfigsWithoutTenants(t *testing.T) {
+	t.Parallel()
+
+	sets := PlannedKubeconfigs("root", DefaultWorkspacePrefix, nil, 2)
+	if len(sets) != 1 {
+		t.Fatalf("got %d files, want only the operator's", len(sets))
+	}
+	if sets[0].Name != OperatorKubeconfigName {
+		t.Errorf("the only file is %q, want %q", sets[0].Name, OperatorKubeconfigName)
+	}
+	if len(sets[0].Entries) == 0 {
+		t.Error("the operator's file has no workspaces in it")
 	}
 }

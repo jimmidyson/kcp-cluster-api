@@ -85,6 +85,30 @@ func WorkspaceKubeconfigs(result Result) []KubeconfigSet {
 	return sets
 }
 
+// PlannedKubeconfigs is WorkspaceKubeconfigs for a run this process did not
+// make: it derives the tree from the same plan the run builds it from, rather
+// than from the run's result.
+//
+// The deployed demo needs it. That run happens in a Job, in a pod that exits,
+// so the files it writes go with it - and the deployment, which has the
+// credentials and outlives the run, writes them instead. Deriving them from
+// the plan rather than reading the server keeps the two kinds of run writing
+// the same files, which is what TestPlannedKubeconfigsMatchARunsOwn holds
+// them to.
+func PlannedKubeconfigs(parent, prefix string, users []string, workspaces int) []KubeconfigSet {
+	result := Result{Parent: parent}
+	if len(users) > 0 {
+		result.Org = OrgPath(parent, prefix)
+		for _, name := range users {
+			result.Users = append(result.Users, User{Name: name, Home: HomePath(parent, prefix, name)})
+		}
+	}
+	for _, plan := range PlanWorkspaces(parent, prefix, users, workspaces) {
+		result.Workspaces = append(result.Workspaces, Workspace{Path: plan.Path, Owner: plan.Owner})
+	}
+	return WorkspaceKubeconfigs(result)
+}
+
 // operatorEntries is every workspace in the tree, top down, as the admin.
 func operatorEntries(result Result) []KubeconfigEntry {
 	var (

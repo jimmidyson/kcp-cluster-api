@@ -129,7 +129,7 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=40m -p 2 ./test/integration ./test/integration/providerwiring/... ./test/integration/demo/... ./test/integration/claims/... ./test/integration/onboarding/... ./test/integration/bootstrap/... ./test/integration/teardown/...
 
   demo:
-    desc: Build a ready cluster in each of several kcp workspaces from one manager, and watch it happen
+    desc: The same demo in one process, in about a minute, with no container runtime
     deps: [tools]
     # Not part of `verify`: the demo is for a person to watch, and what it
     # demonstrates is asserted by ./test/integration/demo, which verify does
@@ -219,7 +219,7 @@ tasks:
       - go run ./cmd/deploy {{.DEPLOY_FLAGS}}
 
   demo:kubernetes:kind:
-    desc: Create a kind cluster, build the images into it, and run the demo there
+    desc: The demo, deployed - a kind cluster, kcp and every provider as pods
     deps: [tools:kind]
     vars:
       CLUSTER: '{{.CLUSTER | default "kcp-cluster-api"}}'

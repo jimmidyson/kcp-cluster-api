@@ -23,7 +23,10 @@ having to reconstruct the answer from the commit log.
   The objects are built in Go from the provider list (`internal/kubedeploy`)
   and applied by `cmd/deploy`, or printed as YAML for an installation that
   applies its own. `task demo:kubernetes:kind` is the whole thing from
-  nothing.
+  nothing, and is now **the** demo this project points at: `task demo` stays
+  as the inner-loop version - one process, no container runtime, about a
+  minute - but the run that says whether this works, rather than whether it
+  still compiles, is the deployed one.
 
   **The images are ko's, one per binary, and the shard's is upstream's.** There
   is nothing in them that is not a Go binary this repository builds, which is

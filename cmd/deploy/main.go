@@ -284,7 +284,14 @@ func run(ctx context.Context, opts options, log logr.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	// After the run, because until the workspaces exist these address nothing.
+	tenants, err := writeWorkspaceKubeconfigs(opts, written)
+	if err != nil {
+		return err
+	}
 	printNextSteps(opts, written, true)
+	printWorkspaceKubeconfigs(tenants)
 	if !result.Succeeded {
 		return fmt.Errorf("the demo run failed: %s", result.Reason)
 	}
@@ -383,6 +390,46 @@ func writeLocalKubeconfig(opts options, creds kubedeploy.Credentials) (string, e
 	return opts.kubeconfigOut, nil
 }
 
+// writtenKubeconfig is one file the run produced, and who it is for.
+type writtenKubeconfig struct {
+	path  string
+	owner string
+}
+
+// writeWorkspaceKubeconfigs writes the files a person walks the tree with: one
+// holding every workspace as the admin, and one per tenant holding theirs,
+// browsed as them.
+//
+// The local demo writes these itself. The deployed one cannot: it runs in a
+// Job whose pod exits, taking anything it wrote with it. So they are written
+// here, from the same plan the run creates the tree from and the credentials
+// this command generated - addressed at localhost, like everything else a
+// person reaches through the port-forward.
+//
+// One file per tenant rather than one file with everybody in it, for the
+// reason demo.WorkspaceKubeconfigs gives: being another tenant is being handed
+// another tenant's kubeconfig, not picking them from a menu.
+func writeWorkspaceKubeconfigs(opts options, source string) ([]writtenKubeconfig, error) {
+	if source == "" || !opts.runDemo {
+		return nil, nil
+	}
+
+	dir := filepath.Dir(source)
+	var written []writtenKubeconfig
+	for _, set := range demo.PlannedKubeconfigs(
+		opts.parent, demo.DefaultWorkspacePrefix, splitUsers(opts.users), opts.workspaces) {
+		if len(set.Entries) == 0 {
+			continue
+		}
+		path := filepath.Join(dir, set.Name+".kubeconfig")
+		if err := demo.WriteWorkspaceKubeconfig(path, source, set.Entries); err != nil {
+			return nil, err
+		}
+		written = append(written, writtenKubeconfig{path: path, owner: set.Owner})
+	}
+	return written, nil
+}
+
 func printNextSteps(opts options, kubeconfig string, ranDemo bool) {
 	fmt.Println()
 	fmt.Println("Everything above ran in pods. What is in the cluster now:")
@@ -414,6 +461,28 @@ func printNextSteps(opts options, kubeconfig string, ranDemo bool) {
 	fmt.Println()
 	fmt.Println("Take it all down again:")
 	fmt.Printf("  go run ./cmd/deploy --delete --namespace %s\n", opts.namespace)
+}
+
+// printWorkspaceKubeconfigs says which file walks the tree as whom.
+func printWorkspaceKubeconfigs(written []writtenKubeconfig) {
+	if len(written) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("Walk the workspaces, one context per workspace, with the port-forward running:")
+	for _, file := range written {
+		switch file.owner {
+		case "":
+			fmt.Printf("  kubectl --kubeconfig %s get-contexts   # every workspace, as the admin\n", file.path)
+		default:
+			fmt.Printf("  kubectl --kubeconfig %s get-contexts   # what %s can reach, as %s\n",
+				file.path, file.owner, file.owner)
+		}
+	}
+	fmt.Println("A context is a workspace, so switching workspace is --context, and being a")
+	fmt.Println("tenant is that tenant's file. Headlamp reads them as one cluster per")
+	fmt.Println("workspace - see docs/site/content/en/docs/user/headlamp.md.")
 }
 
 // printWorkloadClusterSteps says how to reach the clusters the run built.

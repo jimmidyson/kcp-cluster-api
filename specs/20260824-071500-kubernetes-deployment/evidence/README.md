@@ -44,6 +44,23 @@ PATH=/nonexistent`, which is the container's situation — no Go toolchain to
 resolve a module with. What that does not cover is ko's own copy into the
 image.
 
+## Walking the tree as each tenant
+
+The deployed run writes a kubeconfig per audience the way the local demo does
+— one holding every workspace as the admin, one per tenant holding theirs —
+and the run checks what each of them can actually read. The admin's file holds
+six contexts and reads the whole tree; alice's holds two and reads one
+workspace and one cluster; bob's holds his own two; and alice's credential,
+pointed by hand at bob's home, is refused.
+
+One row in that output is worth reading twice: as the admin, listing
+workspaces inside a leaf workspace answers "0 workspaces", and as alice the
+same request is refused, so the check falls through to clusters and finds one.
+Nothing grants a tenant kcp's tenancy types inside their own workspace — their
+role covers what Cluster API serves — which is the same refusal
+[the UI page](../../../docs/site/content/en/docs/user/headlamp.md) describes
+rendering.
+
 ## Reaching a workload cluster
 
 The run ends by doing what the deployment tells a person to do with the

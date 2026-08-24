@@ -1,14 +1,21 @@
 ---
-title: Demo
-description: Build a ready cluster in each of several kcp workspaces from one manager, in one command.
-weight: 5
+title: The demo, in one process
+description: The same demo in a single process, in about a minute, with no container runtime.
+weight: 6
 ---
 
 ```sh
 task demo
 ```
 
-That starts a single-shard kcp server, publishes **one `APIExport` per
+The inner-loop demo: everything in one process, in about a minute, with no
+container runtime and no images pulled. It is the faster thing to run while
+changing code. [The deployed demo](kubernetes.md) is the same run in the shape
+an installation has — a kcp shard and one deployment per provider, as pods —
+and is the one to reach for when the question is whether this works rather
+than whether it still compiles.
+
+`task demo` starts a single-shard kcp server, publishes **one `APIExport` per
 provider** out of its `root` workspace along with the **`cluster-api`
 `WorkspaceType`** tenants onboard with, gives **two users a workspace each**,
 runs each provider's controllers — the same wiring each provider's own

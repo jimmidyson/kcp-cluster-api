@@ -1,16 +1,16 @@
 WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
-root:capi-demo:alice:capi-demo-1  1mcj5maubksfhgm9  demo-00  yes          yes    cluster ready
-root:capi-demo:bob:capi-demo-1    2xfzvyspuigglbjs  demo-00  yes          yes    cluster ready
+root:capi-demo:alice:capi-demo-1  1brado0n3njw4j5z  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    2zfmc4sd9gzt9ee2  demo-00  yes          yes    cluster ready
 
 WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
 root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
 root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
 
 WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
-root:capi-demo:alice:capi-demo-1  demo-00-cp-9l86r        yes           yes    demo-00-cp-9l86r        Running  machine ready
-root:capi-demo:alice:capi-demo-1  demo-00-md-b47bj-k2lbr  yes           yes    demo-00-md-b47bj-k2lbr  Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-cp-tmllm        yes           yes    demo-00-cp-tmllm        Running  machine ready
-root:capi-demo:bob:capi-demo-1    demo-00-md-bvrl5-mxpnq  yes           yes    demo-00-md-bvrl5-mxpnq  Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-cp-sdbdh        yes           yes    demo-00-cp-sdbdh        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-hzjrb-pj2wq  yes           yes    demo-00-md-hzjrb-pj2wq  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-f79br        yes           yes    demo-00-cp-f79br        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-5vqkc-jg2p8  yes           yes    demo-00-md-5vqkc-jg2p8  Running  machine ready
 
 How each workspace came to serve Cluster API. Nothing in the last three
 columns was written out by hand:
@@ -94,15 +94,42 @@ bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluste
 9450/healthz -> 200
 9450/readyz -> 200
 
+--- walking the tree as each tenant ---
+workspaces.kubeconfig: 6 contexts
+  root
+  root:capi-demo
+  root:capi-demo:alice
+  root:capi-demo:bob
+  root:capi-demo:alice:capi-demo-1
+  root:capi-demo:bob:capi-demo-1
+alice.kubeconfig: 2 contexts
+  root:capi-demo:alice
+  root:capi-demo:alice:capi-demo-1
+bob.kubeconfig: 2 contexts
+  root:capi-demo:bob
+  root:capi-demo:bob:capi-demo-1
+  workspaces     root                                     1 workspaces
+  workspaces     root:capi-demo                           2 workspaces
+  workspaces     root:capi-demo:alice                     1 workspaces
+  workspaces     root:capi-demo:bob                       1 workspaces
+  workspaces     root:capi-demo:alice:capi-demo-1         0 workspaces
+  workspaces     root:capi-demo:bob:capi-demo-1           0 workspaces
+  alice          root:capi-demo:alice                     1 workspaces
+  alice          root:capi-demo:alice:capi-demo-1         1 clusters
+  bob            root:capi-demo:bob                       1 workspaces
+  bob            root:capi-demo:bob:capi-demo-1           1 clusters
+alice's credential in bob's workspace, which no file offers:
+  alice -> root:capi-demo:bob: refused
+--- workload cluster ---
 --- workload cluster ---
 control plane endpoint: 127.0.0.1:20000
 kubeconfig secret: demo-00-kubeconfig (5526 bytes)
 as written, server: https://127.0.0.1:20000
   as written (the provider's own address): 2 nodes
-    demo-00-cp-9l86r
-    demo-00-md-b47bj-k2lbr
+    demo-00-cp-sdbdh
+    demo-00-md-hzjrb-pj2wq
 through a port-forward, server: https://localhost:20000
   through a port-forward (localhost): 2 nodes
-    demo-00-cp-9l86r
-    demo-00-md-b47bj-k2lbr
+    demo-00-cp-sdbdh
+    demo-00-md-hzjrb-pj2wq
 demo exited 0

@@ -1,7 +1,7 @@
 ---
-title: On Kubernetes
-description: Run the demo as pods - a kcp shard and one deployment per provider - instead of as processes on your machine.
-weight: 7
+title: The demo, deployed
+description: The demo in the shape an installation has - a kcp shard and one deployment per provider, as pods on Kubernetes.
+weight: 5
 ---
 
 {{% pageinfo color="info" %}}
@@ -102,6 +102,68 @@ contexts are the ones a kcp admin kubeconfig has — `base` for the
 cluster-unaware endpoint, `root` scoped to the workspace the exports live in,
 `shard-base` for the privileged credential — because everything that reads one
 of these already knows those names.
+
+## Walking the workspaces as each tenant
+
+The run writes three more kubeconfigs beside that one, and they are how you
+move around the tree:
+
+```
+.demo/kubernetes/kcp.kubeconfig          the shard, as the admin
+.demo/kubernetes/workspaces.kubeconfig   every workspace, as the admin
+.demo/kubernetes/alice.kubeconfig        what alice can reach, as alice
+.demo/kubernetes/bob.kubeconfig          what bob can reach, as bob
+```
+
+Each holds **one context per workspace, named after the workspace path**, so
+switching workspace is `--context` and nothing else:
+
+```sh
+kubectl -n kcp-demo port-forward svc/kcp 6443:6443 &
+
+kubectl --kubeconfig .demo/kubernetes/workspaces.kubeconfig get-contexts
+kubectl --kubeconfig .demo/kubernetes/workspaces.kubeconfig \
+  --context root:capi-demo get workspaces
+kubectl --kubeconfig .demo/kubernetes/alice.kubeconfig \
+  --context root:capi-demo:alice get workspaces
+kubectl --kubeconfig .demo/kubernetes/alice.kubeconfig \
+  --context root:capi-demo:alice:capi-demo-1 get clusters,machines
+```
+
+What each file can reach, as kcp answered it in a real run:
+
+| File | Context | Answer |
+|---|---|---|
+| `workspaces` | `root` | 1 workspace |
+| `workspaces` | `root:capi-demo` | 2 workspaces |
+| `workspaces` | `root:capi-demo:alice` | 1 workspace |
+| `alice` | `root:capi-demo:alice` | 1 workspace |
+| `alice` | `root:capi-demo:alice:capi-demo-1` | 1 cluster |
+| `bob` | `root:capi-demo:bob:capi-demo-1` | 1 cluster |
+
+**A tenant's file has no context for another tenant's workspaces, and that is
+the isolation rather than an omission.** Alice's file holds her home and the
+workspaces in it; being bob is loading bob's file. Pointing alice's credential
+at bob's home anyway — which takes editing the file by hand — is refused by
+kcp, which is what [the demo's own access table](demo.md#two-users-and-what-neither-can-see)
+reports at the end of every run.
+
+Two things worth knowing before reading too much into it:
+
+- **The tenants are impersonated, not authenticated.** Each tenant file
+  carries the shard admin's credential and an `act-as`, so kcp evaluates the
+  whole request as alice and every refusal above is a real RBAC denial — but
+  there is no identity provider here, and anyone holding the file could edit
+  the impersonation out. That is the right shape for demonstrating
+  *authorization*, and it is not a statement about how an installation
+  authenticates.
+- **A tenant cannot list the workspaces inside their own workspace.** Nothing
+  grants it: their role covers what Cluster API serves, not kcp's tenancy
+  types. So `get workspaces` works in alice's *home* and is refused one level
+  down, where `get clusters` is what there is to ask.
+
+[The demo in a UI](headlamp.md) is the same files in Headlamp, which reads
+each as one cluster per workspace.
 
 ## Talking to a workload cluster
 
