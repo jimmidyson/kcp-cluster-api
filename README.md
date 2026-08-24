@@ -51,12 +51,25 @@ builds a cluster in each — a control plane machine and a worker apiece, waited
 on until every one of them is ready. About a minute, no container runtime, no
 images pulled. See [the demo docs](docs/site/content/en/docs/user/demo.md).
 
+`task demo:kubernetes:kind` is the same demo in the topology an installation
+has: a kcp shard as a `StatefulSet`, one `Deployment` per provider, and the
+demo itself as a `Job` — six pods rather than one process, each manager
+holding only its own credentials. That needs a container runtime, and it is
+where the parts that only a deployment meets get exercised: the shard's
+certificate naming its Service, credentials that exist before the shard does,
+and managers that start before anything they watch exists. See
+[On Kubernetes](docs/site/content/en/docs/user/kubernetes.md).
+
 Every operation is a named `task` target, and CI invokes those same targets
 and nothing else — so anything CI does is reproducible locally by name.
 
 | Target | What it does |
 |---|---|
 | `demo` | Build a ready cluster in each of several kcp workspaces from one manager, in one command |
+| `demo:kubernetes:kind` | The same demo on Kubernetes: a kind cluster, a kcp shard and one deployment per provider, as pods |
+| `demo:kubernetes` | The same, against a cluster you already have |
+| `demo:kubernetes:clean` | Remove a deployed demo — the namespace and everything in it |
+| `image` | Build the container image every deployment runs from |
 | `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |
 | `build` | Compile all binaries |
@@ -103,11 +116,12 @@ done-condition. `task check` is the sub-minute subset for the inner loop.
 
 ```
 Taskfile.yaml     the named operations
+Dockerfile        the image a deployment runs: every binary, plus pinned kcp
 AGENTS.md         the rules, for people and agents alike
 DRIFT.md          what we carry against upstream, and why
 cmd/              binaries: one manager per Cluster API provider
                   (core, kubeadm-bootstrap, kubeadm-control-plane,
-                  dev-infrastructure), plus demo, verify, drift
+                  dev-infrastructure), plus demo, deploy, verify, drift
 internal/         implementation packages
 test/integration/ integration tests against a real kcp server
 docs/             ADRs, design notes and the documentation site

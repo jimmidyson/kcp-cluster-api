@@ -16,6 +16,9 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # kind, for `demo:kubernetes:kind`. Pinned for the same reason everything
+  # else here is, and installed with the Go toolchain and nothing else.
+  KIND_VERSION: v0.30.0
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -135,6 +138,72 @@ tasks:
       DEMO_FLAGS: '{{.DEMO_FLAGS | default ""}}'
     cmds:
       - PATH="{{.BIN}}:$PATH" go run ./cmd/demo {{.DEMO_FLAGS}}
+
+  image:
+    desc: Build the container image every deployment runs from
+    # One image, holding every binary in this repository and the pinned kcp
+    # server - see the Dockerfile. Tagged :latest by default because that is
+    # what cmd/deploy asks for, so `task image` then `task demo:kubernetes`
+    # needs no flags. Override with IMAGE=... for a registry of your own, and
+    # pass the same value to deploy.
+    vars:
+      IMAGE: '{{.IMAGE | default "ghcr.io/jimmidyson/kcp-cluster-api:latest"}}'
+    cmds:
+      - docker build --build-arg KCP_VERSION={{.KCP_VERSION}} --tag {{.IMAGE}} {{.ROOT_DIR}}
+
+  demo:kubernetes:
+    desc: Run the demo on a Kubernetes cluster - a kcp shard and one deployment per provider, as pods
+    # Against whatever kubectl is pointed at. `task demo:kubernetes:kind`
+    # creates a cluster first for anyone who has none.
+    #
+    # Not part of `verify`, for the same reason `demo` is not: it is for a
+    # person to watch, and it needs a Kubernetes cluster and a container
+    # runtime that a verification run may not have.
+    vars:
+      DEPLOY_FLAGS: '{{.DEPLOY_FLAGS | default ""}}'
+    cmds:
+      - go run ./cmd/deploy {{.DEPLOY_FLAGS}}
+
+  demo:kubernetes:kind:
+    desc: Create a kind cluster, load the image into it, and run the demo there
+    deps: [tools:kind, image]
+    vars:
+      CLUSTER: '{{.CLUSTER | default "kcp-cluster-api"}}'
+      IMAGE: '{{.IMAGE | default "ghcr.io/jimmidyson/kcp-cluster-api:latest"}}'
+      DEPLOY_FLAGS: '{{.DEPLOY_FLAGS | default ""}}'
+    cmds:
+      # Idempotent: a cluster that is already there is used rather than
+      # rebuilt, because rebuilding it is a minute nobody asked for.
+      - '{{.BIN}}/kind get clusters | grep -qx {{.CLUSTER}} || {{.BIN}}/kind create cluster --name {{.CLUSTER}}'
+      # Loaded rather than pulled. The image was built here and is in no
+      # registry, which is also why the deployment asks for IfNotPresent.
+      - '{{.BIN}}/kind load docker-image {{.IMAGE}} --name {{.CLUSTER}}'
+      # Its own kubeconfig rather than the caller's current context, so that
+      # `task demo:kubernetes:kind` cannot deploy into whatever cluster
+      # somebody happened to be pointed at.
+      - '{{.BIN}}/kind get kubeconfig --name {{.CLUSTER}} > {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig'
+      - go run ./cmd/deploy --kubeconfig {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig --image {{.IMAGE}} {{.DEPLOY_FLAGS}}
+
+  demo:kubernetes:clean:
+    desc: Delete the deployed demo - the namespace and everything in it
+    # Against whatever kubectl is pointed at, like `demo:kubernetes`. After a
+    # kind run, either pass that cluster's kubeconfig through DEPLOY_FLAGS or
+    # use `demo:kubernetes:kind:clean`, which takes the cluster with it.
+    vars:
+      DEPLOY_FLAGS: '{{.DEPLOY_FLAGS | default ""}}'
+    cmds:
+      - go run ./cmd/deploy --delete {{.DEPLOY_FLAGS}}
+
+  demo:kubernetes:kind:clean:
+    desc: Delete the kind cluster a kind demo run created, and everything in it
+    deps: [tools:kind]
+    vars:
+      CLUSTER: '{{.CLUSTER | default "kcp-cluster-api"}}'
+    cmds:
+      # The cluster rather than the namespace: everything the run created is
+      # in it, and it was created by the run.
+      - '{{.BIN}}/kind delete cluster --name {{.CLUSTER}}'
+      - rm -f {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig
 
   test:sweep:
     desc: Measure per-workspace resource usage across a sweep of active workspaces
@@ -259,6 +328,16 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:kind:
+    desc: Install the pinned kind binary into bin/
+    # Only `demo:kubernetes:kind` needs it, so it is not in `tools`: a
+    # verification run should not install a cluster tool it never uses.
+    status:
+      - test -x {{.BIN}}/kind
+    cmds:
+      - mkdir -p {{.BIN}}
+      - GOBIN={{.BIN}} go install sigs.k8s.io/kind@{{.KIND_VERSION}}
 
   tools:kcp:
     desc: Download the pinned kcp server binary into bin/

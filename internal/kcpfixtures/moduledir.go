@@ -38,10 +38,33 @@ const (
 	ModuleCAPX = "github.com/nutanix-cloud-native/cluster-api-provider-nutanix"
 )
 
+// ManifestRootEnv names a directory holding the manifests this project reads
+// out of its pinned modules, laid out one directory per module path.
+//
+// It exists for the container. `go list -m` needs a Go toolchain and a module
+// cache, and an image that shipped either of those to publish an APIExport
+// would be shipping a build environment to run a binary. So the image copies
+// the manifests in - during the same build that compiles the binaries, out of
+// the same module cache they were compiled against, which is what keeps the
+// guarantee ModuleDir describes - and points this at them.
+//
+// Unset, nothing changes: the module directory is resolved from the build
+// list, which is what every run outside a container does.
+const ManifestRootEnv = "KCP_CLUSTER_API_MANIFEST_ROOT"
+
 var (
 	moduleDirMu    sync.Mutex
 	moduleDirCache = map[string]string{}
 )
+
+// resetModuleDirCache exists for the tests that change ManifestRootEnv: the
+// cache is keyed by module and would otherwise answer with a directory
+// resolved under the previous root.
+func resetModuleDirCache() {
+	moduleDirMu.Lock()
+	defer moduleDirMu.Unlock()
+	moduleDirCache = map[string]string{}
+}
 
 // ModuleDir returns the on-disk directory of a module in this module's build
 // list, as reported by the Go toolchain. Because the module is resolved from
@@ -52,6 +75,16 @@ func ModuleDir(module string) (string, error) {
 	moduleDirMu.Lock()
 	defer moduleDirMu.Unlock()
 	if dir, ok := moduleDirCache[module]; ok {
+		return dir, nil
+	}
+
+	// The manifest root wins where it is set, and is not checked for
+	// existence here: whether it holds the manifest asked for is
+	// ManifestPath's question, and it answers it by naming the path it looked
+	// at - which is the message somebody debugging an image needs.
+	if root := os.Getenv(ManifestRootEnv); root != "" {
+		dir := filepath.Join(root, filepath.FromSlash(module))
+		moduleDirCache[module] = dir
 		return dir, nil
 	}
 

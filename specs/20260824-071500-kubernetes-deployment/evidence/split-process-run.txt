@@ -1,0 +1,46 @@
+WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
+WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp-qxpzc        yes           yes    demo-00-cp-qxpzc        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-zc7wg-zp2pt  yes           yes    demo-00-md-zc7wg-zp2pt  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-jnpvr        yes           yes    demo-00-cp-jnpvr        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-nnlvg-jvcbd  yes           yes    demo-00-md-nnlvg-jvcbd  Running  machine ready
+
+WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  34fax3od8ov1b458  demo-00  yes          yes    cluster ready
+root:capi-demo:bob:capi-demo-1    2qbqti98bgsu4oav  demo-00  yes          yes    cluster ready
+
+WORKSPACE                         CONTROL PLANE  INITIALIZED  READY  DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp     yes          1/1    control plane ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp     yes          1/1    control plane ready
+
+WORKSPACE                         MACHINE                 BOOTSTRAPPED  READY  DATA SECRET             PHASE    DETAIL
+root:capi-demo:alice:capi-demo-1  demo-00-cp-qxpzc        yes           yes    demo-00-cp-qxpzc        Running  machine ready
+root:capi-demo:alice:capi-demo-1  demo-00-md-zc7wg-zp2pt  yes           yes    demo-00-md-zc7wg-zp2pt  Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-cp-jnpvr        yes           yes    demo-00-cp-jnpvr        Running  machine ready
+root:capi-demo:bob:capi-demo-1    demo-00-md-nnlvg-jvcbd  yes           yes    demo-00-md-nnlvg-jvcbd  Running  machine ready
+
+How each workspace came to serve Cluster API. Nothing in the last three
+columns was written out by hand:
+WORKSPACE                         OWNER  FROM THE TYPE    ENABLED                                                      ENABLED BY  ROLE COVERS
+root:capi-demo:alice:capi-demo-1  alice  core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  alice       bootstrap, core, controlplane, infrastructure
+root:capi-demo:bob:capi-demo-1    bob    core, workspace  bootstrap-kubeadm, controlplane-kubeadm, dev-infrastructure  bob         bootstrap, core, controlplane, infrastructure
+
+What each provider's controllers may reach. A "discovered" claim exists
+because a provider published a labelled APIExport, not because anybody
+
+USER   WORKSPACE                         OWNER     RESOURCE    ALLOWED  DETAIL
+alice  root                              everyone  workspaces  yes      1 workspace: capi-demo
+alice  root:capi-demo                    nobody    workspaces  no       forbidden
+alice  root:capi-demo:alice              alice     workspaces  yes      1 workspace: capi-demo-1
+alice  root:capi-demo:alice:capi-demo-1  alice     clusters    yes      1 cluster: demo-00
+alice  root:capi-demo:bob                bob       workspaces  no       forbidden
+alice  root:capi-demo:bob:capi-demo-1    bob       clusters    no       forbidden
+bob    root                              everyone  workspaces  yes      1 workspace: capi-demo
+bob    root:capi-demo                    nobody    workspaces  no       forbidden
+bob    root:capi-demo:alice              alice     workspaces  no       forbidden
+bob    root:capi-demo:alice:capi-demo-1  alice     clusters    no       forbidden
+bob    root:capi-demo:bob                bob       workspaces  yes      1 workspace: capi-demo-1
+bob    root:capi-demo:bob:capi-demo-1    bob       clusters    yes      1 cluster: demo-00
+

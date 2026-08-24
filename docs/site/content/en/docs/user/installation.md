@@ -5,11 +5,13 @@ weight: 10
 ---
 
 {{% pageinfo color="info" %}}
-kcp-cluster-api is early-stage. There is no released binary, container image
-or manifest yet, and no `clusterctl` provider: the only way to run it is to
-build from source and start `core-manager` yourself. It reconciles every
-workspace bound to the export; webhooks are the exception, and are served for
-one workspace or none — see [Design & architecture](../design/_index.md).
+kcp-cluster-api is early-stage. Nothing is released — no published binary, no
+published image, no `clusterctl` provider — so everything here is built from
+source. There is a container image and a set of manifests to build:
+[On Kubernetes](kubernetes.md) deploys the shard and every provider as pods,
+and this page is the same thing as processes. It reconciles every workspace
+bound to the export; webhooks are the exception, and are served for one
+workspace or none — see [Design & architecture](../design/_index.md).
 {{% /pageinfo %}}
 
 ## Prerequisites
@@ -124,6 +126,20 @@ is an error rather than a silent partial success — see
 [Per-workspace wiring](../design/per-workspace-wiring.md) for why that
 distinction matters here.
 
+Two flags matter to anything that starts a manager before its workspaces
+exist, which is what a `Deployment` does:
+
+- `--startup-timeout` (default one minute) is how long a manager waits for its
+  `APIExportEndpointSlice` to have a virtual workspace endpoint. kcp gives an
+  export an endpoint only once a workspace has bound it, so a manager started
+  before the first tenant waits here rather than exiting. The workspace
+  manager's own `--startup-timeout` additionally covers the `cluster-api`
+  `WorkspaceType` being published.
+- `--metrics-addr` (default `:8080`) is the metrics endpoint. It is a flag
+  because several of these managers on one machine cannot all take
+  controller-runtime's default port — the second one to start fails with
+  `address already in use`.
+
 Run `bin/core-manager --help` for the rest: webhook serving (`--webhook-port`,
 `--webhook-cert-dir`, default port 9443), the health endpoint
 (`--health-addr`, default `:9440`), and log configuration.
@@ -166,8 +182,22 @@ task test:integration
 If a step in these instructions is ambiguous, that test is the authority —
 it has to keep passing.
 
+## Running it on Kubernetes instead
+
+Everything above is the same wiring as pods:
+
+```sh
+task demo:kubernetes:kind
+```
+
+A kcp shard as a `StatefulSet` and one `Deployment` per provider, with the
+credentials generated before anything starts — see
+[On Kubernetes](kubernetes.md) for the whole of it and
+[Deploying on Kubernetes](../design/kubernetes-deployment.md) for what it
+needed.
+
 ## Not here yet
 
-No container image, no kustomize manifests, no `clusterctl` provider
-metadata, and no webhook serving across more than one workspace. Those are
-tracked in the design documentation rather than promised here.
+Nothing is published: no released binary, no image in a registry, and no
+`clusterctl` provider metadata. Webhooks still serve one workspace or none.
+Those are tracked in the design documentation rather than promised here.

@@ -16,6 +16,59 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The demo runs on Kubernetes, as pods rather than as one process.** A kcp
+  shard as a `StatefulSet`, one `Deployment` per provider, the workspace
+  manager, and the demo itself as a `Job` with its manager half switched off —
+  the topology this project has described everywhere and had never deployed.
+  The objects are built in Go from the provider list (`internal/kubedeploy`)
+  and applied by `cmd/deploy`, or printed as YAML for an installation that
+  applies its own. `task demo:kubernetes:kind` is the whole thing from
+  nothing. See [On Kubernetes](site/content/en/docs/user/kubernetes.md) and
+  [Deploying on Kubernetes](site/content/en/docs/design/kubernetes-deployment.md);
+  spec in
+  [`specs/20260824-071500-kubernetes-deployment`](../specs/20260824-071500-kubernetes-deployment/spec.md).
+  On the branch `claude/demo-kubernetes-deployment-cget4y`, not yet merged —
+  this entry gets its pull request number when it is.
+
+  **Three things a laptop never meets, and all three were kcp's rather than
+  Cluster API's.** kcp's self-generated serving certificate names `localhost`
+  and a documentation address, and no flag adds to it — so a client reaching
+  the shard by its Service name refuses it, and the deployment has to issue
+  that certificate itself. kcp mints its admin credentials as tokens inside
+  its own state directory, where nothing else can read them — so the
+  deployment issues a client CA instead, and client certificates carrying
+  `kcp-admin`/`system:kcp:admin` and `shard-admin`/`system:masters`
+  authenticate as exactly those identities, which was confirmed against a
+  running kcp rather than reasoned about. And a `Deployment` starts when
+  Kubernetes starts it, not after somebody has published an `APIExport`: both
+  the provider managers and the workspace manager exited when what they
+  needed was not there yet, and both now wait, bounded by
+  `--startup-timeout`.
+
+  **What deploying it found, that the single-process demo could not.** Every
+  provider manager took controller-runtime's default metrics port with no way
+  to change it, so two of them on one machine could not both start — the
+  second died with `address already in use` partway through a log nobody
+  reads until something is wrong. In pods it happens not to collide, which is
+  why it would have stayed hidden. `--metrics-addr` is now a flag on all four.
+
+  Worse, and nothing to do with Kubernetes: every provider manager handed the
+  ClusterCache its own `--kubeconfig` config as the *shard's* config. That one
+  addresses the workspace the exports live in, and the ClusterCache scopes what
+  it is given to each tenant workspace itself — so it asked kcp for
+  `/clusters/root/clusters/<workspace>` and got a 404, reported as a `Secret`
+  that could not be found. Every cluster stopped at "control plane not yet
+  initialized". The demo does not have the bug because it passes both configs
+  separately; the binaries have one kubeconfig, so the shard's is now derived
+  from it (`providerwiring.ShardConfig`). Nothing ran those binaries against a
+  real cluster before this, which is why a fault in the path every provider
+  takes to reach a workload cluster survived in four of them.
+
+  **Not measured.** Every per-workspace figure this project publishes was
+  taken from the single-process shape. Whether splitting the managers across
+  pods moves any of them is an open question; `task test:sweep` has not been
+  run against a deployment.
+
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as
   the admin, and one per tenant holding their home and the workspaces they
@@ -643,7 +696,7 @@ different binary/concern."
 | P7 | done for a tenant workspace — the `cluster-api-admin` and `cluster-api-view` roles are written by the `WorkspaceType`'s initializer and kept covering whatever the tenant has enabled by a fleet-wide controller; nobody edits a role to onboard a provider ([design](site/content/en/docs/design/workspace-onboarding.md)). What is deliberately not done is identity provisioning *for the managers* — decision 2's single virtual-workspace identity is unchanged | RBAC/identity provisioning per D5 | D5 (Phase 0 only) |
 | P8 | done, on both backends — `test/integration/demo` takes two workspaces' Cluster→Machine to ready concurrently on the dev provider's in-memory backend and asserts isolation, both between the workspaces' objects and between the two tenants who own them; `test/integration/dockerbackend` reaches the same readiness on a real container runtime, Nodes included (#67, see below). Both run under `task verify`, the second as its own capability-gated step | `kcp/test` e2e harness: multi-workspace kind+kcp suite exercising Cluster→Machine across ≥2 workspaces concurrently, proving tenant isolation | Phase 1 skeleton (can stub P1–P3 initially) |
 | P9 | partly — `internal/workspacetelemetry` attributes reconcile load to the workspace that caused it with a bounded exported series, and `cmd/core-manager` wires it; the other three binaries do not, and marker aggregation is untouched | Observability: workspace label/attribute injection into controller-runtime metrics, logs, and `kubebuilder:rbac` marker aggregation across the 4 new binaries | G2 |
-| P10 | in progress — user docs exist, including [onboarding](site/content/en/docs/user/onboarding.md), plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
+| P10 | in progress — user docs exist, including [onboarding](site/content/en/docs/user/onboarding.md) and a deployment guide that is a command rather than a description ([On Kubernetes](site/content/en/docs/user/kubernetes.md), `task demo:kubernetes`), plus a runnable demo (`task demo`) and its design write-up | User-facing docs (`kcp/docs/`): deployment guide, APIExport binding walkthrough | Can be written incrementally alongside every other track |
 
 P1–P3 were expected to be mechanically identical to Phase 1's core-provider
 port, and so the safest to parallelize — same recipe, different source

@@ -1,0 +1,168 @@
+---
+title: On Kubernetes
+description: Run the demo as pods - a kcp shard and one deployment per provider - instead of as processes on your machine.
+weight: 7
+---
+
+{{% pageinfo color="info" %}}
+**New, and exercised in two halves rather than end to end.** Everything below
+except the pod layer itself — the credentials, the kubeconfigs, each manager as
+its own process with the flags and the kubeconfig its `Deployment` gives it,
+and the demo with its manager half switched off — was run and reaches ready
+clusters in every workspace; that run is under the feature's
+[`evidence/`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260824-071500-kubernetes-deployment/evidence).
+The image build, the mounts, the probes and the scheduling have not been run,
+because the environment this was built in could not pull a container image.
+Report what you find.
+{{% /pageinfo %}}
+
+```sh
+task demo:kubernetes:kind
+```
+
+That builds this project's image, creates a kind cluster, loads the image into
+it, and deploys a kcp shard and **one deployment per Cluster API provider** —
+then runs the demo as a Job against them and prints what it prints. The tables
+are [the demo's](demo.md); what is different is where everything ran.
+
+`kubectl -n kcp-demo get pods` afterwards lists seven: `kcp-0`, a
+`cluster-api-core`, `cluster-api-bootstrap-kubeadm`,
+`cluster-api-controlplane-kubeadm` and `cluster-api-dev-infrastructure` pod,
+the `cluster-api-workspace-manager`, and the completed `capi-demo` run. Six
+running pods rather than one process: each manager holds its own credentials,
+reaches kcp over the network, and knows about no workspace until one binds its
+`APIExport` — which is the topology an installation has, and the one thing
+`task demo` cannot show, because there everything shares a process.
+
+## Against a cluster you already have
+
+```sh
+task image                      # build ghcr.io/jimmidyson/kcp-cluster-api:latest
+task demo:kubernetes            # deploy into whatever kubectl is pointed at
+```
+
+The image has to be reachable from the cluster's nodes. On kind that means
+loading it (`kind load docker-image`), which `task demo:kubernetes:kind` does;
+anywhere else it means pushing it and naming it:
+
+```sh
+task image IMAGE=registry.example.com/kcp-cluster-api:v0
+docker push registry.example.com/kcp-cluster-api:v0
+task demo:kubernetes DEPLOY_FLAGS="--image registry.example.com/kcp-cluster-api:v0 --image-pull-policy Always"
+```
+
+Everything lands in one namespace, `kcp-demo` by default, and
+
+```sh
+task demo:kubernetes:clean
+```
+
+takes it away again — the namespace and everything in it, the shard's volume
+included. After a kind run, `task demo:kubernetes:kind:clean` takes the whole
+cluster instead, which is the thing that run created.
+
+## Talking to the deployed shard
+
+The run writes `.demo/kubernetes/kcp.kubeconfig`, and the shard's certificate
+names `localhost` as well as its Service, so that one file works through a
+port-forward:
+
+```sh
+kubectl -n kcp-demo port-forward svc/kcp 6443:6443 &
+kubectl --kubeconfig .demo/kubernetes/kcp.kubeconfig get workspaces
+kubectl --kubeconfig .demo/kubernetes/kcp.kubeconfig --context base \
+  --server https://localhost:6443/clusters/root:capi-demo:alice:capi-demo-1 \
+  get clusters,machines -A
+```
+
+It is the same kubeconfig the pods hold, with a different address. The
+contexts are the ones a kcp admin kubeconfig has — `base` for the
+cluster-unaware endpoint, `root` scoped to the workspace the exports live in,
+`shard-base` for the privileged credential — because everything that reads one
+of these already knows those names.
+
+## What it deploys
+
+| Object | What it is |
+|---|---|
+| `StatefulSet/kcp` | The shard. One replica, one volume: the volume is etcd, so a second replica against the same data would corrupt it |
+| `Service/kcp` | How everything else addresses it, and what its certificate names |
+| `Secret/kcp-serving-cert`, `Secret/kcp-client-ca` | What the shard serves with, and what it authenticates clients against |
+| `Secret/kcp-kubeconfig` | Two kubeconfigs, one per kind of manager — see below |
+| `Deployment/cluster-api-*` | One per provider: core, kubeadm bootstrap, kubeadm control plane, dev infrastructure |
+| `Deployment/cluster-api-workspace-manager` | The controller behind the `cluster-api` `WorkspaceType` |
+| `Job/capi-demo` | The demo run, with its manager half switched off |
+
+Print them instead of applying them, for an installation that applies its own
+YAML:
+
+```sh
+go run ./cmd/deploy --output yaml > install.yaml
+```
+
+The output holds the generated private keys, so it is a secret. Regenerating
+it produces a new set: nothing here is a credential to keep.
+
+## Three things this needed that a laptop run does not
+
+**The shard's certificate has to name its Service.** kcp generates a serving
+certificate for `localhost` and a placeholder address when it is given none,
+and has no flag that adds a name to it — so a client inside the cluster, which
+reaches kcp as `kcp.kcp-demo.svc.cluster.local`, would refuse it. The
+deployment issues the certificate itself and hands it to kcp with
+`--tls-cert-file`.
+
+**The credentials have to exist before the shard does.** kcp mints its own
+admin tokens into its state directory, inside its own pod, where nothing else
+can read them without a sidecar or a shared volume. So the deployment issues a
+client CA instead and gives kcp `--client-ca-file`: client certificates
+carrying `kcp-admin` and `shard-admin` authenticate as exactly the two
+identities kcp mints for itself, and every kubeconfig is known before the first
+pod starts.
+
+**A manager has to wait for what it cannot create.** kcp gives an `APIExport`
+an endpoint only once a workspace has bound it, and the workspaces are created
+by the demo run — which Kubernetes starts alongside the managers rather than
+before them. `--startup-timeout` (30 minutes here, a minute by default) is how
+long a manager waits for that rather than exiting; a manager that exited would
+back off exponentially and turn a wait of seconds into minutes of
+`CrashLoopBackOff`.
+
+[The design page](../design/kubernetes-deployment.md) has the rest, including
+what this deployment deliberately does not do.
+
+## Options
+
+`DEPLOY_FLAGS` reaches `cmd/deploy`; `go run ./cmd/deploy --help` lists all of
+them. The ones worth knowing:
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--namespace` | `kcp-demo` | Where the installation goes |
+| `--image` | `ghcr.io/jimmidyson/kcp-cluster-api:latest` | The image every pod runs |
+| `--demo` | true | Run the demo Job. `--demo=false` deploys the shard and the managers and creates nothing in them |
+| `--workspaces`, `--users`, `--clusters`, `--control-plane-machines`, `--worker-machines` | as `task demo` | Passed through to the demo run |
+| `--storage-size`, `--storage-class` | `2Gi`, the cluster's default | The shard's volume |
+| `--kcp-image` | `--image` | Run the shard from another image. `--kcp-command -` passes arguments to that image's own entrypoint, which is what the upstream kcp image wants |
+| `--demo-args` | — | Extra flags for the demo run, for anything with no flag here — e.g. `--nutanix-export` |
+| `--output yaml` | — | Print the objects instead of applying them |
+| `--delete` | — | Remove the installation |
+
+The demo uses the in-memory backend and nothing else is offered: the docker
+backend provisions real containers through a container runtime, and the pod
+running the dev infrastructure provider has no socket to one. What that would
+take is a provider deployment with a runtime of its own, which is a different
+thing to show.
+
+## Your own workspaces, no demo
+
+```sh
+task demo:kubernetes DEPLOY_FLAGS="--demo=false"
+```
+
+That leaves a shard and five managers with nothing in them. Nothing is
+published yet either — the exports and the `WorkspaceType` are created by the
+demo run — so the managers will sit waiting for their endpoints until
+something publishes them. [Onboarding a workspace](onboarding.md) is what
+happens next, and publishing the exports without the demo is not yet a command
+of its own.

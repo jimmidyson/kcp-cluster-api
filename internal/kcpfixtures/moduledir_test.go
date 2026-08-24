@@ -17,6 +17,8 @@ limitations under the License.
 package kcpfixtures
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,5 +66,46 @@ func TestModuleDirUnknownModule(t *testing.T) {
 
 	if got, err := ModuleDir(unknown); err == nil {
 		t.Errorf("ModuleDir(%q) = %q, want an error", unknown, got)
+	}
+}
+
+// A container has no Go toolchain and no module cache, so `go list -m` has
+// nothing to answer with - and the binary that publishes the APIExports reads
+// CRD manifests out of the pinned modules. The image copies them in at build
+// time, out of the same module cache the binaries were compiled against, and
+// says where they went.
+func TestModuleDirTakesTheManifestRootFromTheEnvironment(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, ModuleClusterAPI, "core", "config", "crd", "bases")
+	if err := os.MkdirAll(want, 0o750); err != nil {
+		t.Fatalf("preparing the manifest root: %v", err)
+	}
+	manifest := filepath.Join(want, "cluster.x-k8s.io_clusters.yaml")
+	if err := os.WriteFile(manifest, []byte("kind: CustomResourceDefinition\n"), 0o600); err != nil {
+		t.Fatalf("writing the manifest: %v", err)
+	}
+
+	t.Setenv(ManifestRootEnv, root)
+	resetModuleDirCache()
+
+	got, err := ManifestPath(ModuleClusterAPI, "core/config/crd/bases/cluster.x-k8s.io_clusters.yaml")
+	if err != nil {
+		t.Fatalf("resolving a manifest under %s: %v", ManifestRootEnv, err)
+	}
+	if got != manifest {
+		t.Errorf("resolved %q, want %q", got, manifest)
+	}
+}
+
+// The override changes where manifests come from, not whether a missing one is
+// an error. An image built without a manifest the code publishes has to fail
+// naming it, exactly as a moved upstream layout does.
+func TestModuleDirManifestRootStillRefusesAMissingManifest(t *testing.T) {
+	t.Setenv(ManifestRootEnv, t.TempDir())
+	resetModuleDirCache()
+
+	const rel = "core/config/crd/bases/cluster.x-k8s.io_clusters.yaml"
+	if got, err := ManifestPath(ModuleClusterAPI, rel); err == nil {
+		t.Errorf("ManifestPath(%q) = %q, want an error", rel, got)
 	}
 }

@@ -18,7 +18,9 @@ bin/
 go.work
 go.work.sum
 
-# `task demo` keeps its kcp server's state and log here.
+# `task demo` keeps its kcp server's state and log here, and
+# `task demo:kubernetes` writes the deployed shard's kubeconfig into it. Both
+# hold credentials.
 .demo/
 
 # Documentation site build output. `npm install` and `npm run build` under
