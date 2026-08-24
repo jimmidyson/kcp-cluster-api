@@ -287,6 +287,18 @@ func run(ctx context.Context, opts options, log logr.Logger) error {
 	if !result.Succeeded {
 		return fmt.Errorf("the demo run failed: %s", result.Reason)
 	}
+
+	// The managers, after the fact. A demo that passed while one of them was
+	// restarting is not the claim being made here - the claim is that these
+	// controllers do this work from separate pods - so the pods are checked
+	// rather than assumed. Short, because by now they have had the whole run
+	// to become available.
+	for _, manager := range managers {
+		if err := kubedeploy.WaitForDeployment(ctx, cl, opts.namespace, manager.GetName(), time.Minute); err != nil {
+			return fmt.Errorf("the demo passed, but %s is not running: %w", manager.GetName(), err)
+		}
+	}
+	log.Info("Every manager is running", "managers", len(managers))
 	return nil
 }
 
