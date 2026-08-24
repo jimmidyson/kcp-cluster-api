@@ -1,24 +1,27 @@
 ---
 title: Walkthrough
-description: Stand the whole thing up on your laptop and look at every part — workspaces, users, exports, bindings, claims, and one manager serving all of them.
+description: Stand the whole thing up - deployed on kind, or in one process - and look at every part: workspaces, users, exports, bindings, claims, and one manager serving all of them.
 weight: 7
 ---
 
-[The demo](demo.md) brings clusters up in several kcp workspaces with one
-command. This page runs the same thing and then stops to look at each piece,
-because "it worked" and "I know what happened" are different states to be in.
+The demo brings clusters up in several kcp workspaces with one command —
+[deployed on kind](kubernetes.md), or [in one process](demo.md). This page runs
+the same thing and then stops to look at each piece, because "it worked" and "I
+know what happened" are different states to be in. Either way of running it
+works here, and section 1 sets both up.
 
 **No kcp knowledge is assumed.** Every kcp concept is introduced where you
 first meet it, and every command below is one you can paste.
 
 By the end you will have:
 
-- a kcp server running locally, with four `APIExport`s published in it
+- a kcp shard running, with four `APIExport`s published in it
 - two users, Alice and Bob, with a workspace each — **identically named**, in
   identically named workspaces, and neither able to see the other at all
 - a Cluster API cluster in each of those workspaces
-- four manager processes — the same wiring each provider deploys — reconciling
-  **both** workspaces without either being named in any configuration
+- four managers — one per provider, pods if you deployed it and processes if
+  you did not — reconciling **both** workspaces without either being named in
+  any configuration
 - a running workload cluster in each workspace that you can `kubectl` into
 
 ## Before you start
@@ -27,11 +30,42 @@ By the end you will have:
 - [task](https://taskfile.dev/):
   `go install github.com/go-task/task/v3/cmd/task@latest`
 - `kubectl` — any recent version
-- **No container runtime and no Kubernetes cluster.** The default backend runs
-  the workload clusters in-process. `task` downloads the pinned `kcp` binary
-  into `bin/` for you.
+- **A container runtime**, for the deployed path in section 1: it builds
+  images and creates a kind cluster. The one-process path needs neither, and
+  needs no Kubernetes cluster either — the workload clusters run inside the
+  process. Everything else installs itself: `task` downloads the pinned `kcp`,
+  `kind` and `ko` binaries into `bin/` as the targets that need them run.
 
 ## 1. Start it, and leave it running
+
+Two ways to stand it up. They differ in where the pieces run, and nothing
+after this section can tell them apart — both give you a kcp shard at `$KCP`
+and a kubeconfig at `$KUBECONFIG`, which is all the rest of the page uses.
+
+### Deployed, on a kind cluster
+
+```sh
+task demo:kubernetes:kind
+```
+
+A kind cluster, a kcp shard as a `StatefulSet`, one `Deployment` per provider
+and the demo itself as a `Job` — the shape an installation has. It stays up
+when the run finishes, because Deployments do; there is nothing to leave
+running and nothing to `Ctrl-C`.
+
+```sh
+cd /path/to/kcp-cluster-api
+kubectl -n kcp-demo port-forward svc/kcp 6443:6443 &
+export KCP=https://localhost:6443
+export KUBECONFIG=$PWD/.demo/kubernetes/kcp.kubeconfig
+```
+
+The port-forward is the whole of the difference: inside the cluster the shard
+is `kcp.kcp-demo.svc.cluster.local:6443`, and its certificate names `localhost`
+as well, so the same file works from here. Needs a container runtime. See
+[The demo, deployed](kubernetes.md).
+
+### In one process, on your laptop
 
 ```sh
 task demo DEMO_FLAGS=--wait
@@ -39,9 +73,21 @@ task demo DEMO_FLAGS=--wait
 
 `--wait` is the difference from the demo page: instead of tearing everything
 down once the clusters are ready, it stays up so you can look around. `Ctrl-C`
-stops it and takes the kcp server with it.
+stops it and takes the kcp server with it. Needs no container runtime and no
+Kubernetes cluster — the workload clusters run in the process itself.
 
-About a minute later you get the status tables, and then the server's address:
+Leave that terminal alone and open a second one. Everything below runs there.
+
+```sh
+cd /path/to/kcp-cluster-api
+export KCP=https://localhost:33799          # yours will differ: the port is random
+export KUBECONFIG=$PWD/.demo/kcp/admin.kubeconfig
+```
+
+### Either way
+
+About a minute later — a few minutes, deployed, because images build first —
+you get the status tables:
 
 ```
 WORKSPACE                         LOGICAL CLUSTER   CLUSTER  PROVISIONED  READY  DETAIL
@@ -49,25 +95,16 @@ root:capi-demo:alice:capi-demo-1  2yqfrtuq4cjeh3n5  demo-00  yes          yes   
 root:capi-demo:bob:capi-demo-1    2pes8qc13ri2fa4y  demo-00  yes          yes    cluster ready
 ```
 
-Leave that terminal alone and open a second one. Everything below runs there.
-
 ### Pointing kubectl at kcp
 
 kcp is a Kubernetes API server, so `kubectl` talks to it. The one unusual part
 is that *which workspace you are in* is a URL path, so you re-point `--server`
-rather than switching context. Set this up once — take the port from your own
-run, it is random:
+rather than switching context.
 
-```sh
-cd /path/to/kcp-cluster-api
-export KCP=https://localhost:33799          # yours will differ
-export KUBECONFIG=$PWD/.demo/kcp/admin.kubeconfig
-```
-
-Every command below then spells `kubectl` out in full and passes
-`--context base`. The `base` context is deliberately *cluster-unaware*: it
-points at the server without choosing a workspace, so the `--server` you pass
-decides. Check it works:
+Every command below spells `kubectl` out in full and passes `--context base`.
+The `base` context is deliberately *cluster-unaware*: it points at the server
+without choosing a workspace, so the `--server` you pass decides. Check it
+works:
 
 ```sh
 kubectl --context base --server $KCP/clusters/root get workspaces
@@ -77,6 +114,10 @@ kubectl --context base --server $KCP/clusters/root get workspaces
 NAME        TYPE        REGION   PHASE   URL
 capi-demo   universal            Ready   https://localhost:33799/clusters/root:capi-demo
 ```
+
+Every captured output on this page came from a one-process run, so the URLs in
+them carry that run's random port. Deployed, the same URLs read
+`https://localhost:6443/...` throughout. Nothing else differs.
 
 One workspace, not four. The others are *inside* it, which is the next
 section's subject.
@@ -847,6 +888,20 @@ demo-00-cp-vzm47         75s
 demo-00-md-vg6q5-4cfjr   48s
 ```
 
+**Deployed, that kubeconfig needs one more thing.** The workload cluster's API
+server is served from inside the dev infrastructure provider's pod, so the
+address in the file is that pod's — reachable from inside the Kubernetes
+cluster and not from here. Forward the port it names (the first cluster gets
+20000, the next 20001) and override the server; the certificate names
+`localhost` too, so nothing has to skip verification:
+
+```sh
+kubectl -n kcp-demo port-forward deploy/cluster-api-dev-infrastructure 20000:20000 &
+kubectl --kubeconfig /tmp/alice.kubeconfig --server https://localhost:20000 get nodes
+```
+
+In one process the address is already `127.0.0.1`, so the file works unchanged.
+
 Those Nodes are how the Machines reached `Ready`: the Machine reconciler finds
 each one by provider ID and records it. Fetch the *other* workspace's secret
 and you get that cluster's nodes instead — two separate workload clusters,
@@ -862,23 +917,29 @@ changes with the workspace**.
 
 ### The kubeconfigs the run already wrote
 
-Look in the demo's state directory:
+Look beside the kubeconfig from section 1 — `.demo/kubernetes/` if you
+deployed it, `.demo/kcp/` if you did not:
 
 ```sh
-ls .demo/kcp/*.kubeconfig
+ls .demo/kubernetes/*.kubeconfig     # deployed
+ls .demo/kcp/*.kubeconfig            # one process
 ```
 
 ```
-.demo/kcp/admin.kubeconfig       kcp's own, from section 1
-.demo/kcp/alice.kubeconfig       what Alice can reach, as Alice
-.demo/kcp/bob.kubeconfig         what Bob can reach, as Bob
-.demo/kcp/workspaces.kubeconfig  every workspace, as the admin
+kcp.kubeconfig          the shard itself, from section 1 (admin.kubeconfig, in a one-process run)
+alice.kubeconfig        what Alice can reach, as Alice
+bob.kubeconfig          what Bob can reach, as Bob
+workspaces.kubeconfig   every workspace, as the admin
 ```
+
+A deployed run writes them too, even though the run itself happened in a pod
+that has since exited: the deployment writes them, from the same plan the run
+builds the tree from.
 
 Each holds one context per workspace, named after the workspace path:
 
 ```sh
-kubectl --kubeconfig .demo/kcp/alice.kubeconfig config get-contexts -o name
+kubectl --kubeconfig .demo/kubernetes/alice.kubeconfig config get-contexts -o name
 ```
 
 ```
@@ -935,7 +996,7 @@ it. Headlamp desktop reads `~/.config/Headlamp/plugins`; a server build takes
 
 ```sh
 headlamp-server \
-  -kubeconfig .demo/kcp/alice.kubeconfig \
+  -kubeconfig .demo/kubernetes/alice.kubeconfig \
   -plugins-dir <the directory holding both plugins>
 ```
 
@@ -1003,19 +1064,34 @@ around it.
 
 ## 12. Stopping, and what to change
 
-`Ctrl-C` in the first terminal. The managers stop, the kcp server stops, and
-with the in-memory backend the workload clusters go with them. State lives
-under `.demo/`, which is gitignored — delete it to start clean.
-
-Worth trying next:
+Deployed:
 
 ```sh
-task demo DEMO_FLAGS="--workspaces=6"                    # scale the fleet
-task demo DEMO_FLAGS="--users=alice,bob,carol"           # more tenants
-task demo DEMO_FLAGS="--users="                          # none: everything under root, admin only
-task demo DEMO_FLAGS="--control-plane-machines=3"        # a three-replica control plane
-task demo DEMO_FLAGS="--backend=docker"                  # real containers
-task demo DEMO_FLAGS="--no-manager"                      # run the managers yourself
+task demo:kubernetes:kind:clean
+```
+
+The kind cluster goes, and with it the shard, the managers, the workload
+clusters and the images ko loaded into its nodes. The kubeconfigs go too —
+they are credentials for a shard that no longer exists. See
+[Cleaning up](kubernetes.md#cleaning-up).
+
+In one process: `Ctrl-C` in the first terminal. The managers stop, the kcp
+server stops, and with the in-memory backend the workload clusters go with
+them. State lives under `.demo/`, which is gitignored — delete it to start
+clean.
+
+Worth trying next. `DEPLOY_FLAGS` reaches the deployed run and `DEMO_FLAGS`
+the one-process run; the flags themselves are the same:
+
+```sh
+task demo:kubernetes:kind DEPLOY_FLAGS="--workspaces=6"            # scale the fleet
+task demo:kubernetes:kind DEPLOY_FLAGS="--users=alice,bob,carol"   # more tenants
+task demo:kubernetes:kind DEPLOY_FLAGS="--users="                  # none: everything under root, admin only
+task demo:kubernetes:kind DEPLOY_FLAGS="--control-plane-machines=3"  # a three-replica control plane
+task demo:kubernetes:kind DEPLOY_FLAGS="--demo=false"              # the shard and the managers, and nothing in them
+
+task demo DEMO_FLAGS="--backend=docker"                            # real containers, one process only
+task demo DEMO_FLAGS="--no-manager"                                # run the managers yourself
 ```
 
 `--no-manager` is the interesting one if you are heading towards a real

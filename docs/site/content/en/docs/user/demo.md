@@ -419,7 +419,7 @@ every other user's.
 
 ## Going through it a piece at a time
 
-[The walkthrough](walkthrough.md) runs this same demo and then stops at each
+[The walkthrough](walkthrough.md) runs this demo — or the deployed one — and then stops at each
 part — workspaces, exports, bindings, permission claims, and the virtual
 workspace one manager watches — with the `kubectl` commands to see each of them
 for yourself. It assumes no kcp knowledge.

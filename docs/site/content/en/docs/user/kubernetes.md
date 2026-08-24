@@ -300,6 +300,11 @@ long a manager waits for that rather than exiting; a manager that exited would
 back off exponentially and turn a wait of seconds into minutes of
 `CrashLoopBackOff`.
 
+[The walkthrough](walkthrough.md) runs this same deployment and then stops at
+each part — workspaces, exports, bindings, permission claims, and the virtual
+workspace one manager watches — with the `kubectl` commands to see each of them
+for yourself. It assumes no kcp knowledge.
+
 [The design page](../design/kubernetes-deployment.md) has the rest, including
 what this deployment deliberately does not do.
 

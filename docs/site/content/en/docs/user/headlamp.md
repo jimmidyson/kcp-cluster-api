@@ -1,7 +1,7 @@
 ---
 title: The demo in a UI
 description: Browse the demo's workspaces in Headlamp, and watch the UI change with the workspace.
-weight: 7
+weight: 8
 ---
 
 `task demo` proves what it proves in a terminal. The same run can be browsed,
