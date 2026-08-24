@@ -23,7 +23,18 @@ having to reconstruct the answer from the commit log.
   The objects are built in Go from the provider list (`internal/kubedeploy`)
   and applied by `cmd/deploy`, or printed as YAML for an installation that
   applies its own. `task demo:kubernetes:kind` is the whole thing from
-  nothing. See [On Kubernetes](site/content/en/docs/user/kubernetes.md) and
+  nothing.
+
+  **The images are ko's, one per binary, and the shard's is upstream's.** There
+  is nothing in them that is not a Go binary this repository builds, which is
+  what makes ko right rather than preferred: no Dockerfile, no build context,
+  no daemon, and a base pinned by digest. The one file that is not a binary -
+  the CRD manifests an `APIExport` is published from, which need a Go toolchain
+  to resolve and so cannot be resolved inside an image - goes in the demo's
+  `kodata`, copied there by the build from the modules it was compiled against.
+  kcp is not built at all: building somebody else's server to run it is how a
+  pin turns into a fork, and `kubedeploy.DefaultKcpImage` is held to the
+  Taskfile's `KCP_VERSION` by a test. See [On Kubernetes](site/content/en/docs/user/kubernetes.md) and
   [Deploying on Kubernetes](site/content/en/docs/design/kubernetes-deployment.md);
   spec in
   [`specs/20260824-071500-kubernetes-deployment`](../specs/20260824-071500-kubernetes-deployment/spec.md).

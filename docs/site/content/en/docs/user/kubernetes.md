@@ -13,6 +13,9 @@ clusters in every workspace; that run is under the feature's
 [`evidence/`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260824-071500-kubernetes-deployment/evidence).
 The image build, the mounts, the probes and the scheduling have not been run,
 because the environment this was built in could not pull a container image.
+What was checked of the images is their contents' behaviour: the demo binary
+finds the CRD manifests through `KO_DATA_PATH` with no Go toolchain on `PATH`,
+which is the container's situation.
 Report what you find.
 {{% /pageinfo %}}
 
@@ -20,8 +23,9 @@ Report what you find.
 task demo:kubernetes:kind
 ```
 
-That builds this project's image, creates a kind cluster, loads the image into
-it, and deploys a kcp shard and **one deployment per Cluster API provider** —
+That creates a kind cluster, builds this repository's images straight into it
+with [ko](https://ko.build), and deploys a kcp shard and **one deployment per
+Cluster API provider** —
 then runs the demo as a Job against them and prints what it prints. The tables
 are [the demo's](demo.md); what is different is where everything ran.
 
@@ -34,22 +38,40 @@ reaches kcp over the network, and knows about no workspace until one binds its
 `APIExport` — which is the topology an installation has, and the one thing
 `task demo` cannot show, because there everything shares a process.
 
+## The images
+
+ko builds one image per binary — `core-manager`,
+`kubeadm-bootstrap-manager`, `kubeadm-control-plane-manager`,
+`dev-infrastructure-manager`, `workspace-manager` and `demo` — with no
+Dockerfile and no build context. The shard is not built here at all: it is
+upstream's `ghcr.io/kcp-dev/kcp`, pinned to the version `task tools` installs
+for a local run.
+
+The images have to be reachable from the cluster's nodes, and where they go is
+`KO_REPO`:
+
+```sh
+task image                                   # ko.local: the local Docker daemon
+task image KO_REPO=kind.local KIND_CLUSTER_NAME=my-cluster
+task image KO_REPO=registry.example.com/capi  # builds and pushes
+```
+
+Each is named `<repo>/<binary>:<tag>`, which is what `ko build -B` produces
+and what `--image-repo` tells the deployment to expect:
+
+```sh
+task demo:kubernetes DEPLOY_FLAGS="--image-repo registry.example.com/capi --image-pull-policy Always"
+```
+
 ## Against a cluster you already have
 
 ```sh
-task image                      # build ghcr.io/jimmidyson/kcp-cluster-api:latest
+task image                      # into the local Docker daemon
 task demo:kubernetes            # deploy into whatever kubectl is pointed at
 ```
 
-The image has to be reachable from the cluster's nodes. On kind that means
-loading it (`kind load docker-image`), which `task demo:kubernetes:kind` does;
-anywhere else it means pushing it and naming it:
-
-```sh
-task image IMAGE=registry.example.com/kcp-cluster-api:v0
-docker push registry.example.com/kcp-cluster-api:v0
-task demo:kubernetes DEPLOY_FLAGS="--image registry.example.com/kcp-cluster-api:v0 --image-pull-policy Always"
-```
+That works where the cluster's nodes are the local daemon. Anywhere else,
+build to a registry they can pull from, as above.
 
 Everything lands in one namespace, `kcp-demo` by default, and
 
@@ -139,11 +161,11 @@ them. The ones worth knowing:
 | Flag | Default | What it does |
 |---|---|---|
 | `--namespace` | `kcp-demo` | Where the installation goes |
-| `--image` | `ghcr.io/jimmidyson/kcp-cluster-api:latest` | The image every pod runs |
+| `--image-repo`, `--image-tag` | `ko.local`, `latest` | Where this repository's images are. One per binary, named after it |
+| `--kcp-image` | upstream's, at the pinned version | The shard's image. Not built here |
 | `--demo` | true | Run the demo Job. `--demo=false` deploys the shard and the managers and creates nothing in them |
 | `--workspaces`, `--users`, `--clusters`, `--control-plane-machines`, `--worker-machines` | as `task demo` | Passed through to the demo run |
 | `--storage-size`, `--storage-class` | `2Gi`, the cluster's default | The shard's volume |
-| `--kcp-image` | `--image` | Run the shard from another image. `--kcp-command -` passes arguments to that image's own entrypoint, which is what the upstream kcp image wants |
 | `--demo-args` | — | Extra flags for the demo run, for anything with no flag here — e.g. `--nutanix-export` |
 | `--output yaml` | — | Print the objects instead of applying them |
 | `--delete` | — | Remove the installation |

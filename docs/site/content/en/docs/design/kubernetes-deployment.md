@@ -15,14 +15,55 @@ an installation has — a shard as a `StatefulSet`, one `Deployment` per
 provider, and the demo as a `Job` with its manager half switched off. The
 objects are built in Go (`internal/kubedeploy`) rather than written as YAML,
 for the same reason the `APIExport`s are: they are derived from the provider
-list. Adding a provider adds its deployment, and a provider with no manager in
-this image fails the build of an installation rather than producing a shard
-that serves types nothing reconciles — which is the Nutanix provider's case,
-and is why it is published without being deployed.
+list. Adding a provider adds its deployment, and a provider with no binary in
+this repository fails the build of an installation rather than producing a
+shard that serves types nothing reconciles — which is the Nutanix provider's
+case, and is why it is published without being deployed.
 
 Three things had to be solved that a process on a laptop never meets. None of
 them is about Cluster API; all three are about kcp being a server somebody else
-has to reach.
+has to reach. The images come first, because what is in them decides two of the
+three.
+
+## The images: ko, and not one of them is kcp
+
+[ko](https://ko.build) builds one image per Go main package, sets its
+entrypoint, and needs no Dockerfile, no build context and no daemon. That is
+the right tool here rather than a preference, because there is nothing in these
+images that is not a Go binary this repository builds and its static assets —
+and it is only true because the shard is **not** one of them.
+
+The shard is upstream's `ghcr.io/kcp-dev/kcp`, pinned to the same release
+`task tools` downloads for a local run. Building somebody else's server in
+order to run it is how a pin turns into a fork, and there is nothing this
+project would add to that image: it already carries the binary, its entrypoint
+and a nonroot user. The deployment passes arguments beginning with `start`,
+because arguments replace the image's `CMD`.
+
+Two pins name that release — `KCP_VERSION` in the `Taskfile` and
+`kubedeploy.DefaultKcpImage` — and a unit test reads the first and asserts the
+second, because a deployment running a different kcp from the one the tests run
+against is a difference nobody would go looking for.
+
+What ko cannot do is put a file in an image that is not in the repository, and
+one is needed: publishing an `APIExport` reads CRD manifests out of the pinned
+Cluster API modules, resolved through the Go toolchain, which an image does not
+have. ko's answer is `kodata` — whatever is in a binary's `kodata/` directory
+is copied into its image, with `KO_DATA_PATH` pointing at it. `task image`
+copies the manifests there out of the module cache, in the build that compiles
+the binary, from the versions it was compiled against; `.gitignore` keeps them
+out of the repository, because a committed copy of somebody else's manifests is
+free to disagree with the code they are published for. `ModuleDir` falls back
+to `$KO_DATA_PATH/manifests` when nothing else says where they are, so the
+image needs no configuration and the pod spec says nothing about it.
+
+The base image is pinned by digest in `.ko.yaml`. A base that moves is a build
+that is not reproducible, and reproducibility is most of the argument for
+building this way at all.
+
+An image per binary also removes something the single-image arrangement needed:
+a `command` in every pod spec. ko sets the entrypoint, so a container names an
+image and its arguments, and nothing overrides what the build decided.
 
 ## The shard's certificate has to name its Service
 

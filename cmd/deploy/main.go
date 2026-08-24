@@ -53,9 +53,9 @@ import (
 
 type options struct {
 	namespace      string
-	image          string
+	imageRepo      string
+	imageTag       string
 	kcpImage       string
-	kcpCommand     string
 	pullPolicy     string
 	parent         string
 	storageSize    string
@@ -84,9 +84,9 @@ func main() {
 	// cluster it deploys into, and takes it the way every other binary here
 	// takes one.
 	flag.StringVar(&opts.namespace, "namespace", kubedeploy.DefaultNamespace, "Namespace to install into. Created if it does not exist.")
-	flag.StringVar(&opts.image, "image", kubedeploy.DefaultImage, "Image holding this project's binaries and the pinned kcp server. Build and load it with `task image`.")
-	flag.StringVar(&opts.kcpImage, "kcp-image", "", "Image to run the kcp shard from. Empty uses --image, which carries the pinned kcp binary.")
-	flag.StringVar(&opts.kcpCommand, "kcp-command", "", "Path to the kcp binary inside --kcp-image. \"-\" passes arguments to the image's own entrypoint, which is what the upstream kcp image wants.")
+	flag.StringVar(&opts.imageRepo, "image-repo", kubedeploy.DefaultImageRepo, "Where this repository's images are. One per binary, named after it, which is what `task image` builds with ko. The cluster has to be able to pull from it: ko.local works where the cluster is the local Docker daemon, kind.local where it is a kind cluster, and anywhere else needs a registry.")
+	flag.StringVar(&opts.imageTag, "image-tag", kubedeploy.DefaultImageTag, "Their tag.")
+	flag.StringVar(&opts.kcpImage, "kcp-image", kubedeploy.DefaultKcpImage, "Image to run the kcp shard from. Upstream's own by default: this project does not build a kcp.")
 	flag.StringVar(&opts.pullPolicy, "image-pull-policy", string(corev1.PullIfNotPresent), "Image pull policy. The default is what a locally built image loaded into a kind cluster needs.")
 	flag.StringVar(&opts.parent, "parent", demo.DefaultParent, "Workspace the APIExports are published in and the demo workspaces are created under.")
 	flag.StringVar(&opts.storageSize, "storage-size", "2Gi", "Size of the shard's volume. It holds etcd, so this is the whole control plane's data.")
@@ -186,9 +186,9 @@ func run(ctx context.Context, opts options, log logr.Logger) error {
 
 	deployment := kubedeploy.Options{
 		Namespace:        opts.namespace,
-		Image:            opts.image,
+		ImageRepo:        opts.imageRepo,
+		ImageTag:         opts.imageTag,
 		KcpImage:         opts.kcpImage,
-		KcpCommand:       opts.kcpCommand,
 		ImagePullPolicy:  corev1.PullPolicy(opts.pullPolicy),
 		Parent:           opts.parent,
 		StorageSize:      opts.storageSize,

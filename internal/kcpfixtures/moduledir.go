@@ -52,6 +52,18 @@ const (
 // list, which is what every run outside a container does.
 const ManifestRootEnv = "KCP_CLUSTER_API_MANIFEST_ROOT"
 
+// KoDataEnv is what ko sets in an image it built, pointing at the static
+// assets it copied out of the binary's kodata directory.
+//
+// The manifests are among them, under manifests/, so an image ko built needs
+// nothing configured: this is the fallback when ManifestRootEnv is unset. It
+// is a fallback rather than the mechanism because ko is one way to build an
+// image and not the only one.
+const KoDataEnv = "KO_DATA_PATH"
+
+// KoManifestSubdir is where the manifests sit inside a binary's kodata.
+const KoManifestSubdir = "manifests"
+
 var (
 	moduleDirMu    sync.Mutex
 	moduleDirCache = map[string]string{}
@@ -83,12 +95,12 @@ func ModuleDir(module string) (string, error) {
 	// ModuleDir's contract - that it reports modules this build was compiled
 	// against and nothing else - would hold outside a container and not
 	// inside one, which is the difference least likely to be noticed.
-	if root := os.Getenv(ManifestRootEnv); root != "" {
+	if root, where := manifestRoot(); root != "" {
 		dir := filepath.Join(root, filepath.FromSlash(module))
 		if _, err := os.Stat(dir); err != nil {
-			return "", fmt.Errorf("module %s has no manifests under %s=%s: %w; "+
+			return "", fmt.Errorf("module %s has no manifests under %s (%s): %w; "+
 				"the image copies them in at build time, so a module missing here was not copied",
-				module, ManifestRootEnv, root, err)
+				module, root, where, err)
 		}
 		moduleDirCache[module] = dir
 		return dir, nil
@@ -111,6 +123,19 @@ func ModuleDir(module string) (string, error) {
 	}
 	moduleDirCache[module] = dir
 	return dir, nil
+}
+
+// manifestRoot returns the directory manifests are read from inside an image,
+// and which variable said so. Empty means there is no image: resolve the
+// module from the build list, as every run outside a container does.
+func manifestRoot() (root, where string) {
+	if root := os.Getenv(ManifestRootEnv); root != "" {
+		return root, ManifestRootEnv
+	}
+	if koData := os.Getenv(KoDataEnv); koData != "" {
+		return filepath.Join(koData, KoManifestSubdir), KoDataEnv
+	}
+	return "", ""
 }
 
 // ManifestPath resolves relPath inside the given module and confirms it

@@ -12,6 +12,12 @@
 # Pinned tooling installed by `task tools`.
 bin/
 
+# The CRD manifests `task image` copies into the demo's kodata, out of the
+# module cache, so that ko puts them in the image. Generated from the pinned
+# modules at build time: committing them would be a second copy of somebody
+# else's manifests, free to disagree with the code they are published for.
+cmd/demo/kodata/
+
 # Local multi-module development against the Cluster API fork.
 # The pin in go.mod is the source of truth for CI and for reproduction; a
 # committed go.work would silently override it for everyone.

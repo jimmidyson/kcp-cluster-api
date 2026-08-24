@@ -127,3 +127,53 @@ func TestModuleDirManifestRootStillRefusesAMissingManifest(t *testing.T) {
 		t.Errorf("ManifestPath(%q) = %q, want an error", rel, got)
 	}
 }
+
+// ko puts a binary's static assets at $KO_DATA_PATH, so an image ko built
+// carries the manifests there and needs nothing else set. Falling back to it
+// is what makes the demo binary work in a ko image without the deployment
+// having to know where ko puts things.
+func TestModuleDirFallsBackToKoData(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "manifests", ModuleClusterAPI)
+	if err := os.MkdirAll(want, 0o750); err != nil {
+		t.Fatalf("preparing the ko data directory: %v", err)
+	}
+
+	t.Setenv(ManifestRootEnv, "")
+	t.Setenv(KoDataEnv, root)
+	resetModuleDirCache()
+
+	got, err := ModuleDir(ModuleClusterAPI)
+	if err != nil {
+		t.Fatalf("resolving a module under %s: %v", KoDataEnv, err)
+	}
+	if got != want {
+		t.Errorf("resolved %q, want %q", got, want)
+	}
+}
+
+// An explicit root beats ko's, so that an image built another way can say
+// where its manifests are without unsetting anything ko set.
+func TestManifestRootBeatsKoData(t *testing.T) {
+	explicit, kodata := t.TempDir(), t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(explicit, ModuleClusterAPI),
+		filepath.Join(kodata, "manifests", ModuleClusterAPI),
+	} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("preparing %s: %v", dir, err)
+		}
+	}
+
+	t.Setenv(ManifestRootEnv, explicit)
+	t.Setenv(KoDataEnv, kodata)
+	resetModuleDirCache()
+
+	got, err := ModuleDir(ModuleClusterAPI)
+	if err != nil {
+		t.Fatalf("resolving a module: %v", err)
+	}
+	if want := filepath.Join(explicit, ModuleClusterAPI); got != want {
+		t.Errorf("resolved %q, want %q", got, want)
+	}
+}

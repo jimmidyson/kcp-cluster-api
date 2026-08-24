@@ -1,21 +1,12 @@
 #!/bin/sh
-# The deployed topology, minus Kubernetes: kcp started with the credentials the
-# deployment generates, each manager as its own process with the kubeconfig and
-# the flags its Deployment gives it, and the demo with its manager half
-# switched off - exactly as the Job runs it.
-#
-# It exists because this environment could not pull a container image, so the
-# claim "the managers work when they are separate processes reaching kcp over
-# the network with credentials of their own" had to be established without
-# Kubernetes. It is not a substitute for `task demo:kubernetes`; it is the part
-# of it that is not Kubernetes.
-#
-# Run it from a directory holding the credentials (see README.md) with the
-# binaries built into ./bin.
+# The deployed topology, minus Kubernetes: kcp with the generated PKI, each
+# manager as its own process with the kubeconfig its Deployment mounts, and the
+# demo with its manager half switched off.
 set -eu
 S="$(dirname "$0")"
 S="$(cd "$S" && pwd)"
 KCP="${KCP:-$(git rev-parse --show-toplevel)/bin/kcp}"   # task tools puts it there
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 
 # Anything left from a previous run holds the ports this one needs.
 pkill -f "$S/bin/" 2>/dev/null || true
@@ -84,7 +75,12 @@ POD_IP=127.0.0.1 start dev-infrastructure "$S/bin/dev-infrastructure-manager" \
 
 # The demo Job.
 set +e
-"$S/bin/demo" \
+# PATH is deliberately empty and KO_DATA_PATH is set: this is the container's
+# situation, where publishing the APIExports has to read CRD manifests with no
+# Go toolchain to resolve the modules with.
+env -i PATH=/nonexistent HOME="$S" \
+  KO_DATA_PATH=$REPO/cmd/demo/kodata \
+  "$S/bin/demo" \
   --kcp-kubeconfig "$S/base.kubeconfig" \
   --kcp-kubeconfig-context=base \
   --no-manager \

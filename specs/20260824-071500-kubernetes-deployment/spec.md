@@ -25,8 +25,9 @@ actually been deployed. This feature deploys it.
 
 **In scope**
 
-1. A container image holding every binary in the repository, the pinned kcp
-   server, and the CRD manifests an `APIExport` is published from.
+1. Container images for the binaries this repository builds - one per binary,
+   built with ko - carrying the CRD manifests an `APIExport` is published from.
+   The shard is upstream's image, not one of them.
 2. Kubernetes objects for an installation, built in Go from the provider list:
    a kcp shard, one deployment per provider, the workspace manager, and the
    credentials they share.
@@ -42,7 +43,8 @@ actually been deployed. This feature deploys it.
 
 **Out of scope**
 
-- Publishing an image anywhere. It is built locally and loaded into a cluster.
+- Publishing an image anywhere. They are built locally and loaded into a
+  cluster; building to a registry is a flag, not a pipeline.
 - More than one shard, or more than one replica of any manager. Both need
   work that is not this feature's: leader election for the second, kcp
   `Partition`s for the first (plan item D6).
@@ -89,15 +91,16 @@ included.
 
 ## Functional requirements
 
-- **FR-001** One image holds every binary. A deployment names the binary it
-  runs; the image has no default entrypoint.
-- **FR-002** The image carries the kcp server at the version `task tools`
-  installs, from the same release, so a laptop and an installation run the
-  same shard.
-- **FR-003** The image carries the CRD manifests of the pinned modules,
-  copied in the build that compiled the binaries, and the binaries resolve
-  them from there. Publishing an `APIExport` needs them and a container has no
-  Go toolchain to resolve them with.
+- **FR-001** One image per binary, named after it, each carrying its own
+  entrypoint. A deployment names an image and its arguments, and overrides
+  nothing the build decided.
+- **FR-002** The shard runs upstream's kcp image at the version `task tools`
+  installs, and is not built here. The two pins on that version are held
+  together by a test.
+- **FR-003** The demo's image carries the CRD manifests of the pinned modules,
+  copied in the build that compiled the binary, and the binary resolves them
+  from there without being configured to. Publishing an `APIExport` needs them
+  and a container has no Go toolchain to resolve them with.
 - **FR-004** The shard is served with a certificate naming its Service, in
   every form Kubernetes resolves it, and `localhost` - the last so that one
   kubeconfig works through a port-forward. kcp has no flag that would add a

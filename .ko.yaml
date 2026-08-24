@@ -1,0 +1,22 @@
+# ko builds this repository's images: one per binary, no Dockerfile, no daemon.
+#
+# There is nothing in them that is not a Go binary and its static assets, which
+# is what makes ko the right tool rather than a preference. The shard is not
+# built here at all - it is upstream's own kcp image, pinned by KCP_VERSION.
+#
+# `task image` is the entry point.
+
+# Pinned by digest, because a base image that moves is a build that is not
+# reproducible - and the whole argument for ko over a Dockerfile is that what
+# ends up in the image is decided by the build rather than found at build time.
+# This is gcr.io/distroless/static-debian12:nonroot as of 2026-08-24, which
+# runs as 65532 - what the generated pod security context asks Kubernetes for.
+# Read the digest of a newer one with
+#
+#   curl -sSI -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     https://gcr.io/v2/distroless/static-debian12/manifests/nonroot
+defaultBaseImage: gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+# No `builds:` section. ko already builds with -trimpath, and a per-binary
+# entry here would have to name every binary to apply to it - six copies of the
+# same two flags, each free to fall out of step with the others.

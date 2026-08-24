@@ -12,7 +12,9 @@ what the `Job` runs.
 `split-process-run.sh` is that run. It differs from the deployment in three
 ways, all of them Kubernetes' side of the line: pods instead of processes,
 mounted `Secret`s instead of files, and probes. Everything else — the PKI, both
-kubeconfig flavours, the argument lists, the startup ordering — is the same.
+kubeconfig flavours, the argument lists, the startup ordering — is the same,
+and the demo is started under `env -i PATH=/nonexistent` with `KO_DATA_PATH`
+set, which is what an image ko built gives it.
 
 Ports differ too: each manager is given its own `--health-addr` and
 `--metrics-addr`, because a pod has a network namespace to itself and a
@@ -33,11 +35,14 @@ publishing an `APIExport` reads them out of the pinned modules, and a container
 has no Go toolchain to resolve them with. The image copies them in at build
 time and points `KCP_CLUSTER_API_MANIFEST_ROOT` at them.
 
-That step is a shell loop over the module cache, so it was run outside Docker
-exactly as the `Dockerfile` runs it — 75 files, 3.1 MB — and the packages that
-read them (`internal/capiexports`, `internal/kcpfixtures`,
-`internal/contractmetadata`) pass with the environment variable pointed at the
-result. What that does not cover is the `COPY` into the final stage.
+ko's answer is `kodata`, so `task image:kodata` copies them into
+`cmd/demo/kodata/manifests` — 75 files, 3.1 MB — and the binary falls back to
+`$KO_DATA_PATH/manifests`. Both halves were run: the packages that read
+manifests pass with `KO_DATA_PATH` pointed at that directory, and the run below
+publishes the `APIExport`s with the demo started under `env -i
+PATH=/nonexistent`, which is the container's situation — no Go toolchain to
+resolve a module with. What that does not cover is ko's own copy into the
+image.
 
 ## What it found
 

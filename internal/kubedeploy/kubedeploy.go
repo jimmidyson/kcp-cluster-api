@@ -122,28 +122,60 @@ const (
 // turn a wait of seconds into minutes of CrashLoopBackOff.
 const DefaultStartupTimeout = 30 * time.Minute
 
-// DefaultImage is this project's image: every binary in this repository, plus
-// the pinned kcp server.
+// One image per binary, named after it, which is what `ko build` produces.
 //
-// One image rather than two because the shard's version is already pinned by
-// the build - see the Dockerfile - and a second pin in a manifest is a second
-// thing to keep in step. Override it with Options.Image for a registry of your
-// own, and Options.KcpImage to run the upstream kcp image instead.
-const DefaultImage = "ghcr.io/jimmidyson/kcp-cluster-api:latest"
+// ko builds a Go main package into an image and sets its entrypoint, so a
+// deployment names an image rather than an image and a command. The names are
+// derived rather than configured: with `ko build -B`, an image is
+// ${KO_DOCKER_REPO}/<binary>, so a repository and a tag are the whole of what
+// this has to be told.
+const (
+	// DefaultImageRepo is ko's local-daemon repository. A cluster that is not
+	// the local daemon - anything but kind or Docker Desktop - needs a
+	// repository it can pull from.
+	DefaultImageRepo = "ko.local"
 
-// KcpCommand is where the pinned kcp binary lives in DefaultImage.
-const KcpCommand = "/usr/local/bin/kcp"
+	// DefaultImageTag is ko's default.
+	DefaultImageTag = "latest"
+)
 
-// managerCommands maps an APIExport to the binary that reconciles it.
+// DefaultKcpImage is the shard, upstream's own image at the version `task
+// tools` installs for a local run.
+//
+// Not built here. There is nothing this project would add to it, and building
+// somebody else's server to run it is how a pin turns into a fork. It carries
+// its own entrypoint, so the deployment passes arguments and no command.
+//
+// Pinned twice by necessity - here and as KCP_VERSION in the Taskfile - and
+// TestDefaultKcpImageMatchesThePinnedVersion holds the two together.
+const DefaultKcpImage = "ghcr.io/kcp-dev/kcp:v0.32.3"
+
+// The binaries this repository builds, by the export each one reconciles.
 //
 // A provider missing from this table has no deployment, which is the failure
 // this map exists to make loud: Managers returns an error rather than quietly
 // deploying a shard that serves types nothing reconciles.
-var managerCommands = map[string]string{
-	capiexports.CoreExport:         "/usr/local/bin/core-manager",
-	capiexports.BootstrapExport:    "/usr/local/bin/kubeadm-bootstrap-manager",
-	capiexports.ControlPlaneExport: "/usr/local/bin/kubeadm-control-plane-manager",
-	capiexports.InfraExport:        "/usr/local/bin/dev-infrastructure-manager",
+var managerBinaries = map[string]string{
+	capiexports.CoreExport:         "core-manager",
+	capiexports.BootstrapExport:    "kubeadm-bootstrap-manager",
+	capiexports.ControlPlaneExport: "kubeadm-control-plane-manager",
+	capiexports.InfraExport:        "dev-infrastructure-manager",
+}
+
+// WorkspaceManagerBinary and DemoBinary are the two that reconcile no export.
+const (
+	WorkspaceManagerBinary = "workspace-manager"
+	DemoBinary             = "demo"
+)
+
+// Binaries is every binary a deployment runs, which is every image `task
+// image` has to build.
+func Binaries() []string {
+	binaries := make([]string, 0, len(managerBinaries)+2)
+	for _, provider := range capiexports.All() {
+		binaries = append(binaries, managerBinaries[provider.Export])
+	}
+	return append(binaries, WorkspaceManagerBinary, DemoBinary)
 }
 
 // Manager is one provider's deployment.
@@ -154,8 +186,9 @@ type Manager struct {
 	// read as the same list.
 	Name string
 
-	// Command is the binary in the image.
-	Command string
+	// Binary is the image this manager runs, which is named after the binary
+	// in it.
+	Binary string
 
 	// EndpointSlice is the APIExportEndpointSlice the manager discovers
 	// workspaces through.
@@ -172,19 +205,19 @@ type Manager struct {
 func Managers(providers []capiexports.Provider) ([]Manager, error) {
 	managers := make([]Manager, 0, len(providers))
 	for _, provider := range providers {
-		command, ok := managerCommands[provider.Export]
+		binary, ok := managerBinaries[provider.Export]
 		if !ok {
 			// The Nutanix export is the case this is written for: it is
 			// published so its types can be bound, and its manager is a
 			// separate module that needs a Prism Central. Deploying it here
 			// would engage every workspace to watch nothing.
 			return nil, fmt.Errorf(
-				"no manager in this image reconciles the %s APIExport: publish it without deploying a manager, or add its binary to managerCommands",
+				"no binary in this repository reconciles the %s APIExport: publish it without deploying a manager, or add its binary to managerBinaries",
 				provider.Export)
 		}
 		managers = append(managers, Manager{
 			Name:          provider.Export,
-			Command:       command,
+			Binary:        binary,
 			EndpointSlice: provider.Export,
 			PodIP:         provider.Export == capiexports.InfraExport,
 		})
@@ -214,17 +247,17 @@ type Options struct {
 	// Namespace holds all of it. Created if it does not exist.
 	Namespace string
 
-	// Image is this project's image, running every manager and the demo.
-	Image string
+	// ImageRepo is where this repository's images are, one per binary and
+	// named after it: <repo>/<binary>:<tag>, which is what `ko build -B`
+	// produces.
+	ImageRepo string
 
-	// KcpImage runs the shard. Empty means Image, which carries the pinned kcp
-	// binary.
+	// ImageTag is their tag.
+	ImageTag string
+
+	// KcpImage runs the shard. Empty means DefaultKcpImage - upstream's own,
+	// which this project does not build.
 	KcpImage string
-
-	// KcpCommand is the shard's entrypoint. Empty means KcpCommand, which is
-	// where this project's image puts it; the upstream kcp image needs none,
-	// so set it to "-" to pass arguments to the image's own entrypoint.
-	KcpCommand string
 
 	// ImagePullPolicy defaults to IfNotPresent, which is what a locally built
 	// image loaded into a kind cluster needs: Always would send Kubernetes
@@ -267,14 +300,14 @@ func (o *Options) applyDefaults() {
 	if o.Namespace == "" {
 		o.Namespace = DefaultNamespace
 	}
-	if o.Image == "" {
-		o.Image = DefaultImage
+	if o.ImageRepo == "" {
+		o.ImageRepo = DefaultImageRepo
+	}
+	if o.ImageTag == "" {
+		o.ImageTag = DefaultImageTag
 	}
 	if o.KcpImage == "" {
-		o.KcpImage = o.Image
-	}
-	if o.KcpCommand == "" {
-		o.KcpCommand = KcpCommand
+		o.KcpImage = DefaultKcpImage
 	}
 	if o.ImagePullPolicy == "" {
 		o.ImagePullPolicy = corev1.PullIfNotPresent
@@ -304,6 +337,11 @@ func (o *Options) validate() error {
 		return fmt.Errorf("the shard's storage size %q is not a quantity: %w", o.StorageSize, err)
 	}
 	return nil
+}
+
+// image is where one binary's image is.
+func (o Options) image(binary string) string {
+	return fmt.Sprintf("%s/%s:%s", o.ImageRepo, binary, o.ImageTag)
 }
 
 // ServerURL is how everything inside the cluster reaches the shard.
@@ -499,10 +537,6 @@ func statefulSet(opts Options) *appsv1.StatefulSet {
 		LivenessProbe:  httpsProbe("/livez", 0),
 		Resources:      resources("500m", "1Gi"),
 	}
-	if opts.KcpCommand != "" && opts.KcpCommand != "-" {
-		container.Command = []string{opts.KcpCommand}
-	}
-
 	set := &appsv1.StatefulSet{
 		ObjectMeta: objectMeta(KcpName, opts.Namespace, KcpName),
 		Spec: appsv1.StatefulSetSpec{
@@ -549,9 +583,8 @@ func statefulSet(opts Options) *appsv1.StatefulSet {
 func managerDeployment(opts Options, manager Manager) *appsv1.Deployment {
 	container := corev1.Container{
 		Name:            "manager",
-		Image:           opts.Image,
+		Image:           opts.image(manager.Binary),
 		ImagePullPolicy: opts.ImagePullPolicy,
-		Command:         []string{manager.Command},
 		Args: []string{
 			"--kubeconfig=" + KubeconfigMountPath + "/" + kubeconfigFileName,
 			"--endpoint-slice-name=" + manager.EndpointSlice,
@@ -606,9 +639,8 @@ func managerDeployment(opts Options, manager Manager) *appsv1.Deployment {
 func workspaceManagerDeployment(opts Options) *appsv1.Deployment {
 	container := corev1.Container{
 		Name:            "manager",
-		Image:           opts.Image,
+		Image:           opts.image(WorkspaceManagerBinary),
 		ImagePullPolicy: opts.ImagePullPolicy,
-		Command:         []string{"/usr/local/bin/workspace-manager"},
 		Args: []string{
 			"--kubeconfig=" + KubeconfigMountPath + "/" + kubeconfigFileName,
 			"--provider-workspace=" + opts.Parent,
@@ -716,9 +748,8 @@ func demoJob(opts Options) *batchv1.Job {
 					SecurityContext: podSecurityContext(),
 					Containers: []corev1.Container{{
 						Name:            "demo",
-						Image:           opts.Image,
+						Image:           opts.image(DemoBinary),
 						ImagePullPolicy: opts.ImagePullPolicy,
-						Command:         []string{"/usr/local/bin/demo"},
 						Args:            args,
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "kubeconfig", MountPath: KubeconfigMountPath, ReadOnly: true},

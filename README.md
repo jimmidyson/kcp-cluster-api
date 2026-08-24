@@ -69,7 +69,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `demo:kubernetes:kind` | The same demo on Kubernetes: a kind cluster, a kcp shard and one deployment per provider, as pods |
 | `demo:kubernetes` | The same, against a cluster you already have |
 | `demo:kubernetes:clean` | Remove a deployed demo — the namespace and everything in it |
-| `image` | Build the container image every deployment runs from |
+| `image` | Build this repository's images — one per binary, with ko |
 | `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |
 | `build` | Compile all binaries |
@@ -116,7 +116,7 @@ done-condition. `task check` is the sub-minute subset for the inner loop.
 
 ```
 Taskfile.yaml     the named operations
-Dockerfile        the image a deployment runs: every binary, plus pinned kcp
+.ko.yaml          how the images are built: one per binary, no Dockerfile
 AGENTS.md         the rules, for people and agents alike
 DRIFT.md          what we carry against upstream, and why
 cmd/              binaries: one manager per Cluster API provider

@@ -19,6 +19,9 @@ vars:
   # kind, for `demo:kubernetes:kind`. Pinned for the same reason everything
   # else here is, and installed with the Go toolchain and nothing else.
   KIND_VERSION: v0.30.0
+  # ko builds this repository's images. Same rule as everything else here: a
+  # pinned version, installed with the Go toolchain and nothing else.
+  KO_VERSION: v0.18.0
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -140,16 +143,67 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go run ./cmd/demo {{.DEMO_FLAGS}}
 
   image:
-    desc: Build the container image every deployment runs from
-    # One image, holding every binary in this repository and the pinned kcp
-    # server - see the Dockerfile. Tagged :latest by default because that is
-    # what cmd/deploy asks for, so `task image` then `task demo:kubernetes`
-    # needs no flags. Override with IMAGE=... for a registry of your own, and
-    # pass the same value to deploy.
+    desc: Build this repository's images - one per binary, with ko
+    deps: [tools:ko, image:kodata]
+    # ko rather than a Dockerfile, because there is nothing in these images
+    # that is not a Go binary and its static assets: no daemon, no build
+    # context, and the base image is pinned by digest in .ko.yaml. The shard is
+    # not built at all - it is upstream's own kcp image.
+    #
+    # -B names each image after its binary rather than after a hash of its
+    # import path, which is what makes the names predictable enough for
+    # cmd/deploy to derive them from --image-repo. --push=false with a
+    # *.local repository loads rather than publishes.
     vars:
-      IMAGE: '{{.IMAGE | default "ghcr.io/jimmidyson/kcp-cluster-api:latest"}}'
+      # ko.local is the local Docker daemon. kind.local loads into a kind
+      # cluster instead; a registry publishes.
+      KO_REPO: '{{.KO_REPO | default "ko.local"}}'
+      # Which kind cluster ko loads into, when KO_REPO is kind.local.
+      KIND_CLUSTER_NAME: '{{.KIND_CLUSTER_NAME | default "kind"}}'
+      IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+      PLATFORM: '{{.PLATFORM | default (printf "linux/%s" .GOARCH_)}}'
     cmds:
-      - docker build --build-arg KCP_VERSION={{.KCP_VERSION}} --tag {{.IMAGE}} {{.ROOT_DIR}}
+      - >-
+        KO_DOCKER_REPO={{.KO_REPO}}
+        KIND_CLUSTER_NAME={{.KIND_CLUSTER_NAME | default "kind"}}
+        {{.BIN}}/ko build -B --tags {{.IMAGE_TAG}} --platform {{.PLATFORM}}
+        {{.KO_FLAGS | default ""}}
+        ./cmd/core-manager ./cmd/kubeadm-bootstrap-manager
+        ./cmd/kubeadm-control-plane-manager ./cmd/dev-infrastructure-manager
+        ./cmd/workspace-manager ./cmd/demo
+
+  image:kodata:
+    desc: Copy the CRD manifests an image publishes APIExports from into the demo's kodata
+    # Publishing an APIExport reads CRD manifests out of the pinned modules,
+    # and an image has no Go toolchain to resolve them with. ko copies whatever
+    # is in a binary's kodata/ into the image and points KO_DATA_PATH at it, so
+    # they go there - copied in the build that compiles the binary, from the
+    # same module cache, which is what keeps them from disagreeing with the
+    # code they are published for.
+    #
+    # Generated, not committed: see .gitignore.
+    vars:
+      KODATA: '{{.ROOT_DIR}}/cmd/demo/kodata/manifests'
+      # Every module this repository publishes an APIExport from. A module
+      # missing here fails at run time, in whatever tried to publish it, so
+      # internal/kcpfixtures.ModuleDir refuses it by name rather than
+      # resolving a path that is not there.
+      MANIFEST_MODULES: >-
+        sigs.k8s.io/cluster-api
+        sigs.k8s.io/cluster-api/test
+        github.com/nutanix-cloud-native/cluster-api-provider-nutanix
+    cmds:
+      - rm -rf {{.KODATA}}
+      - |
+        set -eu
+        for module in {{.MANIFEST_MODULES}}; do
+          go mod download "$module"
+          dir="$(go list -m -f '{{`{{.Dir}}`}}' "$module")"
+          [ -n "$dir" ] || { echo "no directory for $module" >&2; exit 1; }
+          find "$dir" -type f -path '*/config/crd/*' -name '*.yaml' | while read -r manifest; do
+            install -D -m 0444 "$manifest" "{{.KODATA}}/$module/${manifest#"$dir"/}"
+          done
+        done
 
   demo:kubernetes:
     desc: Run the demo on a Kubernetes cluster - a kcp shard and one deployment per provider, as pods
@@ -165,24 +219,29 @@ tasks:
       - go run ./cmd/deploy {{.DEPLOY_FLAGS}}
 
   demo:kubernetes:kind:
-    desc: Create a kind cluster, load the image into it, and run the demo there
-    deps: [tools:kind, image]
+    desc: Create a kind cluster, build the images into it, and run the demo there
+    deps: [tools:kind]
     vars:
       CLUSTER: '{{.CLUSTER | default "kcp-cluster-api"}}'
-      IMAGE: '{{.IMAGE | default "ghcr.io/jimmidyson/kcp-cluster-api:latest"}}'
       DEPLOY_FLAGS: '{{.DEPLOY_FLAGS | default ""}}'
     cmds:
       # Idempotent: a cluster that is already there is used rather than
       # rebuilt, because rebuilding it is a minute nobody asked for.
       - '{{.BIN}}/kind get clusters | grep -qx {{.CLUSTER}} || {{.BIN}}/kind create cluster --name {{.CLUSTER}}'
-      # Loaded rather than pulled. The image was built here and is in no
-      # registry, which is also why the deployment asks for IfNotPresent.
-      - '{{.BIN}}/kind load docker-image {{.IMAGE}} --name {{.CLUSTER}}'
+      # kind.local is ko's own: it builds the images and loads them into that
+      # cluster's nodes, with no registry and no `kind load` of its own. Which
+      # is also why the deployment asks for IfNotPresent - nothing can pull
+      # these.
+      - task: image
+        vars:
+          KO_REPO: kind.local
+          KO_FLAGS: --push=false
+          KIND_CLUSTER_NAME: '{{.CLUSTER}}'
       # Its own kubeconfig rather than the caller's current context, so that
       # `task demo:kubernetes:kind` cannot deploy into whatever cluster
       # somebody happened to be pointed at.
       - '{{.BIN}}/kind get kubeconfig --name {{.CLUSTER}} > {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig'
-      - go run ./cmd/deploy --kubeconfig {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig --image {{.IMAGE}} {{.DEPLOY_FLAGS}}
+      - go run ./cmd/deploy --kubeconfig {{.BIN}}/kind-{{.CLUSTER}}.kubeconfig --image-repo kind.local {{.DEPLOY_FLAGS}}
 
   demo:kubernetes:clean:
     desc: Delete the deployed demo - the namespace and everything in it
@@ -328,6 +387,15 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:ko:
+    desc: Install the pinned ko binary into bin/
+    # Only the image targets need it, so it is not in `tools`.
+    status:
+      - test -x {{.BIN}}/ko
+    cmds:
+      - mkdir -p {{.BIN}}
+      - GOBIN={{.BIN}} go install github.com/google/ko@{{.KO_VERSION}}
 
   tools:kind:
     desc: Install the pinned kind binary into bin/

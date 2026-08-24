@@ -17,6 +17,9 @@ limitations under the License.
 package kubedeploy
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -29,6 +32,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
 )
 
 // One deployment per provider is the topology this project has, and the demo
@@ -303,5 +307,90 @@ func TestObjectsRefusesAnInstallationThatWouldNotWork(t *testing.T) {
 	// flag is the place to hear about it.
 	if _, err := Objects(Options{Credentials: creds, StorageSize: "2 gigabytes"}); err == nil {
 		t.Error("an installation was built with a storage size that is not a quantity")
+	}
+}
+
+// ko builds one image per binary and sets its entrypoint, so a deployment
+// names an image and nothing else. A command here would override the
+// entrypoint ko wrote, which is how an image built by one tool gets run as if
+// it had been built by another.
+func TestObjectsNamesOneImagePerBinaryAndNoCommand(t *testing.T) {
+	t.Parallel()
+
+	objects := build(t, Options{ImageRepo: "registry.example.com/capi", ImageTag: "v0"})
+
+	for name, binary := range map[string]string{
+		capiexports.CoreExport:         "core-manager",
+		capiexports.BootstrapExport:    "kubeadm-bootstrap-manager",
+		capiexports.ControlPlaneExport: "kubeadm-control-plane-manager",
+		capiexports.InfraExport:        "dev-infrastructure-manager",
+		WorkspaceManagerName:           WorkspaceManagerBinary,
+	} {
+		container := find[*appsv1.Deployment](t, objects, name).Spec.Template.Spec.Containers[0]
+		if want := "registry.example.com/capi/" + binary + ":v0"; container.Image != want {
+			t.Errorf("%s runs %q, want %q", name, container.Image, want)
+		}
+		if len(container.Command) != 0 {
+			t.Errorf("%s overrides the image's entrypoint with %v", name, container.Command)
+		}
+	}
+}
+
+// The shard is upstream's image. Building somebody else's server to run it is
+// how a pin turns into a fork, and there is nothing this project would add to
+// it: it carries its own entrypoint, and "start" is the first argument because
+// arguments replace the image's CMD.
+func TestStatefulSetRunsUpstreamsKcp(t *testing.T) {
+	t.Parallel()
+
+	set := find[*appsv1.StatefulSet](t, build(t, Options{}), KcpName)
+	container := set.Spec.Template.Spec.Containers[0]
+
+	if container.Image != DefaultKcpImage {
+		t.Errorf("the shard runs %q, want %q", container.Image, DefaultKcpImage)
+	}
+	if len(container.Command) != 0 {
+		t.Errorf("the shard overrides upstream's entrypoint with %v", container.Command)
+	}
+	if len(container.Args) == 0 || container.Args[0] != "start" {
+		t.Errorf("the shard's arguments are %v, and they replace the image's CMD, so they have to begin with start", container.Args)
+	}
+}
+
+// The demo publishes the APIExports, which reads CRD manifests out of the
+// pinned modules. In an image ko built they are in its kodata, and the binary
+// finds them there by itself - so nothing in the pod spec says where they are,
+// and this asserts that nothing has to.
+func TestDemoJobIsToldNothingAboutWhereTheManifestsAre(t *testing.T) {
+	t.Parallel()
+
+	job := find[*batchv1.Job](t, build(t, Options{Demo: &DemoJob{Workspaces: 1}}), DemoJobName)
+	for _, env := range job.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == kcpfixtures.ManifestRootEnv {
+			t.Errorf("the demo is told the manifest root is %q; ko's own %s is what should answer that",
+				env.Value, kcpfixtures.KoDataEnv)
+		}
+	}
+}
+
+// Two pins on the same kcp release: KCP_VERSION in the Taskfile, which is what
+// `task tools` downloads for a local run, and the shard's image here. A
+// deployment running a different kcp from the one the tests run against is a
+// difference nobody would look for.
+func TestDefaultKcpImageMatchesThePinnedVersion(t *testing.T) {
+	t.Parallel()
+
+	taskfile, err := os.ReadFile(filepath.Join("..", "..", "Taskfile.yaml"))
+	if err != nil {
+		t.Fatalf("reading the Taskfile: %v", err)
+	}
+	match := regexp.MustCompile(`(?m)^\s*KCP_VERSION:\s*(\S+)\s*$`).FindSubmatch(taskfile)
+	if match == nil {
+		t.Fatal("no KCP_VERSION in the Taskfile: it moved, and this test is now checking nothing")
+	}
+
+	if want := "ghcr.io/kcp-dev/kcp:" + string(match[1]); DefaultKcpImage != want {
+		t.Errorf("DefaultKcpImage is %q and the Taskfile pins %s: the deployment would run a different kcp from the one `task tools` installs",
+			DefaultKcpImage, match[1])
 	}
 }
