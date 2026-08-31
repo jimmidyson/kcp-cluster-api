@@ -63,6 +63,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/managermetrics"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	"github.com/jimmidyson/kcp-cluster-api/internal/workspacetelemetry"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
@@ -86,6 +87,7 @@ var (
 	webhookCertName    string
 	webhookKeyName     string
 	healthAddr         string
+	metricsAddr        string
 
 	maxConcurrentReconciles int
 
@@ -131,6 +133,10 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "Webhook cert name.")
 	fs.StringVar(&webhookKeyName, "webhook-key-name", "tls.key", "Webhook key name.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+	fs.StringVar(&metricsAddr, "metrics-bind-address", managermetrics.DefaultBindAddress,
+		"The address the metrics endpoint binds to. \"0\" disables it. The endpoint serves the Go runtime "+
+			"and process collectors as well as controller-runtime's own, which is what makes a deployed "+
+			"measurement reconcilable with an in-process one.")
 
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultMaxConcurrentReconciles,
 		"Worker goroutines per controller, per workspace. This is paid once for every engaged workspace, "+
@@ -218,6 +224,7 @@ func main() {
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
+		Metrics:                managermetrics.Options(metricsAddr),
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:     webhookPort,
 			CertDir:  webhookCertDir,

@@ -59,6 +59,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
 	"github.com/jimmidyson/kcp-cluster-api/internal/controlplanemanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/managermetrics"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
@@ -74,6 +75,7 @@ var (
 
 	endpointSliceName           string
 	healthAddr                  string
+	metricsAddr                 string
 	etcdDialTimeout             time.Duration
 	etcdCallTimeout             time.Duration
 	remoteConditionsGracePeriod time.Duration
@@ -101,6 +103,10 @@ func initFlags(fs *pflag.FlagSet) {
 		"Name of the APIExportEndpointSlice (in the workspace targeted by --kubeconfig/in-cluster config) "+
 			"whose virtual workspace URLs are used to discover and cache bound workspaces.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+	fs.StringVar(&metricsAddr, "metrics-bind-address", managermetrics.DefaultBindAddress,
+		"The address the metrics endpoint binds to. \"0\" disables it. The endpoint serves the Go runtime "+
+			"and process collectors as well as controller-runtime's own, which is what makes a deployed "+
+			"measurement reconcilable with an in-process one.")
 	fs.DurationVar(&etcdDialTimeout, "etcd-dial-timeout", controlplanemanager.DefaultEtcdDialTimeout,
 		"Duration that the etcd client waits at most to establish a connection with a workload cluster's etcd.")
 	fs.DurationVar(&etcdCallTimeout, "etcd-call-timeout", controlplanemanager.DefaultEtcdCallTimeout,
@@ -166,6 +172,7 @@ func main() {
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
+		Metrics:                managermetrics.Options(metricsAddr),
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")

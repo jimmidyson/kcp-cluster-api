@@ -64,6 +64,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/bootstrapmanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
+	"github.com/jimmidyson/kcp-cluster-api/internal/managermetrics"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1"
@@ -78,6 +79,7 @@ var (
 
 	endpointSliceName       string
 	healthAddr              string
+	metricsAddr             string
 	tokenTTL                time.Duration
 	maxConcurrentReconciles int
 
@@ -102,6 +104,10 @@ func initFlags(fs *pflag.FlagSet) {
 		"Name of the APIExportEndpointSlice (in the workspace targeted by --kubeconfig/in-cluster config) "+
 			"whose virtual workspace URLs are used to discover and cache bound workspaces.")
 	fs.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
+	fs.StringVar(&metricsAddr, "metrics-bind-address", managermetrics.DefaultBindAddress,
+		"The address the metrics endpoint binds to. \"0\" disables it. The endpoint serves the Go runtime "+
+			"and process collectors as well as controller-runtime's own, which is what makes a deployed "+
+			"measurement reconcilable with an in-process one.")
 	fs.DurationVar(&tokenTTL, "bootstrap-token-ttl", bootstrapmanager.DefaultTokenTTL,
 		"The amount of time a bootstrap token, and so a KubeadmConfig, stays valid.")
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultFleetMaxConcurrentReconciles,
@@ -164,6 +170,7 @@ func main() {
 	mgr, err := mcmanager.New(localCfg, provider, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
+		Metrics:                managermetrics.Options(metricsAddr),
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")
