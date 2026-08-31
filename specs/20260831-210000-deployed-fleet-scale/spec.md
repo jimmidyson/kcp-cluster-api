@@ -4,12 +4,43 @@
 
 **Created**: 2026-08-31
 
-**Status**: Draft
+**Status**: Built, never run — see "Where this stands"
 
 **Input**: "wonder if we should run this in kind so we can separate out
 resources per controller deployment to mimic a real deployment" — and "it would
 also be great to run the test against a real kubernetes cluster so components
 aren't necessarily on the same node."
+
+## Where this stands
+
+The harness is built and unit tested. **No deployed run has been taken**, and
+none can be taken in an environment without a cluster and a container runtime.
+Per Constitution Principle IX that is reported as not measured rather than
+predicted, so this specification contains no figures.
+
+What is built:
+
+- `internal/managermetrics` — the Go runtime and process collectors on
+  controller-runtime's registry, and a `--metrics-bind-address` flag on all
+  four managers. Without this the whole feature is impossible: the registry is
+  a bare `prometheus.NewRegistry()` carrying none of the collectors the default
+  registerer has, so a manager served no `go_goroutines`, no `go_memstats_*`
+  and no `process_resident_memory_bytes` at all, and a deployed run would have
+  had nothing to reconcile against.
+- `internal/deployedscale` — the manifests, the generated credentials, the
+  metric parsing, the pod facts, the report and the reconciliation. Every part
+  of it that does not need a cluster has tests, including the assertion that
+  nothing in the manifests assumes one node.
+- `test/integration/deployed` — the run itself, driven by
+  `task test:scale:deployed`. Its "could not run" path is exercised; the rest
+  has never executed.
+- `task deployed:images` — the four images, built with `ko`, which installs
+  with the Go toolchain alone as the constitution requires. Verified by
+  installing it, not assumed.
+
+**M1 is therefore ready to attempt and has not been attempted.** The first run
+is `COMPONENTS=core-manager` against the committed core sweep; until those two
+agree there is no reason to trust the deployed instrument with four.
 
 ## Purpose
 

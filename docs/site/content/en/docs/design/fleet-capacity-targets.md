@@ -66,8 +66,8 @@ measured:
   build four. This makes the figure a **bound**, not an installation's cost —
   the largest caveat on everything below, and one that cannot be refined away
   in-process. Removing it means running the four as four `Deployment`s in a
-  cluster, which is specified but not built: see
-  [`specs/20260831-210000-deployed-fleet-scale`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/spec.md).
+  cluster: see [Measuring a deployed fleet](deployed-fleet-measurement.md),
+  which is built but has not yet been run.
 - **One worker `MachineDeployment` per cluster.** The target is a node count;
   several deployments would add `MachineSet` and `MachineDeployment`
   reconciling it does not ask for.

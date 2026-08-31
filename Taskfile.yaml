@@ -16,6 +16,11 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # The container image builder for the deployed scale measurement. A Go
+  # module, so it installs with the toolchain alone — no system package
+  # manager on the critical path (Constitution, Environment and Tooling
+  # Constraints).
+  KO_VERSION: v0.18.0
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -279,6 +284,85 @@ tasks:
         -target-concurrency={{.TARGET_CONCURRENCY}}
         -target-budget={{.TARGET_BUDGET}} {{.TARGET_FLAGS}}
 
+  deployed:images:
+    desc: Build the four manager images for a deployed scale run
+    deps: [tools:ko]
+    # ko rather than a Dockerfile: it builds a Go binary into a distroless base
+    # from the module itself, so there is no second description of how these
+    # binaries are built that can drift from go.mod.
+    #
+    # KO_DOCKER_REPO says where they go. For a registry the cluster can pull
+    # from, set it to that registry. For kind, `KO_DOCKER_REPO=kind.local`
+    # builds and loads into the cluster's nodes in one step, with no registry
+    # at all — which is the only part of this that is kind-specific, and it is
+    # in an environment variable rather than in the harness.
+    #
+    # --base-import-paths, not --bare: bare uses KO_DOCKER_REPO as the whole
+    # image name, so four binaries would produce four images with one name,
+    # each overwriting the last. This names each after its command, which is
+    # what the harness expects — <prefix>/<binary>:<tag>.
+    requires:
+      vars: [KO_DOCKER_REPO]
+    vars:
+      IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+    cmds:
+      - for: [core-manager, kubeadm-bootstrap-manager, kubeadm-control-plane-manager, dev-infrastructure-manager]
+        cmd: KO_DOCKER_REPO={{.KO_DOCKER_REPO}} {{.BIN}}/ko build --base-import-paths --tags={{.IMAGE_TAG}} ./cmd/{{.ITEM}}
+
+  test:scale:deployed:
+    desc: Measure a fleet with each manager in its own Deployment, on a real cluster
+    deps: [tools]
+    # The measurement that removes the caveat every other figure here carries:
+    # "four deployments co-located, so one engagement per workspace rather than
+    # four". See specs/20260831-210000-deployed-fleet-scale/spec.md.
+    #
+    # A kubeconfig and nothing else. kind is one way to get a cluster and a
+    # real multi-node one is where the figures are worth quoting from; this
+    # task cannot tell them apart and must not try.
+    #
+    # Outside `verify` and `check`, like the other scale measurements: a
+    # done-condition that needed a cluster would hold unrelated work hostage.
+    # With no cluster reachable the run reports "could not run" and skips,
+    # which is distinct from failing.
+    vars:
+      # The specification's M1 is core-manager alone, reconciled against a
+      # committed in-process sweep of the same deployment. Only once the two
+      # agree is the instrument worth trusting with anything new; M2 is
+      # COMPONENTS=all.
+      COMPONENTS: '{{.COMPONENTS | default "core-manager"}}'
+      SHAPE: '{{.SHAPE | default "8x1"}}'
+      CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES | default "1"}}'
+      WORKER_MACHINES: '{{.WORKER_MACHINES | default "0"}}'
+      CHECKPOINTS: '{{.CHECKPOINTS | default "25,50"}}'
+      # The committed in-process run this is checked against. Empty makes the
+      # deployed run a second instrument with nothing keeping it honest, which
+      # this repository has already decided is worse than one instrument being
+      # wrong.
+      REFERENCE: '{{.REFERENCE | default "specs/20260820-152056-clusterclass-based-clusters/evidence/sweep-report-core.json"}}'
+      # Anti-affinity. Needs a cluster with at least one node per component,
+      # and makes every pod unschedulable where there are not — which is the
+      # honest failure rather than a co-located run labelled as spread.
+      SPREAD: '{{.SPREAD | default "false"}}'
+      NAMESPACE: '{{.NAMESPACE | default "kcp-scale"}}'
+      IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+      DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS | default ""}}'
+    requires:
+      vars: [MANAGER_IMAGE]
+    cmds:
+      - go test -tags=integration -timeout=4h -count=1 -v ./test/integration/deployed/...
+        -args
+        -deployed-kcp-image={{.KCP_IMAGE | default (printf "ghcr.io/kcp-dev/kcp:%s" .KCP_VERSION)}}
+        -deployed-manager-image={{.MANAGER_IMAGE}}
+        -deployed-image-tag={{.IMAGE_TAG}}
+        -deployed-components={{.COMPONENTS}}
+        -deployed-namespace={{.NAMESPACE}}
+        -deployed-shape={{.SHAPE}}
+        -deployed-control-plane-machines={{.CONTROL_PLANE_MACHINES}}
+        -deployed-worker-machines={{.WORKER_MACHINES}}
+        -deployed-checkpoints={{.CHECKPOINTS}}
+        -deployed-reference={{.REFERENCE}}
+        -deployed-spread={{.SPREAD}} {{.DEPLOYED_FLAGS}}
+
   scale:census:
     desc: Count the controllers and watches a deployment registers, by parsing its setup functions
     # The two counts the whole per-workspace cost model turns on. Derived by an
@@ -314,6 +398,13 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:ko:
+    desc: Install the pinned container image builder into bin/
+    status:
+      - test -x {{.BIN}}/ko
+    cmds:
+      - GOBIN={{.BIN}} go install github.com/google/ko@{{.KO_VERSION}}
 
   tools:kcp:
     desc: Download the pinned kcp server binary into bin/

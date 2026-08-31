@@ -68,6 +68,8 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:sweep` | Measure per-workspace resource usage against a real kcp server |
 | `test:scale` | Measure this environment's workspace ceiling and reconcile throughput |
 | `test:scale:target` | Drive a stated fleet — clusters, nodes and spread — to its end state and report what it cost |
+| `test:scale:deployed` | Measure a fleet with each manager in its own Deployment, on a real cluster |
+| `deployed:images` | Build the four manager images a deployed run deploys |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
 | `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
 | `docs:build` | Build the documentation site |

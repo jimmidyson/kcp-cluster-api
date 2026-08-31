@@ -47,7 +47,17 @@ having to reconstruct the answer from the commit log.
   than a bigger heap number. Specified in
   [`specs/20260831-210000-deployed-fleet-scale`](../specs/20260831-210000-deployed-fleet-scale/spec.md),
   in three milestones so the instrument is calibrated against an existing
-  in-process run before it is trusted with anything new. Not built.
+  in-process run before it is trusted with anything new.
+
+  **Built, never run.** The manifests, the measurement and the reconciliation
+  are in `internal/deployedscale` with tests; `task test:scale:deployed` is the
+  run and `task deployed:images` builds what it deploys. What is dispatchable
+  now is M1 — `COMPONENTS=core-manager` against the committed core sweep — on a
+  machine with a cluster and a container runtime. Building it surfaced a
+  production gap worth knowing about on its own: controller-runtime's metrics
+  registry carries none of the Go runtime collectors, so until now no manager
+  here served `go_goroutines` or `go_memstats_*` at all. See
+  [Measuring a deployed fleet](site/content/en/docs/design/deployed-fleet-measurement.md).
 
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as

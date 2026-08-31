@@ -165,9 +165,15 @@ func TestDevInfrastructureIsSingleReplica(t *testing.T) {
 // the only one that resolves from another node.
 func TestEveryManagerReachesKcpByItsServiceName(t *testing.T) {
 	o := testOptions()
-	want := "https://kcp.scale.svc:6443"
+	want := "https://kcp.scale.svc:6443/clusters/root"
 	if got := o.KcpServerURL(); got != want {
 		t.Fatalf("KcpServerURL = %q, want %q", got, want)
+	}
+	// kcp is told its own address without a logical cluster on it; it appends
+	// its own paths, and a shard URL carrying /clusters/root would produce
+	// endpoint URLs with two of them.
+	if got := o.KcpBaseURL(); got != "https://kcp.scale.svc:6443" {
+		t.Fatalf("KcpBaseURL = %q", got)
 	}
 
 	objects := testObjects(t, o)
@@ -216,8 +222,8 @@ func TestKcpIsToldTheNameItIsAddressedBy(t *testing.T) {
 	args := strings.Join(o.KcpDeployment().Spec.Template.Spec.Containers[0].Args, " ")
 
 	for _, want := range []string{
-		"--shard-base-url=" + o.KcpServerURL(),
-		"--shard-external-url=" + o.KcpServerURL(),
+		"--shard-base-url=" + o.KcpBaseURL(),
+		"--shard-external-url=" + o.KcpBaseURL(),
 		"--tls-cert-file=" + CredentialsMountPath + "/tls.crt",
 		"--tls-private-key-file=" + CredentialsMountPath + "/tls.key",
 		"--token-auth-file=" + CredentialsMountPath + "/tokens.csv",

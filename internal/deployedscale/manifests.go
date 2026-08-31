@@ -57,8 +57,11 @@ import (
 // scoped by its namespace, and a stable name inside it is what makes a failed
 // run inspectable with a command somebody can type.
 const (
-	KcpName               = "kcp"
-	KcpPort               = 6443
+	KcpName = "kcp"
+	KcpPort = 6443
+	// RootWorkspace is where the exports are published and where every
+	// manager looks for its APIExportEndpointSlice.
+	RootWorkspace         = "root"
 	CredentialsSecretName = "kcp-credentials"
 	KubeconfigSecretName  = "kcp-kubeconfig"
 
@@ -230,9 +233,22 @@ func (o Options) validate() error {
 	return errors.Join(errs...)
 }
 
-// KcpServerURL is how a pod in the cluster addresses kcp.
-func (o Options) KcpServerURL() string {
+// KcpBaseURL is kcp's address inside the cluster, with no logical cluster on
+// it. This is what kcp itself is told to advertise.
+func (o Options) KcpBaseURL() string {
 	return fmt.Sprintf("https://%s.%s.svc:%d", KcpName, o.Namespace, KcpPort)
+}
+
+// KcpServerURL is what a client's kubeconfig addresses: the base with a
+// logical cluster on it.
+//
+// Named explicitly rather than left off. A bare base URL resolves to a
+// workspace by kcp's own default, which is a thing to remember rather than a
+// thing to read, and the managers look for their APIExportEndpointSlice in
+// "the workspace targeted by the kubeconfig" — so the workspace they look in
+// should be written down where somebody can see it.
+func (o Options) KcpServerURL() string {
+	return o.KcpBaseURL() + "/clusters/" + RootWorkspace
 }
 
 func labels(component string) map[string]string {
@@ -327,8 +343,8 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 							// address it detected for itself, which is a pod IP
 							// that changes on every restart and is not what the
 							// serving certificate covers.
-							"--shard-base-url=" + o.KcpServerURL(),
-							"--shard-external-url=" + o.KcpServerURL(),
+							"--shard-base-url=" + o.KcpBaseURL(),
+							"--shard-external-url=" + o.KcpBaseURL(),
 							"--audit-log-path=-",
 						},
 						Ports: []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
