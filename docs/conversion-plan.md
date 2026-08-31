@@ -34,6 +34,21 @@ having to reconstruct the answer from the commit log.
   design note in
   [Fleet capacity targets](site/content/en/docs/design/fleet-capacity-targets.md).
 
+- **Every resource figure here carries a co-location asterisk, and removing it
+  needs a cluster.** Each report says it: "four deployments co-located, so one
+  engagement per workspace rather than four". That is not a measurement error to
+  refine away — it is a property of measuring four deployments in one process,
+  and `capacity.md`'s R17 says the same thing ("capacity is per deployment role,
+  not one number"). Running the four managers as four `Deployment`s against a
+  kubeconfig — kind locally, a real multi-node cluster where the figures are
+  worth quoting — measures what no in-process run can: cost split per
+  deployment, CPU at all, the heap-to-container multiplier `capacity.md` says is
+  a separate step and never states, and an OOMKill as a capacity finding rather
+  than a bigger heap number. Specified in
+  [`specs/20260831-210000-deployed-fleet-scale`](../specs/20260831-210000-deployed-fleet-scale/spec.md),
+  in three milestones so the instrument is calibrated against an existing
+  in-process run before it is trusted with anything new. Not built.
+
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as
   the admin, and one per tenant holding their home and the workspaces they
