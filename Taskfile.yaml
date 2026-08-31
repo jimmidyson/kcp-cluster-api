@@ -224,6 +224,61 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m -count=1 ./test/integration/scale/...
         -args -ceiling-target={{.CEILING_TARGET}} -throughput-workers={{.WORKERS}} {{.SCALE_FLAGS}}
 
+  test:scale:target:
+    desc: Drive a stated fleet — clusters, nodes and spread — to its end state and report what it cost
+    deps: [tools]
+    # Separate from `test:scale` because it is a different size of thing. That
+    # task's two measurements finish in a normal test run; this one asks whether
+    # this environment can host a fleet somebody has in mind, and the default
+    # target below is hours of wall clock and gigabytes of memory. Nothing runs
+    # it unless somebody asks for it.
+    #
+    # Two spreads of the same fleet, deliberately. 200 workspaces holding one
+    # cluster each and 20 holding ten each reach the same 200 clusters and the
+    # same 10,000 nodes, and the difference between what they cost is the
+    # per-workspace term this project exists to make small. One shape measures a
+    # sum; the pair separates it.
+    #
+    # It is evidence, not a gate: like `test:scale` it is deliberately outside
+    # `verify` and `check`. A fleet this environment cannot host is reported as
+    # the count it reached, and reaching nothing at all is "could not run",
+    # which is never a pass.
+    vars:
+      # `<workspaces>x<clustersPerWorkspace>`, comma separated.
+      TARGET_SHAPES: '{{.TARGET_SHAPES | default "200x1,20x10"}}'
+      # Per cluster. Three control plane machines is the HA shape, and each of
+      # them costs a fake etcd member and API server pod on the in-memory
+      # backend where a worker costs a Node and a fake kubelet — so the split
+      # is part of the target rather than a detail of reaching it.
+      CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES | default "3"}}'
+      WORKER_MACHINES: '{{.WORKER_MACHINES | default "47"}}'
+      # Percentages of the target to stop and sample at. The target is always
+      # the last one, whatever this says.
+      TARGET_CHECKPOINTS: '{{.TARGET_CHECKPOINTS | default "10,25,50"}}'
+      # How many workspaces are bound and populated at once.
+      TARGET_CONCURRENCY: '{{.TARGET_CONCURRENCY | default "16"}}'
+      # Wall-clock budget per shape. Reaching it stops that shape and reports
+      # what it got to.
+      TARGET_BUDGET: '{{.TARGET_BUDGET | default "90m"}}'
+      TARGET_FLAGS: '{{.TARGET_FLAGS | default ""}}'
+    cmds:
+      # ARTIFACT_DIR is read by the kcp test fixture — the server's log, its
+      # audit log and its object dumps go there. A run this long that fails
+      # without them can be described and not diagnosed.
+      #
+      # The Go timeout is deliberately above the sum of the per-shape budgets:
+      # the budget is what the test enforces and reports against, and letting
+      # Go's own timeout fire first would kill the run before it wrote its
+      # report, turning a measured shortfall into no measurement at all.
+      - PATH="{{.BIN}}:$PATH" ARTIFACT_DIR="{{.BIN}}/artifacts"
+        go test -tags=integration -timeout=8h -count=1 -v -run TestFleetTarget ./test/integration/scale/...
+        -args -target-shapes={{.TARGET_SHAPES}}
+        -target-control-plane-machines={{.CONTROL_PLANE_MACHINES}}
+        -target-worker-machines={{.WORKER_MACHINES}}
+        -target-checkpoints={{.TARGET_CHECKPOINTS}}
+        -target-concurrency={{.TARGET_CONCURRENCY}}
+        -target-budget={{.TARGET_BUDGET}} {{.TARGET_FLAGS}}
+
   scale:census:
     desc: Count the controllers and watches a deployment registers, by parsing its setup functions
     # The two counts the whole per-workspace cost model turns on. Derived by an

@@ -41,7 +41,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/controlplanemanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/fleetfixture"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
@@ -113,11 +113,9 @@ func TestControlPlaneDeploymentWorkspaceSweep(t *testing.T) {
 			// provider writes Machines, KubeadmConfigs and infrastructure
 			// machines from a template, and a type it cannot resolve fails the
 			// reconcile.
-			core, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI,
-				append(append(append([]string{}, coreReconcilerCoreCRDs...),
-					coreReconcilerBootstrapCRDs...), coreReconcilerControlPlaneCRDs...)...)
+			core, err := fleetfixture.CoreModulePaths(fleetfixture.CoreCRDs, fleetfixture.BootstrapCRDs, fleetfixture.ControlPlaneCRDs)
 			must(t, err)
-			dev, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPITest, coreReconcilerDevCRDs...)
+			dev, err := fleetfixture.DevModulePaths(fleetfixture.DevCRDs)
 			must(t, err)
 			return append(core, dev...)
 		},

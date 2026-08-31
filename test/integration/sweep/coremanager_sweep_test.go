@@ -44,7 +44,7 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/fleetfixture"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -58,40 +58,6 @@ import (
 // every registered source's cache sync — including sources for kinds the API
 // server does not serve. Leaving one out does not make a reconciler skip it,
 // it makes the controller hang (ADR-0001, Phase 1 results).
-var (
-	coreReconcilerCoreCRDs = []string{
-		"core/config/crd/bases/cluster.x-k8s.io_clusters.yaml",
-		// The ClusterClass controller is wired whenever ClusterTopology is on,
-		// which is this project's default, and it watches this type. Publishing
-		// it is not optional for the same reason the rest of this list is not:
-		// an unserved watched type hangs the controller rather than skipping it.
-		"core/config/crd/bases/cluster.x-k8s.io_clusterclasses.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machines.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinesets.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinedeployments.yaml",
-		"core/config/crd/bases/cluster.x-k8s.io_machinehealthchecks.yaml",
-		// Read by the topology reconciler on every reconcile of a managed
-		// topology, whatever the MachinePool gate says. Published, not enabled.
-		"core/config/crd/bases/cluster.x-k8s.io_machinepools.yaml",
-	}
-	coreReconcilerDevCRDs = []string{
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclusters.yaml",
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachines.yaml",
-		// Both templates, because a ClusterClass names one of each: nothing
-		// watches or reconciles them, and the topology controller reads them to
-		// stamp the DevCluster and each Machine's DevMachine.
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devclustertemplates.yaml",
-		"infrastructure/docker/config/crd/bases/infrastructure.cluster.x-k8s.io_devmachinetemplates.yaml",
-	}
-	coreReconcilerBootstrapCRDs = []string{
-		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigs.yaml",
-		"bootstrap/kubeadm/config/crd/bases/bootstrap.cluster.x-k8s.io_kubeadmconfigtemplates.yaml",
-	}
-	coreReconcilerControlPlaneCRDs = []string{
-		"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanes.yaml",
-		"controlplane/kubeadm/config/crd/bases/controlplane.cluster.x-k8s.io_kubeadmcontrolplanetemplates.yaml",
-	}
-)
 
 // What the core deployment watches, and how many handlers it registers to do
 // it. Declared rather than inferred, so a shape whose wiring changed
@@ -200,7 +166,7 @@ func TestCoreDeploymentWorkspaceSweep(t *testing.T) {
 			// Resolved from the pinned Cluster API modules rather than copied
 			// here, so they cannot disagree with the version this compiles
 			// against.
-			paths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreReconcilerCoreCRDs...)
+			paths, err := fleetfixture.CoreModulePaths(fleetfixture.CoreCRDs)
 			must(t, err)
 			return paths
 		},

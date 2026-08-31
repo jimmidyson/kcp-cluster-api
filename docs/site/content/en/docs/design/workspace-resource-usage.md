@@ -525,6 +525,16 @@ Two more knobs exist for investigating a number that has moved:
   the five its wiring adds.
 - `SWEEP_REPORT_DIR=<dir>` puts the reports somewhere other than `bin/`.
 
+## Asking the other question
+
+This page measures a slope. To ask instead whether a fleet of a stated size can
+be hosted at all — 200 clusters of 50 nodes, say — see
+[Fleet capacity targets](fleet-capacity-targets.md), which drives a stated
+target to its end state and reports what it cost. The two instruments overlap
+deliberately at their ends: the per-workspace slope a target run reports across
+its checkpoints should agree with the sweep's, and a disagreement is a finding
+about one of them.
+
 ## What these numbers are not
 
 They are the shape of a curve measured on one machine against a single-shard

@@ -66,6 +66,8 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:integration:kcp` | The subset needing only a kcp server, no container runtime |
 | `test:integration:container-runtime` | The subset also needing a container runtime |
 | `test:sweep` | Measure per-workspace resource usage against a real kcp server |
+| `test:scale` | Measure this environment's workspace ceiling and reconcile throughput |
+| `test:scale:target` | Drive a stated fleet — clusters, nodes and spread — to its end state and report what it cost |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
 | `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
 | `docs:build` | Build the documentation site |

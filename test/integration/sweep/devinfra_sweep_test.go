@@ -20,7 +20,6 @@ package sweep_test
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -41,7 +40,7 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/fleetfixture"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
@@ -115,9 +114,9 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 			// Core's types as well as its own: both reconcilers watch Cluster
 			// and the DevMachine one watches Machine, and a controller whose
 			// source cannot sync never starts.
-			core, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI, coreReconcilerCoreCRDs...)
+			core, err := fleetfixture.CoreModulePaths(fleetfixture.CoreCRDs)
 			must(t, err)
-			dev, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPITest, coreReconcilerDevCRDs...)
+			dev, err := fleetfixture.DevModulePaths(fleetfixture.DevCRDs)
 			must(t, err)
 			return append(core, dev...)
 		},
@@ -132,9 +131,7 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 
 			coremanager.SetupProcessGlobals()
 
-			debugPort, minPort, maxPort := muxPorts(t)
-			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1",
-				inmemoryserver.CustomPorts{MinPort: minPort, MaxPort: maxPort, DebugPort: debugPort})
+			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1", muxPorts(t))
 			must(t, err)
 
 			fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{
@@ -250,17 +247,9 @@ func TestDevInfrastructureDeploymentWorkspaceSweep(t *testing.T) {
 // rather than measuring anything. Binding :0 and reading the port back is the
 // same trick the demo uses, and it is racy only against something that grabs
 // the port in the microseconds after the probe closes it.
-func muxPorts(t *testing.T) (debug, min, max int32) {
+func muxPorts(t *testing.T) inmemoryserver.CustomPorts {
 	t.Helper()
-
-	ports := make([]int32, 0, 2)
-	for range 2 {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		must(t, err)
-		ports = append(ports, int32(l.Addr().(*net.TCPAddr).Port)) //nolint:errcheck,forcetypeassert // a TCP listener has a TCP address.
-		must(t, l.Close())
-	}
-	// A range wide enough for one listener per workspace at any width these
-	// sweeps run at.
-	return ports[0], ports[1], ports[1] + 500
+	ports, err := fleetfixture.MuxPorts(0)
+	must(t, err)
+	return ports
 }

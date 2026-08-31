@@ -41,7 +41,7 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/bootstrapmanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/fleetfixture"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -104,8 +104,7 @@ func TestBootstrapDeploymentWorkspaceSweep(t *testing.T) {
 		scheme: scheme,
 		crds: func(t *testing.T) []string {
 			t.Helper()
-			paths, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI,
-				append(append([]string{}, coreReconcilerCoreCRDs...), coreReconcilerBootstrapCRDs...)...)
+			paths, err := fleetfixture.CoreModulePaths(fleetfixture.CoreCRDs, fleetfixture.BootstrapCRDs)
 			must(t, err)
 			return paths
 		},

@@ -1,0 +1,81 @@
+{
+  "title": "Fleet target: 4 clusters over 2 workspaces, 3 nodes each",
+  "facts": {
+    "checkpointWallClock": "53s, 46s",
+    "clusterShape": "ClusterClass based: one class per workspace, each Cluster naming it",
+    "clustersPerWorkspace": "2",
+    "controlPlaneMachinesPerCluster": "1",
+    "deployment": "none — four deployments co-located, so one engagement per workspace rather than four",
+    "devClusterBackend": "inMemory",
+    "endState": "every control plane ready and every Machine Ready",
+    "goMaxProcs": "4",
+    "goVersion": "go1.26.3",
+    "goroutinesPerClusterDerived": "70.00",
+    "goroutinesPerWorkspace": "140.0",
+    "heapBytesPerClusterDerived": "8700964",
+    "heapBytesPerWorkspace": "17401928",
+    "nodesPerCluster": "3",
+    "outcome": "pass",
+    "provisioningConcurrency": "8",
+    "reachedClusters": "4",
+    "reachedNodes": "12",
+    "reachedWorkspaces": "2",
+    "shape": "every provider's controllers on one fleet: core, bootstrap, control plane, dev infrastructure",
+    "spread": "2x2",
+    "stoppedBy": "reached the requested target of 2 workspaces",
+    "targetClusters": "4",
+    "targetNodes": "12",
+    "targetWorkspaces": "2",
+    "workerMachinesPerCluster": "2"
+  },
+  "samples": [
+    {
+      "phase": "baseline",
+      "label": "baseline (manager not started)",
+      "workspaces": 0,
+      "goroutines": 314,
+      "heapBytes": 23510352,
+      "traffic": {
+        "watchStreams": 0,
+        "wildcardWatchStreams": 0,
+        "scopedWatchStreams": 0,
+        "lists": 0,
+        "discovery": 7,
+        "total": 7
+      },
+      "stepSeconds": 0
+    },
+    {
+      "phase": "active",
+      "label": "1 workspaces, 2 clusters, 6 nodes",
+      "workspaces": 1,
+      "goroutines": 1019,
+      "heapBytes": 35400288,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 56,
+        "discovery": 24,
+        "total": 1870
+      },
+      "stepSeconds": 58.196182482
+    },
+    {
+      "phase": "active",
+      "label": "2 workspaces, 4 clusters, 12 nodes",
+      "workspaces": 2,
+      "goroutines": 1159,
+      "heapBytes": 52802216,
+      "traffic": {
+        "watchStreams": 15,
+        "wildcardWatchStreams": 14,
+        "scopedWatchStreams": 1,
+        "lists": 116,
+        "discovery": 31,
+        "total": 3744
+      },
+      "stepSeconds": 48.163891541
+    }
+  ]
+}

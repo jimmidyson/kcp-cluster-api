@@ -38,17 +38,14 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
-	"github.com/jimmidyson/kcp-cluster-api/internal/bootstrapmanager"
-	"github.com/jimmidyson/kcp-cluster-api/internal/controlplanemanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/coremanager"
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
-	"github.com/jimmidyson/kcp-cluster-api/internal/kcpfixtures"
+	"github.com/jimmidyson/kcp-cluster-api/internal/fleetfixture"
 	"github.com/jimmidyson/kcp-cluster-api/internal/providerwiring"
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
-	inmemoryserver "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/server"
 	capicontrollerutil "sigs.k8s.io/cluster-api/util/controller"
 )
 
@@ -139,13 +136,9 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		scheme: scheme,
 		crds: func(t *testing.T) []string {
 			t.Helper()
-			core, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPI,
-				append(append(append([]string{}, coreReconcilerCoreCRDs...),
-					coreReconcilerBootstrapCRDs...), coreReconcilerControlPlaneCRDs...)...)
+			paths, err := fleetfixture.CRDPaths()
 			must(t, err)
-			dev, err := kcpfixtures.MustManifestPaths(kcpfixtures.ModuleClusterAPITest, coreReconcilerDevCRDs...)
-			must(t, err)
-			return append(core, dev...)
+			return paths
 		},
 		crdTransform: keepStorageVersion,
 
@@ -165,30 +158,21 @@ func TestFleetWorkspaceSweep(t *testing.T) {
 		newFleetSetup: func(t *testing.T, ctx context.Context, mgr mcmanager.Manager, shardCfg *rest.Config, registry *capicontrollerutil.WildcardRegistry) {
 			t.Helper()
 
-			coremanager.SetupProcessGlobals()
-
 			fleetManager = mgr
-
-			debugPort, minPort, maxPort := muxPorts(t)
-			dev, err := coremanager.NewDevInfrastructure(ctx, "127.0.0.1",
-				inmemoryserver.CustomPorts{MinPort: minPort, MaxPort: maxPort, DebugPort: debugPort})
-			must(t, err)
 
 			// One fleet for all four, which is what makes this a bound rather
 			// than a deployment: four processes would build four of these.
-			fleet, err := coremanager.NewFleet(ctx, mgr, registry, coremanager.SetupOptions{
+			// The same wiring test/integration/scale drives to a fixed target,
+			// so the two suites cannot disagree about the shape they share.
+			must(t, fleetfixture.SetupFleet(ctx, mgr, registry, fleetfixture.FleetOptions{
 				ShardConfig: shardCfg,
+				Ports:       muxPorts(t),
 
 				// See the core sweep: two shapes in one test binary build two
 				// ClusterCaches, and controller-runtime's controller-name
 				// registry is process-global.
 				SkipControllerNameValidation: true,
-			})
-			must(t, err)
-
-			must(t, coremanager.SetupCoreControllers(ctx, mgr, fleet, dev))
-			must(t, bootstrapmanager.SetupFleetControllers(ctx, mgr, fleet, bootstrapmanager.Options{}))
-			must(t, controlplanemanager.SetupFleetControllers(ctx, mgr, fleet, controlplanemanager.Options{}))
+			}))
 		},
 
 		activate: func(t *testing.T, ctx context.Context, tn *tenant, objects int) {

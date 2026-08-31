@@ -16,6 +16,24 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The 200-cluster run has an instrument and no figure yet.**
+  `task test:scale:target` drives a stated fleet — 200 clusters of 50 nodes, at
+  two spreads over workspaces — to its end state and reports what it cost.
+  Taking that run is dispatchable now and needs a machine rather than a
+  decision: it wants hours of wall clock and more memory than a normal test
+  run, so it is nobody's pull request gate. What it would settle is the largest
+  caveat on this project's published sizing —
+  [`capacity.md`](../specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md)
+  fits its candidate capacities to 8–64 workspaces and quotes up to 2,020. The
+  two spreads are the part worth keeping: 200 workspaces holding one cluster
+  each and 20 holding ten reach the same fleet, and the difference between them
+  is the per-workspace term this project exists to make small. Commit the run
+  under the feature's `evidence/`, per AGENTS.md's rule that a scalability claim
+  is measured. Instrument shipped in
+  [`specs/20260831-201500-fleet-target-scale`](../specs/20260831-201500-fleet-target-scale/spec.md);
+  design note in
+  [Fleet capacity targets](site/content/en/docs/design/fleet-capacity-targets.md).
+
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as
   the admin, and one per tenant holding their home and the workspaces they
@@ -413,6 +431,20 @@ cache/transport per workspace.
 > when a workspace leaves, and
 > [`specs/20260817-183433-workspace-resource-sweeps`](../specs/20260817-183433-workspace-resource-sweeps/spec.md)
 > for the specification the sweeps were built against.
+
+> **What the sweeps do not settle is how far that holds.** They measure a
+> slope over 8 to 64 workspaces;
+> [`capacity.md`](../specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md)
+> quotes candidate capacities up to 2,020 from a model fitted to them, and names
+> the gap itself — "a confirming run at 256 would cut the largest factor by
+> four". `task test:scale:target` is the instrument that takes that run: it
+> drives a stated fleet — clusters, nodes and how they are spread over
+> workspaces — to its end state and reports what hosting it cost. **No figure
+> from it is recorded yet**; the instrument shipped without the run, and a
+> number that has not been measured is not predicted into the gap. See
+> [Fleet capacity targets](site/content/en/docs/design/fleet-capacity-targets.md)
+> and
+> [`specs/20260831-201500-fleet-target-scale`](../specs/20260831-201500-fleet-target-scale/spec.md).
 
 What it does *not* obviously solve, and needs verifying in the Phase 1 spike
 rather than assumed:
