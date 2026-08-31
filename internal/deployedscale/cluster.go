@@ -43,13 +43,25 @@ import (
 // A kubeconfig and nothing else (FR-001): kind is one way to produce one, a
 // managed cluster is another, and a harness that could tell them apart would
 // be a harness with an opinion about which it was written for.
-func ClusterConfig(kubeconfigPath string) (*rest.Config, error) {
+// The context is named separately from the kubeconfig because "whatever is
+// current" is the wrong default for something that creates workloads: a run
+// meant for a throwaway local cluster, started while the current context
+// points somewhere else, would deploy into somewhere else. Naming it costs a
+// word and removes that.
+func ClusterConfig(kubeconfigPath, context string) (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfigPath != "" {
 		rules.ExplicitPath = kubeconfigPath
 	}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	overrides := &clientcmd.ConfigOverrides{}
+	if context != "" {
+		overrides.CurrentContext = context
+	}
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
 	if err != nil {
+		if context != "" {
+			return nil, fmt.Errorf("no cluster to run against in context %q: %w", context, err)
+		}
 		return nil, fmt.Errorf("no cluster to run against: %w", err)
 	}
 	return cfg, nil

@@ -17,7 +17,7 @@ having to reconstruct the answer from the commit log.
 ## Next
 
 - **The 200-cluster run has an instrument and no figure yet.**
-  `task test:scale:target` drives a stated fleet — 200 clusters of 50 nodes, at
+  `task test:scale:local` drives a stated fleet — 200 clusters of 50 nodes, at
   two spreads over workspaces — to its end state and reports what it cost.
   Taking that run is dispatchable now and needs a machine rather than a
   decision: it wants hours of wall clock and more memory than a normal test
@@ -50,8 +50,8 @@ having to reconstruct the answer from the commit log.
   in-process run before it is trusted with anything new.
 
   **Built, never run.** The manifests, the measurement and the reconciliation
-  are in `internal/deployedscale` with tests; `task test:scale:deployed` is the
-  run and `task deployed:images` builds what it deploys. What is dispatchable
+  are in `internal/deployedscale` with tests; `task test:scale:cluster` is the
+  run and `task test:scale:images` builds what it deploys. What is dispatchable
   now is M1 — `COMPONENTS=core-manager` against the committed core sweep — on a
   machine with a cluster and a container runtime. Building it surfaced a
   production gap worth knowing about on its own: controller-runtime's metrics
@@ -462,7 +462,7 @@ cache/transport per workspace.
 > [`capacity.md`](../specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md)
 > quotes candidate capacities up to 2,020 from a model fitted to them, and names
 > the gap itself — "a confirming run at 256 would cut the largest factor by
-> four". `task test:scale:target` is the instrument that takes that run: it
+> four". `task test:scale:local` is the instrument that takes that run: it
 > drives a stated fleet — clusters, nodes and how they are spread over
 > workspaces — to its end state and reports what hosting it cost. **No figure
 > from it is recorded yet**; the instrument shipped without the run, and a

@@ -76,7 +76,7 @@ thing. Four decisions do that work, and each of them is a choice about what is
 ## What the instrument does
 
 `TestFleetTarget`, in `test/integration/scale/target_test.go`, driven by
-`task test:scale:target`.
+`task test:scale:local`.
 
 - Publishes the fleet's `APIExport` against a real kcp server, creates every
   workspace up front, then walks to the target through **checkpoints** —
@@ -154,5 +154,5 @@ run that spent an hour measuring the wrong fleet.
 - `task test:sweep` must still pass: the sweep now builds its fleet shape from
   `internal/fleetfixture`, and a change there is a change to the project's
   primary instrument.
-- `task test:scale:target TARGET_SHAPES=2x1 WORKER_MACHINES=2 CONTROL_PLANE_MACHINES=1`
+- `task test:scale:local TARGET_SHAPES=2x1 WORKER_MACHINES=2 CONTROL_PLANE_MACHINES=1`
   is the small run that exercises every path in minutes.

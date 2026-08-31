@@ -53,7 +53,7 @@ plan's central claim.
 ## Taking the real run
 
 ```sh
-task test:scale:target
+task test:scale:local
 ```
 
 Hours of wall clock and considerably more memory than a normal test run. When

@@ -54,19 +54,41 @@ argument or environment variable, and that kcp is reached through a
 one node and fail on a real cluster, which is the failure discovered last.
 
 ```sh
-# Build the images. KO_DOCKER_REPO=kind.local loads straight into a kind
-# cluster; a registry address is what a real cluster needs.
-KO_DOCKER_REPO=kind.local task deployed:images
+# On a laptop: creates a local kind cluster, builds and loads the images, runs.
+task test:scale:kind
+task test:scale:kind:down          # when you are finished with it
 
-# M1: core-manager alone, checked against the committed in-process sweep.
-task test:scale:deployed MANAGER_IMAGE=kind.local
+# Components on different machines, which is the reason to care where one runs.
+task test:scale:kind WORKERS=3 SPREAD=true
 
-# M2: all four, with the split that has no co-location caveat.
-task test:scale:deployed MANAGER_IMAGE=... COMPONENTS=all
-
-# M3: one component per node.
-task test:scale:deployed MANAGER_IMAGE=... COMPONENTS=all SPREAD=true
+# On any cluster. Build the images somewhere it can pull from, then run.
+KO_DOCKER_REPO=registry.example/kcp task test:scale:images
+task test:scale:cluster MANAGER_IMAGE=registry.example/kcp KUBECONTEXT=my-cluster
 ```
+
+`test:scale:kind` is a wrapper and nothing more. The measurement itself knows
+nothing about kind and must not: a harness that assumed one node could never
+measure components that are not on the same one.
+
+The context is named rather than taken from whatever is current. A run creates
+workloads, and one meant for a throwaway local cluster — started while the
+current context points somewhere else — would create them somewhere else.
+
+### Calibrating against the cheap instrument
+
+`COMPONENTS` narrows the run to some of the managers, which is how a deployed
+figure gets checked against an in-process one:
+
+```sh
+task test:scale:kind COMPONENTS=core-manager
+```
+
+One manager cannot take a cluster to readiness — all four do that together — so
+a narrowed run measures the weaker end state of *engaged workspaces holding
+their objects*, which is what the in-process deployment sweeps measure too.
+That is the comparison, and asking a partial set for readiness is refused up
+front rather than discovered by waiting twenty minutes for a machine count that
+never moves.
 
 ### Credentials are generated, not read back
 
@@ -134,8 +156,9 @@ per deployment, against a committed in-process sweep: the same program doing
 the same work should agree, and where it does not the run is a finding about
 one of the two instruments rather than a figure about the fleet.
 
-That check is why M1 deploys `core-manager` alone. Until the two agree for one
-deployment, nothing the deployed instrument says about four is worth having.
+That check is why the first run to make is a narrowed one. Until the two
+instruments agree about a single deployment, nothing the deployed one says
+about four is worth having.
 
 ## Status
 

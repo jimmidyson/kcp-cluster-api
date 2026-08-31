@@ -168,7 +168,7 @@ func TestClusterConfigWithNoKubeconfigIsAnError(t *testing.T) {
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "does-not-exist"))
 	t.Setenv("HOME", t.TempDir())
 
-	if _, err := ClusterConfig(""); err == nil {
+	if _, err := ClusterConfig("", ""); err == nil {
 		t.Skip("this environment has an in-cluster or default config, so there is no absence to test")
 	} else if !strings.Contains(err.Error(), "no cluster to run against") {
 		t.Errorf("error %q does not say a cluster is missing", err)
@@ -199,11 +199,60 @@ users:
 		t.Fatalf("writing: %v", err)
 	}
 
-	cfg, err := ClusterConfig(path)
+	cfg, err := ClusterConfig(path, "")
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
 	if cfg.Host != "https://cluster.example:6443" {
 		t.Errorf("host = %q", cfg.Host)
+	}
+}
+
+// TestClusterConfigHonoursANamedContext is what keeps a run meant for a
+// throwaway cluster out of whichever cluster happened to be current.
+func TestClusterConfigHonoursANamedContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kubeconfig")
+	body := `apiVersion: v1
+kind: Config
+clusters:
+- name: local
+  cluster:
+    server: https://local.example:6443
+- name: production
+  cluster:
+    server: https://production.example:6443
+contexts:
+- name: local
+  context:
+    cluster: local
+    user: u
+- name: production
+  context:
+    cluster: production
+    user: u
+current-context: production
+users:
+- name: u
+  user:
+    token: t
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+
+	cfg, err := ClusterConfig(path, "local")
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if cfg.Host != "https://local.example:6443" {
+		t.Errorf("host = %q: the named context was ignored and the run would have deployed into the current one",
+			cfg.Host)
+	}
+
+	if _, err := ClusterConfig(path, "not-a-context"); err == nil {
+		t.Error("an unknown context was accepted")
+	} else if !strings.Contains(err.Error(), "not-a-context") {
+		t.Errorf("error %q does not name the context asked for", err)
 	}
 }

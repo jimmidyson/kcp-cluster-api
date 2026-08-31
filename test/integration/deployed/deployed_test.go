@@ -64,6 +64,9 @@ var (
 		"Kubeconfig of the cluster to run against. Empty uses the usual resolution (KUBECONFIG, then the default "+
 			"path). kind is one way to produce a cluster and a real multi-node one is where the figures are worth "+
 			"quoting from; this harness cannot tell them apart and must not try.")
+	kubecontext = flag.String("deployed-context", "",
+		"Kubeconfig context to use. Empty uses the current one — which is the wrong default for something that "+
+			"creates workloads, so the task targets name it explicitly.")
 	namespace = flag.String("deployed-namespace", "kcp-scale",
 		"Namespace holding everything the run creates, and what tearing it down deletes.")
 	kcpImage = flag.String("deployed-kcp-image", "",
@@ -121,7 +124,7 @@ func TestDeployedFleet(t *testing.T) {
 	plan := planFromFlags(t)
 	options := optionsFromFlags(t)
 
-	cfg, err := deployedscale.ClusterConfig(*kubeconfig)
+	cfg, err := deployedscale.ClusterConfig(*kubeconfig, *kubecontext)
 	if err != nil {
 		t.Skipf("could not run: %v", err)
 	}
@@ -153,6 +156,9 @@ func TestDeployedFleet(t *testing.T) {
 	}
 	report.AddFact("endState", deployedscale.EndStateDescription(wanted))
 	report.AddFact("cluster", cfg.Host)
+	if *kubecontext != "" {
+		report.AddFact("kubecontext", *kubecontext)
+	}
 
 	t.Cleanup(func() {
 		t.Logf("\n%s", report.Markdown())

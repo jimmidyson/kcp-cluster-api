@@ -25,9 +25,14 @@ reports what a stated fleet cost to host.
 A target is three things, and all three are part of it:
 
 ```sh
-task test:scale:target                      # the default: 200 clusters, 50 nodes each, two spreads
-task test:scale:target TARGET_SHAPES=32x1   # one spread, smaller
+task test:scale:local                      # the default: 200 clusters, 50 nodes each, two spreads
+task test:scale:local TARGET_SHAPES=32x1   # one spread, smaller
 ```
+
+This runs everything in one process and needs no cluster, which is what makes
+it the quickest way to a number. To measure the same fleet as an installation
+actually deploys it — one `Deployment` per manager, on kind or on any cluster —
+see [Measuring a deployed fleet](deployed-fleet-measurement.md).
 
 | Term | Default | Why it is part of the target |
 |---|---|---|

@@ -21,6 +21,9 @@ vars:
   # manager on the critical path (Constitution, Environment and Tooling
   # Constraints).
   KO_VERSION: v0.18.0
+  # A local cluster for `task test:scale:kind`. A Go module like the rest,
+  # so it installs with the toolchain alone.
+  KIND_VERSION: v0.32.0
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -229,8 +232,8 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m -count=1 ./test/integration/scale/...
         -args -ceiling-target={{.CEILING_TARGET}} -throughput-workers={{.WORKERS}} {{.SCALE_FLAGS}}
 
-  test:scale:target:
-    desc: Drive a stated fleet — clusters, nodes and spread — to its end state and report what it cost
+  test:scale:local:
+    desc: Scale a fleet in one process — no cluster needed, and the quickest way to a number
     deps: [tools]
     # Separate from `test:scale` because it is a different size of thing. That
     # task's two measurements finish in a normal test run; this one asks whether
@@ -284,8 +287,8 @@ tasks:
         -target-concurrency={{.TARGET_CONCURRENCY}}
         -target-budget={{.TARGET_BUDGET}} {{.TARGET_FLAGS}}
 
-  deployed:images:
-    desc: Build the four manager images for a deployed scale run
+  test:scale:images:
+    desc: Build the manager images a cluster run deploys
     deps: [tools:ko]
     # ko rather than a Dockerfile: it builds a Go binary into a distroless base
     # from the module itself, so there is no second description of how these
@@ -307,10 +310,76 @@ tasks:
       IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
     cmds:
       - for: [core-manager, kubeadm-bootstrap-manager, kubeadm-control-plane-manager, dev-infrastructure-manager]
-        cmd: KO_DOCKER_REPO={{.KO_DOCKER_REPO}} {{.BIN}}/ko build --base-import-paths --tags={{.IMAGE_TAG}} ./cmd/{{.ITEM}}
+        cmd: KO_DOCKER_REPO={{.KO_DOCKER_REPO}} KIND_CLUSTER_NAME={{.KIND_CLUSTER_NAME}} {{.BIN}}/ko build --base-import-paths --tags={{.IMAGE_TAG}} ./cmd/{{.ITEM}}
 
-  test:scale:deployed:
-    desc: Measure a fleet with each manager in its own Deployment, on a real cluster
+  test:scale:kind:
+    desc: Scale a fleet on a throwaway local kind cluster — creates it, builds the images, runs
+    deps: [tools:kind, tools:ko]
+    # The convenience path: everything `test:scale:cluster` needs, arranged for
+    # a laptop. It is a wrapper and nothing more — the measurement itself knows
+    # nothing about kind, and must not, because a harness that assumed one node
+    # could never measure components that are not on the same one.
+    #
+    # The cluster is reused if it already exists rather than rebuilt each time,
+    # because creating one costs a minute and iterating on a run costs many.
+    # `task test:scale:kind:down` removes it.
+    #
+    # Prediction, not a measurement: expect this to want about 3-4 GiB and 2-4
+    # vCPU at the default size, on top of the kind node's own ~1.5-2 GiB. The
+    # fleet-sized targets are not a laptop proposition — see
+    # docs/site/content/en/docs/design/deployed-fleet-measurement.md.
+    vars:
+      CLUSTER_NAME: '{{.CLUSTER_NAME | default "kcp-scale"}}'
+      # Worker nodes, on top of the control-plane node. More than one is what
+      # lets SPREAD=true place the managers on different machines, which is the
+      # whole reason to care where a component runs.
+      WORKERS: '{{.WORKERS | default "0"}}'
+      SHAPE: '{{.SHAPE | default "8x1"}}'
+    cmds:
+      - |
+        if ! {{.BIN}}/kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
+          # A config only when workers are asked for: kind's default is a
+          # single control-plane node, and writing that out longhand would be
+          # the same cluster with more to go wrong.
+          if [ "{{.WORKERS}}" -gt 0 ]; then
+            {
+              echo "kind: Cluster"
+              echo "apiVersion: kind.x-k8s.io/v1alpha4"
+              echo "nodes:"
+              echo "- role: control-plane"
+              for _ in $(seq 1 {{.WORKERS}}); do echo "- role: worker"; done
+            } | {{.BIN}}/kind create cluster --name "{{.CLUSTER_NAME}}" --config -
+          else
+            {{.BIN}}/kind create cluster --name "{{.CLUSTER_NAME}}"
+          fi
+        fi
+      # kind.local builds and loads straight into the cluster's nodes, so there
+      # is no registry to stand up and nothing to push.
+      - task: test:scale:images
+        vars:
+          KO_DOCKER_REPO: kind.local
+          KIND_CLUSTER_NAME: '{{.CLUSTER_NAME}}'
+      - task: test:scale:cluster
+        vars:
+          MANAGER_IMAGE: kind.local
+          KUBECONTEXT: 'kind-{{.CLUSTER_NAME}}'
+          SHAPE: '{{.SHAPE}}'
+          COMPONENTS: '{{.COMPONENTS}}'
+          SPREAD: '{{.SPREAD}}'
+          CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES}}'
+          WORKER_MACHINES: '{{.WORKER_MACHINES}}'
+          DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS}}'
+
+  test:scale:kind:down:
+    desc: Delete the local kind cluster `task test:scale:kind` created
+    deps: [tools:kind]
+    vars:
+      CLUSTER_NAME: '{{.CLUSTER_NAME | default "kcp-scale"}}'
+    cmds:
+      - '{{.BIN}}/kind delete cluster --name {{.CLUSTER_NAME}}'
+
+  test:scale:cluster:
+    desc: Scale a fleet on a Kubernetes cluster, one Deployment per manager — set KUBECONTEXT to pick one
     deps: [tools]
     # The measurement that removes the caveat every other figure here carries:
     # "four deployments co-located, so one engagement per workspace rather than
@@ -325,11 +394,12 @@ tasks:
     # With no cluster reachable the run reports "could not run" and skips,
     # which is distinct from failing.
     vars:
-      # The specification's M1 is core-manager alone, reconciled against a
-      # committed in-process sweep of the same deployment. Only once the two
-      # agree is the instrument worth trusting with anything new; M2 is
-      # COMPONENTS=all.
-      COMPONENTS: '{{.COMPONENTS | default "core-manager"}}'
+      # Every manager, because a cluster run exists to measure what an
+      # installation actually deploys. Narrow it to calibrate against an
+      # in-process figure for one of them — COMPONENTS=core-manager is the
+      # comparison the reconciliation below was built for, and it measures a
+      # weaker end state, since a cluster is taken to readiness by all four.
+      COMPONENTS: '{{.COMPONENTS | default "all"}}'
       SHAPE: '{{.SHAPE | default "8x1"}}'
       CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES | default "1"}}'
       WORKER_MACHINES: '{{.WORKER_MACHINES | default "0"}}'
@@ -344,6 +414,10 @@ tasks:
       # honest failure rather than a co-located run labelled as spread.
       SPREAD: '{{.SPREAD | default "false"}}'
       NAMESPACE: '{{.NAMESPACE | default "kcp-scale"}}'
+      # Named rather than "whatever is current": a run that creates workloads
+      # should not land wherever the last kubectl command pointed.
+      KUBECONTEXT: '{{.KUBECONTEXT | default ""}}'
+      KUBECONFIG_PATH: '{{.KUBECONFIG_PATH | default ""}}'
       IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
       DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS | default ""}}'
     requires:
@@ -356,6 +430,8 @@ tasks:
         -deployed-image-tag={{.IMAGE_TAG}}
         -deployed-components={{.COMPONENTS}}
         -deployed-namespace={{.NAMESPACE}}
+        -deployed-context={{.KUBECONTEXT}}
+        -deployed-kubeconfig={{.KUBECONFIG_PATH}}
         -deployed-shape={{.SHAPE}}
         -deployed-control-plane-machines={{.CONTROL_PLANE_MACHINES}}
         -deployed-worker-machines={{.WORKER_MACHINES}}
@@ -398,6 +474,13 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:kind:
+    desc: Install the pinned local-cluster tool into bin/
+    status:
+      - test -x {{.BIN}}/kind
+    cmds:
+      - GOBIN={{.BIN}} go install sigs.k8s.io/kind@{{.KIND_VERSION}}
 
   tools:ko:
     desc: Install the pinned container image builder into bin/

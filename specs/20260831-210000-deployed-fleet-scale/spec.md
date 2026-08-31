@@ -32,9 +32,9 @@ What is built:
   of it that does not need a cluster has tests, including the assertion that
   nothing in the manifests assumes one node.
 - `test/integration/deployed` — the run itself, driven by
-  `task test:scale:deployed`. Its "could not run" path is exercised; the rest
+  `task test:scale:cluster`. Its "could not run" path is exercised; the rest
   has never executed.
-- `task deployed:images` — the four images, built with `ko`, which installs
+- `task test:scale:images` — the four images, built with `ko`, which installs
   with the Go toolchain alone as the constitution requires. Verified by
   installing it, not assumed.
 
@@ -308,7 +308,7 @@ being reported as two numbers.
 
 - **FR-017**: The deployed run MUST NOT be part of `verify` or `check`. It needs
   a cluster, and the done-condition must not depend on one — the same reason
-  `test:scale` and `test:scale:target` sit outside it.
+  `test:scale` and `test:scale:local` sit outside it.
 - **FR-018**: No figure this produces may be published without stating the
   cluster it came from: node count, node size, and whether pods were spread.
 
