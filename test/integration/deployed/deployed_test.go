@@ -200,10 +200,7 @@ func TestDeployedFleet(t *testing.T) {
 	}
 	t.Cleanup(stopForward)
 
-	kcpCfg, err := restConfigFor(creds, "https://"+local+"/clusters/"+deployedscale.RootWorkspace)
-	if err != nil {
-		t.Fatalf("building a kcp config: %v", err)
-	}
+	kcpCfg := restConfigFor(creds, "https://"+local+"/clusters/"+deployedscale.RootWorkspace)
 	rootClient, err := client.New(kcpCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatalf("building a kcp client: %v", err)
@@ -212,7 +209,9 @@ func TestDeployedFleet(t *testing.T) {
 	// --- Publish the exports an installation publishes, not a synthesised
 	// one. These managers discover through the real APIExportEndpointSlices,
 	// so the run has to create the real exports.
-	if _, err := capiexports.Publish(ctx, rootClient, providersFor(options.Components), 2*time.Minute); err != nil {
+	providers := capiexports.All()
+	discovery, err := capiexports.Publish(ctx, rootClient, providers, 2*time.Minute)
+	if err != nil {
 		t.Fatalf("publishing the provider exports: %v", err)
 	}
 
@@ -240,7 +239,7 @@ func TestDeployedFleet(t *testing.T) {
 		}
 
 		for len(tenants) < checkpoint {
-			tn, err := newTenant(ctx, kcpCfg, rootClient, scheme, len(tenants), plan)
+			tn, err := newTenant(ctx, kcpCfg, rootClient, scheme, len(tenants), plan, providers, discovery)
 			if err != nil {
 				stoppedBy = fmt.Sprintf("provisioning workspace %d: %v", len(tenants), err)
 				break
@@ -378,7 +377,9 @@ type tenant struct {
 	clusters []string
 }
 
-func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client, scheme *k8sruntime.Scheme, index int, plan scaletarget.Plan) (*tenant, error) {
+func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client, scheme *k8sruntime.Scheme,
+	index int, plan scaletarget.Plan, providers []capiexports.Provider, discovery capiexports.Discovery,
+) (*tenant, error) {
 	name := fmt.Sprintf("scale-%04d", index)
 	logical, err := kcpfixtures.EnsureWorkspace(ctx, rootClient, name, 2*time.Minute)
 	if err != nil {
@@ -399,15 +400,22 @@ func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client,
 		tn.clusters = append(tn.clusters, fmt.Sprintf("t%04d-c%03d", index, n))
 	}
 
-	for _, export := range exportsFor(plan) {
+	// Every export, with each provider's own computed claims — not the
+	// single-export fixture's pair of core-type claims. A provider reads and
+	// writes across exports (core's Clusters, the bootstrap provider's
+	// Secrets), and a binding that granted only what a one-export fixture
+	// needs would leave those reads refused: the manager would engage the
+	// workspace and then reconcile nothing, which is a run that measures an
+	// idle fleet and calls it an active one.
+	for _, provider := range providers {
 		if err := kcpfixtures.BindExport(ctx, cl, kcpfixtures.BindExportOptions{
-			BindingName:      export,
+			BindingName:      provider.Export,
 			ExportPath:       deployedscale.RootWorkspace,
-			ExportName:       export,
-			PermissionClaims: demo.PermissionClaims,
+			ExportName:       provider.Export,
+			PermissionClaims: provider.Claims(discovery.Identities(), discovery),
 			ReadyTimeout:     2 * time.Minute,
 		}); err != nil {
-			return nil, fmt.Errorf("binding %s in %s: %w", export, name, err)
+			return nil, fmt.Errorf("binding %s in %s: %w", provider.Export, name, err)
 		}
 	}
 
@@ -482,27 +490,6 @@ func awaitReady(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, t
 	}
 }
 
-// exportsFor is what a workspace binds. A run deploying only some managers
-// still binds every export those managers need to see a cluster through.
-func exportsFor(plan scaletarget.Plan) []string {
-	_ = plan
-	return []string{
-		capiexports.CoreExport,
-		capiexports.BootstrapExport,
-		capiexports.ControlPlaneExport,
-		capiexports.InfraExport,
-	}
-}
-
-func providersFor(components []deployedscale.Component) []capiexports.Provider {
-	_ = components
-	// Every provider's export is published whatever is deployed: a workspace
-	// binds them all, and an export nobody serves is an export whose objects
-	// simply never reconcile — which is the honest shape of a run that
-	// deployed only some managers.
-	return capiexports.All()
-}
-
 func componentNamesOf(components []deployedscale.Component) []string {
 	out := make([]string, 0, len(components))
 	for _, c := range components {
@@ -566,12 +553,15 @@ func optionsFromFlags(t *testing.T) deployedscale.Options {
 	}
 }
 
-func restConfigFor(creds *deployedscale.Credentials, server string) (*rest.Config, error) {
+// restConfigFor addresses kcp with the credentials this run minted: the token
+// kcp's own token file carries, and trust of the CA that signed its serving
+// certificate.
+func restConfigFor(creds *deployedscale.Credentials, server string) *rest.Config {
 	return &rest.Config{
 		Host:            server,
 		BearerToken:     creds.Token,
 		TLSClientConfig: rest.TLSClientConfig{CAData: creds.CACertPEM},
-	}, nil
+	}
 }
 
 func deployedScheme(t *testing.T) *k8sruntime.Scheme {
