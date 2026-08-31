@@ -84,7 +84,12 @@ var (
 		"`<workspaces>x<clustersPerWorkspace>` to drive to.")
 	controlPlaneMachines = flag.Int("deployed-control-plane-machines", 1, "KubeadmControlPlane replicas per cluster.")
 	workerMachines       = flag.Int("deployed-worker-machines", 0, "Worker MachineDeployment replicas per cluster.")
-	checkpoints          = flag.String("deployed-checkpoints", "50",
+	endState             = flag.String("deployed-end-state", "",
+		"What a checkpoint waits for: 'engaged' (every workspace bound and holding its objects) or 'ready' "+
+			"(every control plane ready and every Machine Ready). Empty picks the strongest state the deployed "+
+			"set can actually reach — 'ready' needs all four providers, because a cluster is taken to readiness "+
+			"by all four.")
+	checkpoints = flag.String("deployed-checkpoints", "50",
 		"Percentages of the workspace target to stop and sample at. The target is always the last.")
 	reference = flag.String("deployed-reference", "",
 		"A committed in-process sweep report to reconcile against, e.g. "+
@@ -142,6 +147,11 @@ func TestDeployedFleet(t *testing.T) {
 	report.AddFact("deployment", "one Deployment per manager — the shape an installation runs")
 	report.AddFact("components", strings.Join(componentNamesOf(options.Components), ", "))
 	report.AddFact("antiAffinity", fmt.Sprint(*spreadAcrossNodes))
+	wanted, err := deployedscale.ResolveEndState(*endState, options.Components)
+	if err != nil {
+		t.Fatalf("could not run: %v", err)
+	}
+	report.AddFact("endState", deployedscale.EndStateDescription(wanted))
 	report.AddFact("cluster", cfg.Host)
 
 	t.Cleanup(func() {
@@ -250,7 +260,7 @@ func TestDeployedFleet(t *testing.T) {
 			break
 		}
 
-		if err := awaitReady(ctx, tenants, plan, min(*stepTimeout, time.Until(deadline)), *pollInterval); err != nil {
+		if err := awaitEndState(ctx, wanted, tenants, plan, min(*stepTimeout, time.Until(deadline)), *pollInterval); err != nil {
 			stoppedBy = fmt.Sprintf("waiting for %d workspaces to reach the end state: %v", checkpoint, err)
 			break
 		}
@@ -433,7 +443,56 @@ func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client,
 	return tn, nil
 }
 
-// awaitReady waits for every cluster to reach the end state.
+// awaitEndState waits for every workspace to reach the state this run can
+// reach.
+func awaitEndState(ctx context.Context, state string, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
+	if state == deployedscale.EndStateEngaged {
+		return awaitEngaged(ctx, tenants, plan, timeout, poll)
+	}
+	return awaitReady(ctx, tenants, plan, timeout, poll)
+}
+
+// awaitEngaged waits for every workspace to hold the objects it was given.
+//
+// Reading them back through each workspace's own client is not a formality: it
+// is what shows the binding took and the objects are being served, which is
+// the whole of what a single deployment can be measured against.
+func awaitEngaged(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("no time left in the budget")
+	}
+	deadline := time.Now().Add(timeout)
+	var last string
+
+	for {
+		short := 0
+		for _, tn := range tenants {
+			var clusters clusterv1.ClusterList
+			if err := tn.client.List(ctx, &clusters, client.InNamespace(demo.Namespace)); err != nil {
+				last = fmt.Sprintf("listing clusters in %s: %v", tn.name, err)
+				short++
+				continue
+			}
+			if len(clusters.Items) < plan.Shape.ClustersPerWorkspace {
+				short++
+				last = fmt.Sprintf("%s: %d of %d clusters", tn.name, len(clusters.Items), plan.Shape.ClustersPerWorkspace)
+			}
+		}
+		if short == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s: %d of %d workspaces short (%s)", timeout, short, len(tenants), last)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+// awaitReady waits for every cluster to reach an initialized, Ready state.
 func awaitReady(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
 	if timeout <= 0 {
 		return fmt.Errorf("no time left in the budget")

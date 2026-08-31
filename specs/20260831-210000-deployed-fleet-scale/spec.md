@@ -38,6 +38,40 @@ What is built:
   with the Go toolchain alone as the constitution requires. Verified by
   installing it, not assumed.
 
+### What a run is likely to need
+
+Measured on a 4 vCPU machine, in process, at 4 workspaces × 1 cluster × 3
+machines — not a deployed run, but the two terms that will set its budget:
+
+| | RSS |
+|---|--:|
+| kcp, started, no workspaces | ~360 MiB |
+| kcp, 4 workspaces / 4 clusters / 12 machines | ~770 MiB, still climbing |
+| all four providers co-located, plus the in-memory workload clusters and the driver | 62 MiB idle, 119 MiB at that point |
+
+Two readings, both of which matter to this feature:
+
+**kcp dominates and is not flat.** 360 → 770 MiB across four workspaces. Every
+figure this repository has published measures the *managers* and is silent
+about the server they talk to; on this evidence the server is the larger term.
+RSS is returned lazily, so the marginal cost is an upper bound rather than a
+slope — but it is not small, and a deployed run needs kcp sized as a
+first-class component rather than as background.
+
+**The heap-to-resident multiplier looks like 2.2–2.8×** — 42.5 MiB live heap
+against 94–119 MiB resident. That is the first data point on the figure
+`capacity.md` says it needs and never states. It is an upper bound, because the
+process also held the driver and its fixture clients, and it is exactly what a
+deployed run measures properly.
+
+From those, a **prediction** for kind: about 3–4 GiB and 2–4 vCPU for an M1 or
+M2 smoke run at 8 workspaces, 5–7 GiB at 32 workspaces with three machines
+each, on top of ~1.5–2 GiB for the kind node itself. The 200 × 50 target is not
+a kind-on-a-laptop proposition — extrapolating kcp alone gives 6–12 GiB, and
+`dev-infrastructure-manager` would hold 200 in-memory API servers and 10,000
+Nodes in one container, which is the term nothing has measured and the most
+likely thing to be killed first.
+
 **M1 is therefore ready to attempt and has not been attempted.** The first run
 is `COMPONENTS=core-manager` against the committed core sweep; until those two
 agree there is no reason to trust the deployed instrument with four.
