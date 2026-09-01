@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
@@ -59,85 +60,9 @@ func TestKcpStartsAndInitializesWorkspacesWithTheDeployedFlags(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	dir := t.TempDir()
-
-	port := freePort(t)
-	// The name kcp is told to advertise itself as. In a cluster this is the
-	// Service; here it is a loopback name the certificate also covers, which
-	// is the point — what is under test is that kcp works when told to
-	// advertise a name rather than detect one.
-	baseURL := fmt.Sprintf("https://localhost:%d", port)
-
-	creds, err := deployedscale.NewCredentials(
-		deployedscale.ServiceNames(deployedscale.KcpName, "scale"), deployedscale.LoopbackIPs(), time.Hour)
-	if err != nil {
-		t.Fatalf("credentials: %v", err)
-	}
-
-	credsDir := filepath.Join(dir, "credentials")
-	if err := os.MkdirAll(credsDir, 0o700); err != nil {
-		t.Fatalf("credentials dir: %v", err)
-	}
-	for name, body := range map[string][]byte{
-		"tls.crt":    creds.ServingCertPEM,
-		"tls.key":    creds.ServingKeyPEM,
-		"tokens.csv": []byte(creds.TokenAuthCSV()),
-	} {
-		if err := os.WriteFile(filepath.Join(credsDir, name), body, 0o600); err != nil {
-			t.Fatalf("writing %s: %v", name, err)
-		}
-	}
-
-	// The same flags the Deployment passes, from the same function.
-	args := deployedscale.KcpArgs(baseURL, filepath.Join(dir, "data"), credsDir, port)
-	t.Logf("kcp %s", strings.Join(args, " "))
-
-	logPath := filepath.Join(dir, "kcp.log")
-	logFile, err := os.Create(logPath) //nolint:gosec // a path this test made.
-	if err != nil {
-		t.Fatalf("log file: %v", err)
-	}
-	defer logFile.Close() //nolint:errcheck // a test's log file.
-
-	serverCtx, stop := context.WithCancel(ctx)
-	defer stop()
-	cmd := exec.CommandContext(serverCtx, "kcp", args...) //nolint:gosec // arguments this package builds.
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting kcp: %v", err)
-	}
-	t.Cleanup(func() {
-		stop()
-		_ = cmd.Wait()
-		if t.Failed() {
-			if out, err := os.ReadFile(logPath); err == nil { //nolint:gosec // a path this test made.
-				t.Logf("kcp log tail:\n%s", tail(string(out), 60))
-			}
-		}
-	})
-
-	cfg := &rest.Config{
-		Host:            baseURL + "/clusters/" + deployedscale.RootWorkspace,
-		BearerToken:     creds.Token,
-		TLSClientConfig: rest.TLSClientConfig{CAData: creds.CACertPEM},
-	}
+	baseURL, creds := startDeployedKcp(t)
 	scheme := deployedScheme(t)
-	var rootClient client.Client
-	if err := waitFor(ctx, 3*time.Minute, func() error {
-		cl, err := client.New(cfg, client.Options{Scheme: scheme})
-		if err != nil {
-			return err
-		}
-		var workspaces tenancyv1alpha1.WorkspaceList
-		if err := cl.List(ctx, &workspaces); err != nil {
-			return err
-		}
-		rootClient = cl
-		return nil
-	}); err != nil {
-		t.Fatalf("kcp did not become usable at %s: %v", baseURL, err)
-	}
+	rootClient := rootClientFor(t, ctx, baseURL, creds, scheme)
 
 	// The whole point: a workspace has to leave Initializing. kcp's own
 	// controllers remove the initializers, so this fails when the server was
@@ -184,4 +109,122 @@ func tail(s string, lines int) string {
 		parts = parts[len(parts)-lines:]
 	}
 	return strings.Join(parts, "\n")
+}
+
+// startDeployedKcp runs a kcp with exactly the flags the Deployment gives it,
+// on this machine, and returns the URL it serves on and the credentials that
+// reach it.
+//
+// No cluster and no container runtime: the flags, the certificate and the
+// identity are the deployed ones, which is enough to catch the failures that
+// come from those rather than from Kubernetes. Two whole-run failures were
+// reproduced this way in seconds after costing ten minutes each in kind.
+func startDeployedKcp(t *testing.T) (baseURL string, creds *deployedscale.Credentials) {
+	t.Helper()
+
+	if _, err := exec.LookPath("kcp"); err != nil {
+		t.Skipf("could not run: no kcp binary on PATH (%v); `task tools:kcp` installs it", err)
+	}
+
+	dir := t.TempDir()
+	port := freePort(t)
+	// The name kcp is told to advertise itself as. In a cluster this is the
+	// Service; here it is a loopback name the certificate also covers, which
+	// is the point — what is under test is that kcp works when told to
+	// advertise a name rather than detect one.
+	baseURL = fmt.Sprintf("https://localhost:%d", port)
+
+	creds, err := deployedscale.NewCredentials(
+		deployedscale.ServiceNames(deployedscale.KcpName, "scale"), deployedscale.LoopbackIPs(), time.Hour)
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+
+	credsDir := filepath.Join(dir, "credentials")
+	if err := os.MkdirAll(credsDir, 0o700); err != nil {
+		t.Fatalf("credentials dir: %v", err)
+	}
+	for name, body := range map[string][]byte{
+		"tls.crt":    creds.ServingCertPEM,
+		"tls.key":    creds.ServingKeyPEM,
+		"tokens.csv": []byte(creds.TokenAuthCSV()),
+	} {
+		if err := os.WriteFile(filepath.Join(credsDir, name), body, 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+
+	// The same flags the Deployment passes, from the same function.
+	args := deployedscale.KcpArgs(baseURL, filepath.Join(dir, "data"), credsDir, port)
+	t.Logf("kcp %s", strings.Join(args, " "))
+
+	logPath := filepath.Join(dir, "kcp.log")
+	logFile, err := os.Create(logPath) //nolint:gosec // a path this test made.
+	if err != nil {
+		t.Fatalf("log file: %v", err)
+	}
+	t.Cleanup(func() { _ = logFile.Close() })
+
+	serverCtx, stop := context.WithCancel(t.Context())
+	cmd := exec.CommandContext(serverCtx, "kcp", args...) //nolint:gosec // arguments this package builds.
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		stop()
+		t.Fatalf("starting kcp: %v", err)
+	}
+	t.Cleanup(func() {
+		stop()
+		_ = cmd.Wait()
+		if t.Failed() {
+			if out, err := os.ReadFile(logPath); err == nil { //nolint:gosec // a path this test made.
+				t.Logf("kcp log tail:\n%s", tail(string(out), 60))
+			}
+		}
+	})
+
+	return baseURL, creds
+}
+
+// rootClientFor waits for kcp to answer and returns a client for its root
+// workspace.
+func rootClientFor(t *testing.T, ctx context.Context, baseURL string,
+	creds *deployedscale.Credentials, scheme *k8sruntime.Scheme,
+) client.Client {
+	t.Helper()
+
+	cfg := &rest.Config{
+		Host:            baseURL + "/clusters/" + deployedscale.RootWorkspace,
+		BearerToken:     creds.Token,
+		TLSClientConfig: rest.TLSClientConfig{CAData: creds.CACertPEM},
+	}
+	var rootClient client.Client
+	if err := waitFor(ctx, 3*time.Minute, func() error {
+		cl, err := client.New(cfg, client.Options{Scheme: scheme})
+		if err != nil {
+			return err
+		}
+		var workspaces tenancyv1alpha1.WorkspaceList
+		if err := cl.List(ctx, &workspaces); err != nil {
+			return err
+		}
+		rootClient = cl
+		return nil
+	}); err != nil {
+		t.Fatalf("kcp did not become usable at %s: %v", baseURL, err)
+	}
+	return rootClient
+}
+
+// clientForWorkspace builds a client scoped to one logical cluster on a kcp
+// addressed by base URL.
+func clientForWorkspace(baseURL string, creds *deployedscale.Credentials, logical string,
+	scheme *k8sruntime.Scheme,
+) (client.Client, error) {
+	cfg := &rest.Config{
+		Host:            baseURL,
+		BearerToken:     creds.Token,
+		TLSClientConfig: rest.TLSClientConfig{CAData: creds.CACertPEM},
+	}
+	return client.New(deployedscale.WorkspaceConfig(cfg, logical), client.Options{Scheme: scheme})
 }

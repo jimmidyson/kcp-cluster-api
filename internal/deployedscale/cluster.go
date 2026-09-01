@@ -240,9 +240,82 @@ func podTrouble(ctx context.Context, cl client.Client, namespace, component stri
 				detail = fmt.Sprintf("%s/%s last exited %d (%s): %s",
 					pod.Name, status.Name, term.ExitCode, term.Reason, strings.TrimSpace(term.Message))
 			}
+			// A container that is running and not ready is the case the two
+			// above miss entirely: it has no Waiting state and has never
+			// terminated, so both leave detail empty and the wait reports
+			// "0/1 available" with nothing in the parentheses.
+			//
+			// That is exactly how a whole run was lost. The manager was up and
+			// visibly reconciling for the full ten minutes while its readiness
+			// probe answered 404, and every line of evidence for that lived
+			// somewhere this function did not look. The kubelet writes the
+			// reason down as an Event; all that was needed was to read it.
+			if status.State.Running != nil && detail == "" {
+				detail = fmt.Sprintf("%s/%s is running but not ready after %d restart(s)",
+					pod.Name, status.Name, status.RestartCount)
+				if reason := notReadyReason(pod); reason != "" {
+					detail += ": " + reason
+				}
+				if ev := latestWarning(ctx, cl, pod); ev != "" {
+					detail += " (" + ev + ")"
+				}
+			}
 		}
 	}
 	return detail, false
+}
+
+// notReadyReason is what the pod itself says about not being ready.
+func notReadyReason(pod *corev1.Pod) string {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status != corev1.ConditionTrue {
+			return strings.TrimSpace(cond.Reason + " " + cond.Message)
+		}
+	}
+	return ""
+}
+
+// latestWarning returns the most recent Warning Event about a pod.
+//
+// This is where a failing probe is written down — "Readiness probe failed:
+// HTTP probe failed with statuscode: 404" — and it is the difference between a
+// diagnosis and a replica count. Best effort: a diagnostic that fails is worse
+// than one that says less.
+func latestWarning(ctx context.Context, cl client.Client, pod *corev1.Pod) string {
+	var events corev1.EventList
+	if err := cl.List(ctx, &events, client.InNamespace(pod.Namespace),
+		client.MatchingFields{"involvedObject.name": pod.Name}); err != nil {
+		// The field index is not always available through a cached client;
+		// fall back to listing the namespace and filtering here.
+		if err := cl.List(ctx, &events, client.InNamespace(pod.Namespace)); err != nil {
+			return ""
+		}
+	}
+
+	var newest *corev1.Event
+	for i := range events.Items {
+		ev := &events.Items[i]
+		if ev.InvolvedObject.Name != pod.Name || ev.Type != corev1.EventTypeWarning {
+			continue
+		}
+		if newest == nil || eventTime(ev).After(eventTime(newest)) {
+			newest = ev
+		}
+	}
+	if newest == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s", newest.Reason, strings.TrimSpace(newest.Message))
+}
+
+func eventTime(ev *corev1.Event) time.Time {
+	if !ev.LastTimestamp.IsZero() {
+		return ev.LastTimestamp.Time
+	}
+	if !ev.EventTime.IsZero() {
+		return ev.EventTime.Time
+	}
+	return ev.CreationTimestamp.Time
 }
 
 // ComponentPods lists the pods belonging to one component.

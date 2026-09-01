@@ -346,3 +346,84 @@ func TestWorkspaceConfigCopies(t *testing.T) {
 		t.Errorf("the base was mutated to %q", base.Host)
 	}
 }
+
+// TestPodTroubleReportsARunningPodThatIsNeverReady covers the case that cost a
+// whole ten-minute run and reported nothing: the manager was up and
+// reconciling, its readiness probe answered 404, and the wait could only say
+// "0/1 available" because the container was neither waiting nor terminated.
+func TestPodTroubleReportsARunningPodThatIsNeverReady(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "core-manager-abc",
+			Namespace: "scale",
+			Labels:    map[string]string{ComponentLabel: "core-manager"},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionFalse,
+				Reason: "ContainersNotReady", Message: "containers with unready status: [core-manager]",
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:         "core-manager",
+				Ready:        false,
+				RestartCount: 0,
+				State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	event := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "core-manager-abc.1", Namespace: "scale"},
+		InvolvedObject: corev1.ObjectReference{Name: "core-manager-abc", Namespace: "scale"},
+		Type:           corev1.EventTypeWarning,
+		Reason:         "Unhealthy",
+		Message:        "Readiness probe failed: HTTP probe failed with statuscode: 404",
+		LastTimestamp:  metav1.NewTime(time.Now()),
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pod, event).Build()
+
+	detail, terminal := podTrouble(t.Context(), cl, "scale", "core-manager")
+	if terminal {
+		t.Error("a pod that is running but not ready was called terminal; it can still become ready")
+	}
+	for _, want := range []string{
+		"running but not ready",
+		"ContainersNotReady",
+		"statuscode: 404",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail does not mention %q:\n%s", want, detail)
+		}
+	}
+}
+
+// TestPodTroubleStillPrefersTheWaitingReason checks the new case did not
+// displace the old ones: a container waiting in a terminal state is still
+// reported as terminal, so a wait gives up rather than sitting out its timeout.
+func TestPodTroubleStillPrefersTheWaitingReason(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "core-manager-abc",
+			Namespace: "scale",
+			Labels:    map[string]string{ComponentLabel: "core-manager"},
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "core-manager",
+				Ready: false,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason: "ImagePullBackOff", Message: "back-off pulling image",
+				}},
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pod).Build()
+
+	detail, terminal := podTrouble(t.Context(), cl, "scale", "core-manager")
+	if !terminal {
+		t.Error("ImagePullBackOff is not being treated as terminal any more")
+	}
+	if !strings.Contains(detail, "ImagePullBackOff") {
+		t.Errorf("the detail does not name the waiting reason:\n%s", detail)
+	}
+}

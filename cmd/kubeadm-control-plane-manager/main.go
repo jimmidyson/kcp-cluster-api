@@ -50,6 +50,7 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
@@ -176,6 +177,30 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")
+		os.Exit(1)
+	}
+
+	// Register the probes the Deployment's readiness and liveness probes ask
+	// for. Without this, /readyz and /healthz do not exist.
+	//
+	// controller-runtime registers those routes only when a check has been
+	// added — addHealthProbeServer does nothing `if cm.readyzHandler == nil`,
+	// and that handler is created by AddReadyzCheck and nowhere else. A manager
+	// with a health port and no checks therefore serves the port and answers
+	// 404 on it, which a kubelet reads as a failed probe: the pod runs, does
+	// its work, logs nothing wrong, and never goes Ready. A Deployment of it
+	// stays 0/1 available for ever.
+	//
+	// Ping is what it says: the process is up and the manager is serving. The
+	// manager has already resolved its virtual workspace and built its caches
+	// by the time this serves, so there is nothing further this could usefully
+	// gate on that being up does not already imply.
+	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
+		setupLog.Error(err, "Unable to register the health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+		setupLog.Error(err, "Unable to register the readiness check")
 		os.Exit(1)
 	}
 
