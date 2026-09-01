@@ -58,33 +58,6 @@ func NewWorkspace(name string, workspaceType tenancyv1alpha1.WorkspaceTypeRefere
 	}
 }
 
-// WaitForWorkspaceType waits until a WorkspaceType can be resolved in the
-// workspace cl is scoped to.
-//
-// It is the precondition for creating a workspace of that type, and an
-// unmet one does not stay unmet loudly — see EnsureWorkspaceOfType.
-func WaitForWorkspaceType(ctx context.Context, cl client.Client, ref tenancyv1alpha1.WorkspaceTypeReference, timeout time.Duration) error {
-	if timeout == 0 {
-		timeout = 60 * time.Second
-	}
-
-	name := string(ref.Name)
-	var lastErr error
-	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, timeout, true, func(ctx context.Context) (bool, error) {
-		wt := &tenancyv1alpha1.WorkspaceType{}
-		if err := cl.Get(ctx, client.ObjectKey{Name: name}, wt); err != nil {
-			lastErr = err
-			return false, nil //nolint:nilerr // transient while kcp bootstraps.
-		}
-		return true, nil
-	})
-	if err != nil {
-		return fmt.Errorf("WorkspaceType %q was not available after %s, so a workspace of that type would come up "+
-			"with no createdBy and never finish initializing: %w (last attempt: %v)", name, timeout, err, lastErr)
-	}
-	return nil
-}
-
 // EnsureWorkspace creates a workspace named name under the workspace cl is
 // scoped to, waits for it to become Ready, and returns its internal logical
 // cluster name - the identifier the multicluster provider engages workspaces
@@ -114,29 +87,24 @@ func EnsureWorkspaceOfType(ctx context.Context, cl client.Client, name string, w
 		timeout = 60 * time.Second
 	}
 
-	// The type has to exist before the workspace is created, and waiting for
-	// it is not the same as retrying the create until it succeeds.
+	// The create is retried rather than attempted once, for two reasons it can
+	// fail transiently: a client built moments after the server started can
+	// hold a discovery document with no tenancy API in it at all, and a create
+	// racing kcp's bootstrap of its root WorkspaceTypes is rejected with
+	// "workspacetypes.tenancy.kcp.io \"root:universal\" not found". Both clear
+	// on their own. kcp's own e2e fixture retries the create too.
 	//
-	// A create attempted before kcp has bootstrapped its root WorkspaceTypes
-	// is rejected with "workspacetypes.tenancy.kcp.io \"root:universal\" not
-	// found" — and a retry moments later succeeds. That looks like the race
-	// resolving itself, and it is not: the workspace comes up with no
-	// createdBy recorded on its LogicalCluster, so kcp's own apibinder
-	// initializer cannot create the type's default APIBindings ("had no
-	// createdBy recorded") and the system:apibindings initializer is never
-	// removed. The workspace then sits in Initializing for ever, and the
-	// error names an initializer rather than the create that caused it.
-	//
-	// So this waits for the type rather than retrying past it. Retrying the
-	// create is kept as well, for the other reason it can fail: a client
-	// built moments after the server started can hold a discovery document
-	// with no tenancy API in it at all.
-	if err := WaitForWorkspaceType(ctx, cl, workspaceType, timeout); err != nil {
-		return "", err
-	}
-
-	// The create is retried rather than attempted once, for the discovery
-	// reason above. kcp's own e2e fixture retries it too.
+	// There is deliberately no wait for the WorkspaceType to be readable first.
+	// An earlier version had one, on the theory that a create winning that race
+	// produced a workspace with no createdBy on its LogicalCluster and so an
+	// unremovable system:apibindings initializer. That theory was wrong — the
+	// missing createdBy came from creating workspaces as system:masters, for
+	// which kcp's admission deliberately records no owner (see
+	// deployedscale.AdminGroup) — and the check cost more than it ever gave: a
+	// WorkspaceTypeReference resolves by path, so getting it by name alone
+	// succeeds only when the client happens to be scoped to the workspace
+	// holding the type. Every workspace created below root, an org or a home
+	// among them, failed the gate on a type that was there all along.
 	ws := NewWorkspace(name, workspaceType)
 	var lastCreateErr error
 	createErr := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, timeout, true, func(ctx context.Context) (bool, error) {
