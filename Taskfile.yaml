@@ -416,7 +416,12 @@ tasks:
       CLUSTERS: '{{.CLUSTERS | default "8"}}'
       NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "1"}}'
       CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "1"}}'
-      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1"}}'  # one spread per deployed run
+      # The same knob as every other scale task, and the same syntax: a list
+      # runs each spread in turn. A deployed spread is a whole cluster's worth
+      # of deployments, so the run is torn down and stood up again between
+      # them rather than deploying both at once. Empty derives it from the
+      # cluster count.
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default ""}}'
       CHECKPOINTS: '{{.CHECKPOINTS | default "25,50"}}'
       # The committed in-process run this is checked against. Empty makes the
       # deployed run a second instrument with nothing keeping it honest, which

@@ -90,9 +90,10 @@ var (
 		"How many nodes each cluster reaches, control plane included.")
 	controlPlaneNodes = flag.Int("deployed-control-plane-nodes", 1,
 		"How many of each cluster's nodes are control plane machines.")
-	clustersPerWorkspace = flag.Int("deployed-clusters-per-workspace", 0,
-		"How the clusters are spread over workspaces. One spread per run here, because a deployed run stands a "+
-			"whole cluster up: two spreads are two runs. Zero means one cluster per workspace.")
+	clustersPerWorkspace = flag.String("deployed-clusters-per-workspace", "",
+		"How the clusters are spread over workspaces, comma separated for more than one spread. Each spread is a "+
+			"sub-test: the run is torn down and stood up again for it, because a deployed spread is a whole "+
+			"cluster's worth of deployments. Empty derives it from the cluster count.")
 	endState = flag.String("deployed-end-state", "",
 		"What a checkpoint waits for: 'engaged' (every workspace bound and holding its objects) or 'ready' "+
 			"(every control plane ready and every Machine Ready). Empty picks the strongest state the deployed "+
@@ -127,8 +128,22 @@ var (
 // point (FR-005, and Constitution Principle IV). It is deliberately outside
 // `verify` and `check` for the same reason `test:scale` is.
 func TestDeployedFleet(t *testing.T) {
-	plan := planFromFlags(t)
+	plans := plansFromFlags(t)
 	options := optionsFromFlags(t)
+
+	for _, plan := range plans {
+		t.Run(plan.Shape.String(), func(t *testing.T) {
+			runDeployed(t, plan, options)
+		})
+	}
+}
+
+// runDeployed stands the fleet up, measures it, and takes it down again.
+//
+// One spread at a time and torn down in between, sharing one namespace. Two
+// spreads deployed side by side would be two kcps and two sets of managers on
+// one cluster, and the second's figures would include the first's load.
+func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Options) {
 
 	cfg, err := deployedscale.ClusterConfig(*kubeconfig, *kubecontext)
 	if err != nil {
@@ -194,9 +209,11 @@ func TestDeployedFleet(t *testing.T) {
 			// A fresh context: the test's own is cancelled by the time
 			// cleanup runs, and a teardown that cannot issue its delete leaves
 			// a namespace behind on every run.
-			teardownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			teardownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 			defer cancel()
-			if err := deployedscale.Teardown(teardownCtx, cl, options.Namespace); err != nil {
+			// Waited on, not just requested: the next spread deploys into this
+			// namespace, and one still terminating would be measured with it.
+			if err := deployedscale.TeardownAndWait(teardownCtx, cl, options.Namespace, 8*time.Minute, *pollInterval); err != nil {
 				t.Errorf("tearing down: %v", err)
 			}
 		})
@@ -569,33 +586,32 @@ func componentNamesOf(components []deployedscale.Component) []string {
 	return out
 }
 
-// spreadFromFlag turns the single-spread flag into the list a Fleet takes.
-// Zero means unstated, which the fleet reads as one cluster per workspace —
-// the only spread a deployed run can take, since it stands a whole cluster up
-// per spread.
-func spreadFromFlag(per int) []int {
-	if per < 1 {
-		return []int{1}
-	}
-	return []int{per}
-}
-
-func planFromFlags(t *testing.T) scaletarget.Plan {
+func plansFromFlags(t *testing.T) []scaletarget.Plan {
 	t.Helper()
 	percents, err := scaletarget.ParsePercents(*checkpoints)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
+
+	// Empty is not an error: the fleet derives its own spreads.
+	var spreads []int
+	if strings.TrimSpace(*clustersPerWorkspace) != "" {
+		spreads, err = scaletarget.ParseCounts(*clustersPerWorkspace)
+		if err != nil {
+			t.Fatalf("could not run: clusters per workspace: %v", err)
+		}
+	}
+
 	plans, err := scaletarget.Fleet{
 		Clusters:             *clusters,
 		NodesPerCluster:      *nodesPerCluster,
 		ControlPlaneNodes:    *controlPlaneNodes,
-		ClustersPerWorkspace: spreadFromFlag(*clustersPerWorkspace),
+		ClustersPerWorkspace: spreads,
 	}.Plans(percents)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
-	return plans[0]
+	return plans
 }
 
 func optionsFromFlags(t *testing.T) deployedscale.Options {

@@ -117,6 +117,40 @@ func Teardown(ctx context.Context, cl client.Client, namespace string) error {
 	return nil
 }
 
+// TeardownAndWait deletes the run's namespace and waits until it is gone.
+//
+// The wait is not tidiness. Namespace deletion is asynchronous, and a second
+// run that deployed while the first was still terminating would measure both:
+// kcp and every manager from the previous spread are still scheduled and still
+// reconciling. A measurement taken then is of a cluster doing twice the work,
+// and nothing in the report would say so.
+func TeardownAndWait(ctx context.Context, cl client.Client, namespace string, timeout, poll time.Duration) error {
+	if err := Teardown(ctx, cl, namespace); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		var ns corev1.Namespace
+		err := cl.Get(ctx, client.ObjectKey{Name: namespace}, &ns)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("waiting for namespace %s to go: %w", namespace, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("namespace %s was still terminating after %s: a run starting now would measure "+
+				"the previous one as well", namespace, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
 // WaitForDeployment waits until a Deployment reports an available replica.
 func WaitForDeployment(ctx context.Context, cl client.Client, namespace, name string, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
