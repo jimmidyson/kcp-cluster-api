@@ -329,6 +329,38 @@ func (o Options) KcpService() *corev1.Service {
 	}
 }
 
+// KcpArgs are the flags kcp is started with.
+//
+// A function rather than a literal inside the Deployment so that the exact
+// flag set can be started and exercised without a cluster. It is worth that:
+// kcp's own controllers run inside it, and a flag combination that stops one
+// of them does not fail loudly — it produces workspaces that never leave
+// Initializing, which looks like a problem with whatever created them.
+//
+// baseURL is what kcp advertises itself as. dataDir and credentialsDir are
+// where it keeps its state and finds its serving certificate and token file,
+// which differ between a container and a local process.
+func KcpArgs(baseURL, dataDir, credentialsDir string, port int) []string {
+	return []string{
+		"start",
+		"--root-directory=" + dataDir,
+		fmt.Sprintf("--secure-port=%d", port),
+		"--bind-address=0.0.0.0",
+		// Supplied rather than self-signed, so the certificate covers the
+		// Service name a pod on another node resolves. See Credentials.
+		fmt.Sprintf("--tls-cert-file=%s/tls.crt", credentialsDir),
+		fmt.Sprintf("--tls-private-key-file=%s/tls.key", credentialsDir),
+		fmt.Sprintf("--token-auth-file=%s/tokens.csv", credentialsDir),
+		// What kcp writes into APIExportEndpointSlices and hands to clients.
+		// Without these it advertises the address it detected for itself,
+		// which is a pod IP that changes on every restart and is not what the
+		// serving certificate covers.
+		"--shard-base-url=" + baseURL,
+		"--shard-external-url=" + baseURL,
+		"--audit-log-path=-",
+	}
+}
+
 // KcpDeployment runs the server the whole fleet talks to.
 //
 // One replica and an emptyDir. The state is one measurement's worth and dies
@@ -349,27 +381,8 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 						Name:            KcpName,
 						Image:           o.KcpImage,
 						ImagePullPolicy: o.imagePullPolicy(),
-						Args: []string{
-							"start",
-							"--root-directory=/data",
-							fmt.Sprintf("--secure-port=%d", KcpPort),
-							"--bind-address=0.0.0.0",
-							// Supplied rather than self-signed, so the
-							// certificate covers the Service name a pod on
-							// another node resolves. See Credentials.
-							fmt.Sprintf("--tls-cert-file=%s/tls.crt", CredentialsMountPath),
-							fmt.Sprintf("--tls-private-key-file=%s/tls.key", CredentialsMountPath),
-							fmt.Sprintf("--token-auth-file=%s/tokens.csv", CredentialsMountPath),
-							// What kcp writes into APIExportEndpointSlices and
-							// hands to clients. Without these it advertises the
-							// address it detected for itself, which is a pod IP
-							// that changes on every restart and is not what the
-							// serving certificate covers.
-							"--shard-base-url=" + o.KcpBaseURL(),
-							"--shard-external-url=" + o.KcpBaseURL(),
-							"--audit-log-path=-",
-						},
-						Ports: []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
+						Args:            KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort),
+						Ports:           []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "credentials", MountPath: CredentialsMountPath, ReadOnly: true},
 							{Name: "data", MountPath: "/data"},
