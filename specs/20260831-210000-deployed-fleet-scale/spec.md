@@ -13,10 +13,26 @@ aren't necessarily on the same node."
 
 ## Where this stands
 
-The harness is built and unit tested. **No deployed run has been taken**, and
-none can be taken in an environment without a cluster and a container runtime.
-Per Constitution Principle IX that is reported as not measured rather than
-predicted, so this specification contains no figures.
+The harness runs end to end on a kind cluster, and **the two instruments have
+been compared and agree**: core-manager measures 1.7 goroutines per workspace
+deployed against the committed in-process sweep's 2.0, a ratio of 0.86 inside
+the 20% tolerance, from 329, 331 and 339 goroutines at 2, 4 and 8 engaged
+workspaces. The run is committed as `evidence/deployed-core-8x1.json`.
+
+That is the calibration this specification set as the condition for believing
+anything else the deployed instrument says. It is not a fleet-size result: the
+largest run taken is ten clusters, every component so far has landed on one
+node, and per Constitution Principle IX nothing here is extrapolated to the
+200-cluster target — a slope carried twenty-five times beyond its data is a
+prediction, and this specification prints none.
+
+One figure worth recording and not yet measurable: a run with all four
+providers deployed measures core-manager at 17.0 goroutines per workspace
+rather than 1.7, reproducibly, because a complete provider set takes clusters
+to Ready and a ready cluster costs a live ClusterCache per workload cluster
+that an engagement-only sweep never opens. The implied ~15 goroutines per
+connected cluster has no committed evidence and is therefore an explanation
+rather than a figure.
 
 What is built:
 

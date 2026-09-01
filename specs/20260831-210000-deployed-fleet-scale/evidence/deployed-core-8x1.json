@@ -1,0 +1,124 @@
+{
+  "title": "Deployed fleet: 8 clusters over 8 workspaces, 1 nodes each",
+  "facts": {
+    "antiAffinity": "false",
+    "cluster": "https://127.0.0.1:37989",
+    "components": "core-manager",
+    "core-manager.goroutinesPerWorkspace": "1.7",
+    "core-manager.node": "kcp-scale-control-plane",
+    "core-manager.residentBytesPerWorkspace": "1100654",
+    "core-manager.residentToHeapRatio": "5.08",
+    "deployment": "one Deployment per manager — the shape an installation runs",
+    "devClusterBackend": "inMemory",
+    "endState": "every workspace bound and holding its objects — the state a partial provider set can reach, and what the in-process deployment sweeps measure",
+    "imagePullPolicy": "IfNotPresent",
+    "kcpServiceClusterIP": "None",
+    "kubecontext": "kind-kcp-scale",
+    "nodesPerCluster": "1",
+    "outcome": "pass",
+    "reachedWorkspaces": "8",
+    "spread": "8x1",
+    "stoppedBy": "reached the requested target of 8 workspaces",
+    "targetClusters": "8",
+    "targetWorkspaces": "8"
+  },
+  "samples": [
+    {
+      "label": "2 workspaces",
+      "workspaces": 2,
+      "clusters": 2,
+      "nodes": 2,
+      "taken": "2026-09-01T17:15:47.127887194Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 329,
+            "heapAllocBytes": 11691296,
+            "heapSysBytes": 32921864,
+            "residentBytes": 73601024,
+            "cpuSeconds": 0.42
+          },
+          "pod": {
+            "name": "core-manager-6b9d9c566b-4x4h9",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.6",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        }
+      ]
+    },
+    {
+      "label": "4 workspaces",
+      "workspaces": 4,
+      "clusters": 4,
+      "nodes": 4,
+      "taken": "2026-09-01T17:15:53.462389105Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 331,
+            "heapAllocBytes": 11285912,
+            "heapSysBytes": 37116168,
+            "residentBytes": 76943360,
+            "cpuSeconds": 0.67
+          },
+          "pod": {
+            "name": "core-manager-6b9d9c566b-4x4h9",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.6",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        }
+      ]
+    },
+    {
+      "label": "8 workspaces",
+      "workspaces": 8,
+      "clusters": 8,
+      "nodes": 8,
+      "taken": "2026-09-01T17:16:05.936003312Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 339,
+            "heapAllocBytes": 15830320,
+            "heapSysBytes": 37116168,
+            "residentBytes": 80433152,
+            "cpuSeconds": 1.2
+          },
+          "pod": {
+            "name": "core-manager-6b9d9c566b-4x4h9",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.6",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        }
+      ]
+    }
+  ],
+  "reconciliations": [
+    {
+      "quantity": "goroutinesPerWorkspace",
+      "component": "core-manager",
+      "deployed": 1.7142857142857142,
+      "inProcess": 2,
+      "ratio": 0.8571428571428571,
+      "tolerance": 0.2,
+      "withinTolerance": true,
+      "source": "specs/20260820-152056-clusterclass-based-clusters/evidence/sweep-report-core.json",
+      "comparable": true
+    }
+  ]
+}

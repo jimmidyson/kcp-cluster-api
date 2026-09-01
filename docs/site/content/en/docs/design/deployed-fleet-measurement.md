@@ -184,15 +184,70 @@ one of the two instruments rather than a figure about the fleet.
 
 That check is why the first run to make is a narrowed one. Until the two
 instruments agree about a single deployment, nothing the deployed one says
-about four is worth having.
+about four is worth having. They have now been compared, and they agree — see
+below.
+
+## The two instruments agree
+
+They were checked, on the narrowed run this page said to make first:
+
+```sh
+task test:scale:kind COMPONENTS=core-manager CLUSTERS=8
+```
+
+| Quantity | Deployed | In process | Ratio | Within 20% |
+|---|--:|--:|--:|---|
+| goroutines per workspace | 1.7 | 2.0 | 0.86x | yes |
+
+Core-manager, deployed as its own Deployment on a kind cluster, holding 329,
+331 and 339 goroutines at 2, 4 and 8 engaged workspaces. Two rigs sharing no
+code path — one sweeping an in-process manager, one scraping a pod's metrics
+endpoint through a Kubernetes API server — land 14% apart on the quantity the
+whole cost model turns on.
+
+Measured, with the run committed as
+[`deployed-core-8x1.json`][evidence]. That is what makes the rest of what this
+instrument says worth reading.
+
+### The gap at the other end state is the point, not a fault
+
+A run with all four providers measures core-manager at 17.0 goroutines per
+workspace rather than 1.7 — reproducibly, from clean linear fits at 2/4/8 and
+at 3/5/10 workspaces. Both are right, and the difference is the thing this
+whole measurement exists to expose.
+
+A complete provider set takes every cluster to Ready. A ready cluster costs the
+core manager a live ClusterCache — a connection to the workload cluster, its
+informers and their goroutines — which a run stopping at engagement never
+opens. The in-process sweeps stop at engagement, so that cost has never
+appeared in any figure this repository publishes.
+
+The reconciliation therefore checks only runs that share the reference's end
+state, and records the others as what they are: a ratio between two instruments
+that measured different work, with the reason beside it. Widening a tolerance
+until the two agreed would have hidden a real difference behind a number chosen
+to make a failure go away.
+
+The per-connected-cluster figure implied by that gap is roughly 15 goroutines.
+It is **not** measured: no run producing it has its evidence committed. It is
+recorded here as the explanation for a gap, not as a number to quote.
 
 ## Status
 
-**No deployed run has been taken.** The harness, its manifests, its
-measurement and its reconciliation are built and unit tested; the run needs a
-cluster and a container runtime. Per
-[Principle IX][constitution] a figure that has not been measured is not
-predicted into the gap, so there are no numbers on this page.
+**Calibrated, and not yet a fleet-size result.** The harness runs end to end on
+a kind cluster and the two instruments agree about one deployment. What is
+measured is eight clusters of one node, with every component on a single node.
+
+Not measured, and so not stated:
+
+- **Anything about 200 clusters.** The largest run is ten. Extrapolating a
+  slope twenty-five times beyond its data is a prediction, and per
+  [Principle IX][constitution] this page does not print predictions as figures.
+- **Anything multi-node.** Every run so far is co-located, which each report
+  says on its own face. `SPREAD=true` with `WORKERS` is how that changes.
+- **The cost of a connected workload cluster**, above.
+
+[evidence]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-core-8x1.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md
