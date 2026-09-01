@@ -27,6 +27,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+const (
+	// pollInterval is how often the endpoint slice is re-read.
+	pollInterval = 500 * time.Millisecond
+	// waitReportInterval is how often an unresolved wait says so. Often
+	// enough that somebody watching a log sees it is alive, rarely enough
+	// that a wait of days does not fill a disk.
+	waitReportInterval = 30 * time.Second
 )
 
 // VirtualWorkspaceConfig returns a rest.Config addressed at an APIExport's
@@ -65,26 +75,63 @@ import (
 // same API surface. Choosing among them for locality is a scheduling question
 // this does not answer.
 //
-// # Why it polls
+// # Why it polls, and why a deployment waits indefinitely
 //
-// The endpoint slice has no URLs until something has bound the APIExport, so a
-// process starting alongside its first tenant would otherwise fail on a
-// condition that resolves itself in seconds.
+// The endpoint slice has no URLs until something has bound the APIExport.
+// ADR-0001 records the mechanism: kcp's apiexportendpointsliceurls controller
+// leaves status.endpoints empty until at least one APIBinding consumes the
+// export.
+//
+// That is not a condition that resolves itself in seconds, which is what an
+// earlier version of this comment assumed. It resolves when a *tenant arrives*,
+// and a provider is normally installed before anyone onboards to it — so the
+// wait can legitimately be days. Bounding it and exiting made a fleet with no
+// tenants yet indistinguishable from a broken one: the process crash looped,
+// the kubelet backed off to five minutes, and the first tenant to bind then
+// waited up to five minutes for a manager to notice them.
+//
+// So a zero timeout means wait, for as long as the process is asked to run.
+// Nothing is lost by waiting: the manager cannot serve anybody until an
+// endpoint exists, so a process blocked here is not a process failing to do
+// work — it is one with no work yet. It stays up, reports itself unready
+// because its health endpoint has not started, and says in its log what it is
+// waiting for. "Running, not ready, and explaining itself" is the honest
+// description of a fleet with no tenants; CrashLoopBackOff is not, and a
+// deployment that crash loops as a matter of course teaches whoever operates
+// it to ignore crash loops.
+//
+// A caller that genuinely needs a bound — a test, which must fail rather than
+// hang — passes one, and gets the old behaviour.
 func VirtualWorkspaceConfig(ctx context.Context, cl client.Client, exportName string, base *rest.Config, timeout time.Duration) (*rest.Config, error) {
 	if cl == nil || base == nil {
 		return nil, fmt.Errorf("a client and a base config are required")
 	}
-	if timeout == 0 {
-		timeout = 60 * time.Second
+	log := ctrllog.FromContext(ctx).WithName("virtualworkspace").WithValues("apiExportEndpointSlice", exportName)
+
+	// Logged rather than silent, and periodically rather than once: a process
+	// that is waiting looks exactly like a process that is stuck, and the only
+	// difference a reader can see is whether it says so.
+	started := time.Now()
+	var lastReport time.Time
+	report := func(reason string) {
+		if time.Since(lastReport) < waitReportInterval {
+			return
+		}
+		lastReport = time.Now()
+		log.Info("Waiting for the APIExport's virtual workspace endpoint. This is normal before the first "+
+			"workspace binds the export: kcp populates the slice when an APIBinding consumes it.",
+			"reason", reason, "waitingFor", time.Since(started).Round(time.Second))
 	}
 
 	var url string
-	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, timeout, true, func(ctx context.Context) (bool, error) {
+	condition := func(ctx context.Context) (bool, error) {
 		slice := &apisv1alpha1.APIExportEndpointSlice{}
 		if err := cl.Get(ctx, client.ObjectKey{Name: exportName}, slice); err != nil {
-			return false, nil //nolint:nilerr // transient; keep polling until timeout.
+			report("the endpoint slice does not exist yet")
+			return false, nil //nolint:nilerr // transient; keep polling.
 		}
 		if len(slice.Status.APIExportEndpoints) == 0 {
+			report("the endpoint slice has no endpoints yet")
 			return false, nil
 		}
 		// The first endpoint, deliberately. A slice can name several — one per
@@ -94,9 +141,21 @@ func VirtualWorkspaceConfig(ctx context.Context, cl client.Client, exportName st
 		// this does not answer.
 		url = slice.Status.APIExportEndpoints[0].URL
 		return true, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("APIExport %q has no virtual workspace endpoint after %s: %w", exportName, timeout, err)
+	}
+
+	var err error
+	if timeout > 0 {
+		err = wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, condition)
+		if err != nil {
+			return nil, fmt.Errorf("APIExport %q has no virtual workspace endpoint after %s: %w", exportName, timeout, err)
+		}
+	} else {
+		// Unbounded: only the process being asked to stop ends this.
+		err = wait.PollUntilContextCancel(ctx, pollInterval, true, condition)
+		if err != nil {
+			return nil, fmt.Errorf("stopped while waiting for APIExport %q to have a virtual workspace endpoint "+
+				"(waited %s; no workspace had bound the export): %w", exportName, time.Since(started).Round(time.Second), err)
+		}
 	}
 
 	cfg := rest.CopyConfig(base)
