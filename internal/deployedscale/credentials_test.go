@@ -136,8 +136,29 @@ func TestTokenAuthCSVIsWhatKcpParses(t *testing.T) {
 	if fields[0] != creds.Token {
 		t.Errorf("the first field is %q, not the token", fields[0])
 	}
-	if !strings.Contains(line, "system:masters") {
-		t.Error("the identity is not in system:masters, so it could not publish an APIExport")
+	if !strings.Contains(line, AdminGroup) {
+		t.Errorf("the identity is not in %s, so it has no permissions in a workspace", AdminGroup)
+	}
+}
+
+// TestTheIdentityIsNotSystemMasters is the regression test for a whole-run
+// failure with no obvious cause: every workspace stuck in Initializing on
+// system:apibindings, reported as "Initializers still exist".
+//
+// kcp's workspace admission does not record an owner for a system:masters
+// creator, the LogicalCluster it schedules therefore has no spec.createdBy, and
+// the initializing virtual workspace — which impersonates that owner, because
+// the system:apibindings initializer's WorkspaceType declares no
+// initializerPermissions — answers 500 with "had no createdBy recorded". The
+// initializer is never removed and nothing else goes wrong, so the run looks
+// like a slow workspace rather than an unusable identity.
+//
+// See AdminGroup.
+func TestTheIdentityIsNotSystemMasters(t *testing.T) {
+	line := testCredentials(t).TokenAuthCSV()
+	if strings.Contains(line, "system:masters") {
+		t.Error("the identity is in system:masters, so kcp will record no owner on the " +
+			"workspaces it creates and every one of them will hang in Initializing")
 	}
 }
 

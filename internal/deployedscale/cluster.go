@@ -331,6 +331,33 @@ func (s *Scraper) SampleComponents(ctx context.Context, cl client.Client, namesp
 // is a filter that shows the first thing rather than the right thing.
 var InitializationLogPatterns = []string{"apibinder", "initializ", "createdby", "apibinding"}
 
+// LogNoisePatterns are dropped from a match even when a narrow pattern hit
+// them.
+//
+// Narrowing by keyword is not enough on its own, because kcp names its own
+// machinery after the thing under diagnosis. Every start prints the enabled
+// admission plugins — a list containing APIBinding — names its controllers in
+// full, including kcp-apibinder-initializer, and announces each one waiting for
+// its informers to sync. All of that matches "apibinding", "apibinder" and
+// "initializ" before any workspace exists, and taking the earliest matches then
+// fills the window with a banner and truncates before the reconcile.
+//
+// A run diagnosed this way twice, and both times the output was kcp starting up
+// correctly, which reads as evidence of nothing. Excluding the banner leaves the
+// per-workspace lines, which are the ones worth printing.
+var LogNoisePatterns = []string{
+	"waiting for sync",
+	"caches are synced",
+	"starting controller",
+	"shutting down",
+	"admission plugin",
+	"enabled admission",
+	"loaded admission",
+	"initializing cache",
+	"skipping apibinding crd",
+	"skipping local crd",
+}
+
 // StartupFailurePatterns are the fallback, used only when nothing matched the
 // narrow set — a server that never mentioned the workspace at all did
 // something else wrong, and then the noise is the best evidence available.
@@ -368,21 +395,27 @@ func ContainerLogsMatching(ctx context.Context, cfg *rest.Config, cl client.Clie
 	if err != nil {
 		return "", false
 	}
-	all := strings.Split(string(raw), "\n")
+	return FilterLog(string(raw), narrow, fallback, max)
+}
+
+// FilterLog is the whole of ContainerLogsMatching that does not need a cluster:
+// given a component's output, it picks the lines worth printing.
+//
+// Split out so it can be tested against real kcp output, which is the only way
+// to know whether a pattern set actually surfaces the reconcile rather than the
+// startup banner that mentions the same words.
+func FilterLog(log string, narrow, fallback []string, max int) (lines string, matchedNarrow bool) {
+	all := strings.Split(log, "\n")
 
 	match := func(patterns []string) []string {
-		lowered := make([]string, 0, len(patterns))
-		for _, p := range patterns {
-			lowered = append(lowered, strings.ToLower(p))
-		}
 		var kept []string
 		for _, line := range all {
 			haystack := strings.ToLower(line)
-			for _, p := range lowered {
-				if strings.Contains(haystack, p) {
-					kept = append(kept, line)
-					break
-				}
+			if matchesAny(haystack, LogNoisePatterns) {
+				continue
+			}
+			if matchesAny(haystack, patterns) {
+				kept = append(kept, line)
 			}
 		}
 		return kept
@@ -403,6 +436,15 @@ func ContainerLogsMatching(ctx context.Context, cfg *rest.Config, cl client.Clie
 		kept = kept[:max]
 	}
 	return strings.Join(kept, "\n"), false
+}
+
+func matchesAny(loweredLine string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.Contains(loweredLine, strings.ToLower(p)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ContainerLogs returns the tail of a component's container output, preferring

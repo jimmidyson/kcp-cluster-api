@@ -72,15 +72,48 @@ type Credentials struct {
 	IPs []net.IP
 }
 
+// AdminGroup is the group every identity in the token file belongs to.
+//
+// # Why not system:masters
+//
+// system:masters is the obvious choice for a harness that needs to do
+// everything, and it is the wrong one: it silently breaks workspace
+// initialization. kcp's workspace admission records the creating user on the
+// Workspace, and skips doing so when the creator is system:masters:
+//
+//	isSystemPrivileged := sets.New(a.GetUserInfo().GetGroups()...).Has(kuser.SystemPrivilegedGroup)
+//	if !isSystemPrivileged {
+//		ws.Annotations[ExperimentalWorkspaceOwnerAnnotationKey] = userInfo
+//	}
+//
+// That annotation is what the scheduler copies into the LogicalCluster's
+// spec.createdBy, and spec.createdBy is the identity the initializing virtual
+// workspace impersonates when an initializer's WorkspaceType declares no
+// initializerPermissions — which is the case for kcp's own system:apibindings.
+// With no owner to impersonate the proxy answers 500, the initializer is never
+// removed, and every workspace sits in Initializing forever. kcp says so in its
+// own source, on the group below:
+//
+//	We need a separate group (not the privileged system group) for this because
+//	system-owned workspaces (e.g. root:users) need a workspace owner annotation
+//	set, and the owner annotation is skipped/not set for the privileged system
+//	group.
+//
+// system:kcp:admin is kcp's answer: its bootstrap policy binds cluster-admin to
+// it in every workspace, and it is the group kcp puts its own generated
+// kcp-admin kubeconfig in. So it is both as privileged as this harness needs
+// and an ordinary enough identity to be recorded as an owner.
+const AdminGroup = "system:kcp:admin"
+
 // TokenAuthCSV is the file kcp is started with as --token-auth-file.
 //
-// The group is system:masters because every client here is an administrator of
-// the shard: the managers publish APIExports and read every workspace, and the
-// driver creates workspaces. A narrower identity would be a security
-// improvement in a deployment and is not one here, where the alternative is a
-// measurement that fails on a permission nobody intended to test.
+// One identity serves everything: the managers publish APIExports and read
+// every workspace, and the driver creates workspaces. A narrower split would be
+// a security improvement in a deployment and is not one here, where the
+// alternative is a measurement that fails on a permission nobody intended to
+// test. See AdminGroup for why that identity is not system:masters.
 func (c Credentials) TokenAuthCSV() string {
-	return fmt.Sprintf("%s,kcp-admin,kcp-admin,\"system:masters\"\n", c.Token)
+	return fmt.Sprintf("%s,kcp-admin,kcp-admin,%q\n", c.Token, AdminGroup)
 }
 
 // Kubeconfig builds a kubeconfig addressing kcp at the given server URL.

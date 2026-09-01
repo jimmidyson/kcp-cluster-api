@@ -256,3 +256,52 @@ users:
 		t.Errorf("error %q does not name the context asked for", err)
 	}
 }
+
+// TestFilterLogSkipsTheStartupBannerThatMentionsAPIBindings uses real lines from
+// a kcp that failed exactly this way: the run below hung on system:apibindings,
+// and the filter answered with kcp starting up correctly.
+//
+// Every noise line here matches a narrow pattern — the plugin banner contains
+// "APIBinding", the controller name contains "apibinder", the sync line contains
+// "initializ" — which is why keyword narrowing alone was not enough.
+func TestFilterLogSkipsTheStartupBannerThatMentionsAPIBindings(t *testing.T) {
+	log := strings.Join([]string{
+		`I0901 14:06:11.000000 1 plugins.go:158] "Loaded admission plugin" plugin="APIBinding"`,
+		`I0901 14:06:11.000001 1 plugins.go:158] "Enabled admission plugins" plugins="APIBinding,APIExport"`,
+		`I0901 14:06:12.000000 1 shared_informer.go:313] "Waiting for sync" controller="kcp-apibinder-initializer"`,
+		`I0901 14:06:12.000001 1 controller.go:100] "Starting controller" controller="kcp-apibinder-initializer"`,
+		`I0901 14:06:13.000000 1 cacher.go:400] "Initializing cache" resource="apibindings.apis.kcp.io"`,
+		`I0901 14:06:13.000001 1 apiextensions.go:159] "skipping APIBinding CRD because it came in via system CRDs"`,
+		theOneLineThatMatters,
+	}, "\n")
+
+	got, narrow := FilterLog(log, InitializationLogPatterns, StartupFailurePatterns, 60)
+	if !narrow {
+		t.Fatal("nothing matched the narrow patterns, so the diagnosis fell back to startup noise")
+	}
+	if got != theOneLineThatMatters {
+		t.Errorf("the filter returned\n%s\n\nrather than only\n%s", got, theOneLineThatMatters)
+	}
+}
+
+const theOneLineThatMatters = `E0901 14:08:02.000000 1 workspace_controller.go:88] ` +
+	`"failed to initialize" workspace="scale-0000" ` +
+	`err="LogicalCluster 2gwkc88832wsignt|cluster had no createdBy recorded"`
+
+// TestFilterLogFallsBackWhenTheServerNeverMentionedTheWorkspace is the other
+// half: a server that says nothing about initialization did something else
+// wrong, and then its startup errors are the best evidence there is.
+func TestFilterLogFallsBackWhenTheServerNeverMentionedTheWorkspace(t *testing.T) {
+	log := strings.Join([]string{
+		`I0901 14:06:11.000000 1 server.go:1] serving securely on 0.0.0.0:6443`,
+		`E0901 14:06:12.000000 1 run.go:74] "Unhandled Error" err="failed to list clusterroles"`,
+	}, "\n")
+
+	got, narrow := FilterLog(log, InitializationLogPatterns, StartupFailurePatterns, 60)
+	if narrow {
+		t.Error("a narrow pattern matched a log with nothing about initialization in it")
+	}
+	if !strings.Contains(got, "Unhandled Error") {
+		t.Errorf("the fallback did not surface the startup error, got %q", got)
+	}
+}
