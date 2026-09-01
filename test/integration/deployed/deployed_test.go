@@ -438,7 +438,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 
 	// --- The check that keeps a second instrument honest.
 	if *reference != "" {
-		reconcile(t, report, *reference, plan)
+		reconcile(t, report, *reference, plan, wanted)
 	} else {
 		t.Log("NOTE: no in-process reference was given, so nothing checks these figures against the instrument " +
 			"they are meant to agree with. Pass -deployed-reference.")
@@ -463,7 +463,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 }
 
 // reconcile checks the deployed figures against a committed in-process run.
-func reconcile(t *testing.T, report *deployedscale.Report, path string, plan scaletarget.Plan) {
+func reconcile(t *testing.T, report *deployedscale.Report, path string, plan scaletarget.Plan, endState string) {
 	t.Helper()
 
 	// Relative paths are relative to the repository, not to this package. The
@@ -502,6 +502,34 @@ func reconcile(t *testing.T, report *deployedscale.Report, path string, plan sca
 
 	rec := deployedscale.Reconcile("goroutinesPerWorkspace", ref.DeploymentName, path,
 		deployed, ref.GoroutinesPerWorkspace, *tolerance)
+
+	// The comparison is only like-for-like at engagement.
+	//
+	// The in-process sweeps stop there: every workspace bound and holding its
+	// objects. A run of all four providers goes on to take every cluster to
+	// Ready, and a ready cluster costs the core manager a live ClusterCache —
+	// a connection, informers and their goroutines — per workload cluster,
+	// which the reference never paid for. deployedscale.EndStateEngaged says
+	// as much, and this check used to ignore it and compare anyway.
+	//
+	// It disagreed by 8.5x, reproducibly: the same 17.0 goroutines per
+	// workspace from independent runs at 2/4/8 and 3/5/10 workspaces against
+	// the reference's 2.0. That is a sound measurement of work the reference
+	// does not do, and reporting it as two instruments disagreeing was wrong.
+	if endState != deployedscale.EndStateEngaged {
+		rec = deployedscale.Incomparable(rec, fmt.Sprintf(
+			"This run measured %q while the in-process reference measured %q, so the ratio above is not a "+
+				"disagreement between instruments. A ready cluster costs the core manager a live ClusterCache "+
+				"per workload cluster that the reference never opened. To check the two against each other, "+
+				"run one deployment (COMPONENTS=core-manager), which measures engagement as the reference does.",
+			deployedscale.EndStateDescription(endState),
+			deployedscale.EndStateDescription(deployedscale.EndStateEngaged)))
+		report.Reconciliations = append(report.Reconciliations, rec)
+		t.Logf("NOTE: %s deployed against %s in process (%.2fx). %s",
+			formatFloat(rec.Deployed), formatFloat(rec.InProcess), rec.Ratio, rec.Why)
+		return
+	}
+
 	report.Reconciliations = append(report.Reconciliations, rec)
 
 	if !rec.WithinTolerance {
@@ -899,4 +927,10 @@ func findRepoRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// formatFloat renders a per-workspace figure the way the report does, so a log
+// line and the report do not disagree about the same number.
+func formatFloat(v float64) string {
+	return fmt.Sprintf("%.1f goroutines per workspace", v)
 }

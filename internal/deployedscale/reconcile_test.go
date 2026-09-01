@@ -158,3 +158,44 @@ func TestAgainstTheCommittedSweep(t *testing.T) {
 	t.Logf("in-process reference: %s costs %.1f goroutines per workspace",
 		ref.DeploymentName, ref.GoroutinesPerWorkspace)
 }
+
+// TestIncomparableIsNotReportedAsADisagreement covers the case that failed
+// three consecutive cluster runs while every one of them passed.
+//
+// The deployed figure was sound — 17.0 goroutines per workspace, the same from
+// independent runs at 2/4/8 and 3/5/10 workspaces, a clean linear fit. So was
+// the reference's 2.0. They differ because a run of all four providers takes
+// every cluster to Ready and the reference stops at engagement, and a ready
+// cluster costs a live ClusterCache per workload cluster. Calling that a
+// disagreement between instruments blamed the measurement for measuring.
+func TestIncomparableIsNotReportedAsADisagreement(t *testing.T) {
+	rec := Reconcile("goroutinesPerWorkspace", ComponentCore, "ref.json", 17.0, 2.0, DefaultTolerance)
+	if rec.WithinTolerance {
+		t.Fatal("8.5x was somehow within tolerance; this test is not exercising what it thinks")
+	}
+	if !rec.Comparable {
+		t.Error("a plain reconciliation is comparable unless it is marked otherwise")
+	}
+
+	marked := Incomparable(rec, "ready against engaged")
+	if marked.Comparable {
+		t.Error("Incomparable left the comparison marked comparable")
+	}
+	if marked.Why == "" {
+		t.Error("an incomparable pairing carries no explanation, so a reader cannot tell why the ratio is wide")
+	}
+	// The numbers survive: the point is to stop calling it a fault, not to
+	// stop recording it.
+	if marked.Deployed != 17.0 || marked.InProcess != 2.0 || marked.Ratio != 8.5 {
+		t.Errorf("marking the comparison changed it: %+v", marked)
+	}
+
+	r := &Report{Title: "t", Reconciliations: []Reconciliation{marked}}
+	md := r.Markdown()
+	if !strings.Contains(md, "not a like-for-like comparison") {
+		t.Error("the report does not say the row is not a like-for-like comparison")
+	}
+	if !strings.Contains(md, "ready against engaged") {
+		t.Error("the report does not carry the explanation")
+	}
+}

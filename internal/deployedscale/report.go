@@ -306,8 +306,18 @@ func (r *Report) Markdown() string {
 		b.WriteString("## Reconciliation with the in-process instrument\n\n")
 		b.WriteString("| Quantity | Deployed | In process | Ratio | Within tolerance |\n|---|--:|--:|--:|---|\n")
 		for _, rec := range r.Reconciliations {
+			verdict := yesNo(rec.WithinTolerance)
+			if !rec.Comparable {
+				verdict = "**not a like-for-like comparison**"
+			}
 			fmt.Fprintf(&b, "| %s | %.1f | %.1f | %.2fx | %s |\n",
-				rec.Quantity, rec.Deployed, rec.InProcess, rec.Ratio, yesNo(rec.WithinTolerance))
+				rec.Quantity, rec.Deployed, rec.InProcess, rec.Ratio, verdict)
+		}
+		b.WriteString("\n")
+		for _, rec := range r.Reconciliations {
+			if !rec.Comparable && rec.Why != "" {
+				b.WriteString("- " + rec.Why + "\n")
+			}
 		}
 		b.WriteString("\n")
 	}

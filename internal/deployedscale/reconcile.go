@@ -66,6 +66,37 @@ type Reconciliation struct {
 	// Source names the committed in-process run this was checked against, so
 	// the comparison is re-derivable rather than quoted.
 	Source string `json:"source"`
+	// Comparable is false when the two instruments did not measure the same
+	// work, in which case the ratio is worth recording and is not a finding
+	// about either of them. Why sets out which case this is.
+	Comparable bool `json:"comparable"`
+	// Why explains an incomparable pairing, in the report and to a reader who
+	// finds the ratio surprising.
+	Why string `json:"why,omitempty"`
+}
+
+// Incomparable marks a comparison between two instruments that did not measure
+// the same work.
+//
+// # Why this exists rather than a wider tolerance
+//
+// The in-process sweeps stop at engagement: every workspace bound and holding
+// its objects. A deployed run of all four providers goes further and takes
+// every cluster to Ready, and a ready cluster costs the core manager a live
+// ClusterCache — a connection, informers and their goroutines — for every
+// workload cluster, which the reference never paid for.
+//
+// So the two disagree by construction, reproducibly and by a wide margin: 17.0
+// goroutines per workspace deployed against 2.0 in process, the same 17.0 from
+// independent runs at 2/4/8 and 3/5/10 workspaces. That is a well-conditioned
+// measurement of something the reference is not measuring, and calling it a
+// disagreement between instruments would be wrong in a way that widening the
+// tolerance would only hide. The number is still reported; what changes is
+// that it is not read as a fault.
+func Incomparable(rec Reconciliation, why string) Reconciliation {
+	rec.Comparable = false
+	rec.Why = why
+	return rec
 }
 
 // Reconcile compares one deployed per-workspace figure with an in-process one.
@@ -81,6 +112,7 @@ func Reconcile(quantity, component, source string, deployed, inProcess, toleranc
 	// A zero in-process figure is not agreement and not a ratio; it is a
 	// missing reference, and calling it "within tolerance" would let a run
 	// with nothing to compare against report itself as reconciled.
+	r.Comparable = true
 	if inProcess == 0 {
 		r.Ratio = 0
 		r.WithinTolerance = false
