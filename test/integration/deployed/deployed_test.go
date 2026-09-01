@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -76,6 +77,10 @@ var (
 			"individually. Required.")
 	imageTag = flag.String("deployed-image-tag", "latest",
 		"Tag appended to the manager image prefix.")
+	imagePullPolicy = flag.String("deployed-image-pull-policy", string(deployedscale.DefaultImagePullPolicy),
+		"How the kubelet fetches the images. IfNotPresent is the default because the local path loads images "+
+			"straight onto the nodes with no registry to pull from, and Kubernetes' own tag-derived default of "+
+			"Always would look for one. Set Always against a real registry with a moving tag.")
 	componentNames = flag.String("deployed-components", "all",
 		"Comma-separated managers to deploy, or 'all'. Narrowing to one is how a deployed figure gets checked "+
 			"against an in-process one for the same deployment; it also measures a weaker end state, since a "+
@@ -171,6 +176,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	report.AddFact("deployment", "one Deployment per manager — the shape an installation runs")
 	report.AddFact("components", strings.Join(componentNamesOf(options.Components), ", "))
 	report.AddFact("antiAffinity", fmt.Sprint(*spreadAcrossNodes))
+	report.AddFact("imagePullPolicy", *imagePullPolicy)
 	wanted, err := deployedscale.ResolveEndState(*endState, options.Components)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
@@ -645,6 +651,7 @@ func optionsFromFlags(t *testing.T) deployedscale.Options {
 		Images:            images,
 		Components:        components,
 		SpreadAcrossNodes: *spreadAcrossNodes,
+		ImagePullPolicy:   corev1.PullPolicy(*imagePullPolicy),
 	}
 }
 

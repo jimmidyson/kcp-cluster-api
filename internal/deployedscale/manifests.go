@@ -161,6 +161,11 @@ type Options struct {
 	// Components to deploy. Empty means all four.
 	Components []Component
 
+	// ImagePullPolicy is how the kubelet fetches the manager images. Empty
+	// means IfNotPresent — see DefaultImagePullPolicy for why that default
+	// rather than Kubernetes' own.
+	ImagePullPolicy corev1.PullPolicy
+
 	// SpreadAcrossNodes adds anti-affinity so no two components share a node.
 	// It is required for the figures to be about a real deployment and it is
 	// not the default, because on a single-node cluster it makes every pod
@@ -175,6 +180,22 @@ type Options struct {
 	ManagerResources corev1.ResourceRequirements
 	KcpResources     corev1.ResourceRequirements
 }
+
+// DefaultImagePullPolicy is IfNotPresent, which is not what Kubernetes would
+// choose and is deliberate.
+//
+// Kubernetes defaults the policy from the tag: `:latest`, or no tag at all,
+// gets Always. That is right for an image a registry serves and wrong for one
+// that was loaded straight onto the nodes, which is how the local path works —
+// `KO_DOCKER_REPO=kind.local` builds and loads without a registry existing at
+// all. Under Always the kubelet then tries to pull `kind.local/core-manager`,
+// finds no such registry, and the deployment sits in ImagePullBackOff until
+// the run times out.
+//
+// So the policy is stated rather than inherited from a tag. A run against a
+// real registry with a moving tag should set it to Always, which is what the
+// option is for.
+const DefaultImagePullPolicy = corev1.PullIfNotPresent
 
 // DefaultManagerResources are generous on the limit on purpose. The limit is
 // what makes an OOMKill possible and therefore what makes a capacity finding
@@ -325,8 +346,9 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(KcpName)},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
-						Name:  KcpName,
-						Image: o.KcpImage,
+						Name:            KcpName,
+						Image:           o.KcpImage,
+						ImagePullPolicy: o.imagePullPolicy(),
 						Args: []string{
 							"start",
 							"--root-directory=/data",
@@ -380,6 +402,13 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 	}
 }
 
+func (o Options) imagePullPolicy() corev1.PullPolicy {
+	if o.ImagePullPolicy == "" {
+		return DefaultImagePullPolicy
+	}
+	return o.ImagePullPolicy
+}
+
 func (o Options) kcpResources() corev1.ResourceRequirements {
 	if o.KcpResources.Requests == nil && o.KcpResources.Limits == nil {
 		return DefaultKcpResources()
@@ -420,8 +449,9 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 
 	spec := corev1.PodSpec{
 		Containers: []corev1.Container{{
-			Name:  c.Name,
-			Image: o.Images[c.Name],
+			Name:            c.Name,
+			Image:           o.Images[c.Name],
+			ImagePullPolicy: o.imagePullPolicy(),
 			Args: []string{
 				"--endpoint-slice-name=" + c.ExportName,
 				fmt.Sprintf("--health-addr=:%d", HealthPort),

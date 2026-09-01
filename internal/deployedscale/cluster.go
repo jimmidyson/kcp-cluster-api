@@ -24,7 +24,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -166,11 +168,15 @@ func WaitForDeployment(ctx context.Context, cl client.Client, namespace, name st
 			return nil
 		default:
 			last = fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas)
-			// A pod that cannot be scheduled never becomes available, and
-			// waiting the full timeout for it hides the reason. Anti-affinity
-			// on a cluster with too few nodes is exactly this.
-			if reason := unschedulable(ctx, cl, namespace, name); reason != "" {
-				return fmt.Errorf("%s cannot be scheduled: %s", name, reason)
+			// What the cluster already knows about why. Without this a wait
+			// reports only a replica count, which is the one thing that does
+			// not say what to fix.
+			detail, terminal := podTrouble(ctx, cl, namespace, name)
+			if detail != "" {
+				last = fmt.Sprintf("%s (%s)", last, detail)
+			}
+			if terminal {
+				return fmt.Errorf("%s will not come up: %s", name, detail)
 			}
 		}
 
@@ -185,21 +191,58 @@ func WaitForDeployment(ctx context.Context, cl client.Client, namespace, name st
 	}
 }
 
-// unschedulable reports why a deployment's pod cannot be placed, if that is
-// what is wrong. Empty means it is not.
-func unschedulable(ctx context.Context, cl client.Client, namespace, component string) string {
+// TerminalWaitReasons are the container states a wait gives up on rather than
+// sits through.
+//
+// Both mean the kubelet has already retried and failed repeatedly — they are
+// reached through backoff, not on the first attempt — so waiting out a
+// ten-minute timeout on them buys nothing and costs the person running it ten
+// minutes and the reason.
+var TerminalWaitReasons = []string{"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff", "CreateContainerConfigError"}
+
+// podTrouble reports what is wrong with a component's pods, and whether it is
+// worth continuing to wait.
+//
+// Reporting the reason at all is the point. A wait that can only say
+// "0/1 available" after ten minutes has thrown away everything the cluster
+// knew: that the image could not be pulled, that the container is crash
+// looping, that no node would take it. Each of those is one line the kubelet
+// already wrote down.
+func podTrouble(ctx context.Context, cl client.Client, namespace, component string) (detail string, terminal bool) {
 	pods, err := ComponentPods(ctx, cl, namespace, component)
-	if err != nil {
-		return ""
+	if err != nil || len(pods) == 0 {
+		return "", false
 	}
+
 	for i := range pods {
-		for _, cond := range pods[i].Status.Conditions {
+		pod := &pods[i]
+
+		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse && cond.Reason == corev1.PodReasonUnschedulable {
-				return cond.Message
+				// Nothing about a cluster that will not schedule a pod
+				// changes by waiting for it.
+				return fmt.Sprintf("%s cannot be scheduled: %s", pod.Name, cond.Message), true
+			}
+		}
+
+		for j := range pod.Status.ContainerStatuses {
+			status := &pod.Status.ContainerStatuses[j]
+			if status.Ready {
+				continue
+			}
+			if w := status.State.Waiting; w != nil {
+				detail = fmt.Sprintf("%s/%s is %s: %s", pod.Name, status.Name, w.Reason, w.Message)
+				if slices.Contains(TerminalWaitReasons, w.Reason) {
+					return detail, true
+				}
+			}
+			if term := status.LastTerminationState.Terminated; term != nil {
+				detail = fmt.Sprintf("%s/%s last exited %d (%s): %s",
+					pod.Name, status.Name, term.ExitCode, term.Reason, strings.TrimSpace(term.Message))
 			}
 		}
 	}
-	return ""
+	return detail, false
 }
 
 // ComponentPods lists the pods belonging to one component.

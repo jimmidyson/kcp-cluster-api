@@ -438,6 +438,11 @@ tasks:
       KUBECONTEXT: '{{.KUBECONTEXT | default ""}}'
       KUBECONFIG_PATH: '{{.KUBECONFIG_PATH | default ""}}'
       IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+      # IfNotPresent, not Kubernetes' tag-derived default. `kind.local` loads
+      # images onto the nodes with no registry behind them, and Always would
+      # send the kubelet looking for one. Set Always for a real registry with a
+      # moving tag.
+      IMAGE_PULL_POLICY: '{{.IMAGE_PULL_POLICY | default "IfNotPresent"}}'
       DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS | default ""}}'
     requires:
       vars: [MANAGER_IMAGE]
@@ -447,6 +452,7 @@ tasks:
         -deployed-kcp-image={{.KCP_IMAGE | default (printf "ghcr.io/kcp-dev/kcp:%s" .KCP_VERSION)}}
         -deployed-manager-image={{.MANAGER_IMAGE}}
         -deployed-image-tag={{.IMAGE_TAG}}
+        -deployed-image-pull-policy={{.IMAGE_PULL_POLICY}}
         -deployed-components={{.COMPONENTS}}
         -deployed-namespace={{.NAMESPACE}}
         -deployed-context={{.KUBECONTEXT}}
