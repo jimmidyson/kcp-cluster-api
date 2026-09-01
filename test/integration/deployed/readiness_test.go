@@ -189,18 +189,9 @@ func managerBinary(t *testing.T, name string) string {
 func repoRoot(t *testing.T) string {
 	t.Helper()
 
-	dir, err := os.Getwd()
+	root, err := findRepoRoot()
 	if err != nil {
-		t.Fatalf("working directory: %v", err)
+		t.Fatal(err)
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find the repository root: no go.mod in any parent")
-		}
-		dir = parent
-	}
+	return root
 }

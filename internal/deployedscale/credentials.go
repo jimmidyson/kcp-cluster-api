@@ -20,9 +20,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -245,4 +247,15 @@ func ServiceNames(service, namespace string) []string {
 // arrives as.
 func LoopbackIPs() []net.IP {
 	return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+}
+
+// Fingerprint identifies one set of credentials without disclosing them.
+//
+// The CA certificate is enough: it is public, it changes whenever the
+// credentials are re-minted, and everything a client verifies chains to it. The
+// token is deliberately not an input — this value lands in a pod annotation,
+// which is readable by anything that can read pods.
+func (c Credentials) Fingerprint() string {
+	sum := sha256.Sum256(c.CACertPEM)
+	return hex.EncodeToString(sum[:])
 }

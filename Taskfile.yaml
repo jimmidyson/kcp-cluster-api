@@ -447,7 +447,12 @@ tasks:
     requires:
       vars: [MANAGER_IMAGE]
     cmds:
-      - go test -tags=integration -timeout=4h -count=1 -v ./test/integration/deployed/...
+      # PATH is set on the command rather than in an `env:` block, which go-task
+      # silently ignores for PATH — see test:integration:kcp. Without it the
+      # guard tests in this package, which start a kcp of their own to check the
+      # deployed flags and the readiness probe before a cluster run commits to
+      # anything, skip for want of a binary that `tools` has already installed.
+      - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=4h -count=1 -v ./test/integration/deployed/...
         -args
         -deployed-kcp-image={{.KCP_IMAGE | default (printf "ghcr.io/kcp-dev/kcp:%s" .KCP_VERSION)}}
         -deployed-manager-image={{.MANAGER_IMAGE}}

@@ -28,6 +28,7 @@ package deployed_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -228,6 +229,27 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 				t.Errorf("tearing down: %v", err)
 			}
 		})
+	}
+
+	// A clean namespace before anything is applied, not only after.
+	//
+	// Tearing down at the end is not enough, because a run that was interrupted
+	// never got there — and what survives is not inert. The credentials are
+	// minted fresh every run, so a surviving kcp pod goes on serving the previous
+	// run's certificate while this one trusts a CA that never signed it:
+	//
+	//	tls: failed to verify certificate: x509: certificate signed by unknown
+	//	authority ... "kcp-cluster-api-scale-ca"
+	//
+	// Other leftovers are worse for being silent. A Service cannot be changed
+	// to headless in place because clusterIP is immutable, so a namespace from
+	// before that fix keeps a Service that quietly breaks workspace
+	// initialization. A measurement that inherits any of this is not a
+	// measurement of what was built.
+	if !*keepNamespace {
+		if err := deployedscale.TeardownAndWait(ctx, cl, options.Namespace, 8*time.Minute, *pollInterval); err != nil {
+			t.Fatalf("clearing anything left from an earlier run: %v", err)
+		}
 	}
 
 	// kcp first, and the managers only once there is something for them to
@@ -443,6 +465,18 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 // reconcile checks the deployed figures against a committed in-process run.
 func reconcile(t *testing.T, report *deployedscale.Report, path string, plan scaletarget.Plan) {
 	t.Helper()
+
+	// Relative paths are relative to the repository, not to this package. The
+	// flag's own documentation gives "specs/…/evidence/sweep-report-core.json",
+	// which is how a person names it and how the Taskfile passes it — and `go
+	// test` runs with this directory as the working directory, so taking it
+	// literally opened nothing and reported the reference as missing on a run
+	// where it was committed all along.
+	if !filepath.IsAbs(path) {
+		if root, err := findRepoRoot(); err == nil {
+			path = filepath.Join(root, path)
+		}
+	}
 
 	ref, err := deployedscale.LoadSweepReference(path)
 	if err != nil {
@@ -836,4 +870,23 @@ func reportDir(t *testing.T) string {
 		return "bin"
 	}
 	return dir
+}
+
+// findRepoRoot walks up from the working directory to the module root, so a
+// path written relative to the repository resolves from a test's own directory.
+func findRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("working directory: %w", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("could not find the repository root: no go.mod in any parent")
+		}
+		dir = parent
+	}
 }

@@ -568,13 +568,44 @@ func (o Options) InfrastructureObjects(creds *Credentials) ([]client.Object, err
 	if err != nil {
 		return nil, err
 	}
+	kcp := o.KcpDeployment()
+	annotateCredentials(&kcp.Spec.Template, creds)
 	return []client.Object{
 		o.NamespaceObject(),
 		o.CredentialsSecret(creds),
 		kubeconfig,
 		o.KcpService(),
-		o.KcpDeployment(),
+		kcp,
 	}, nil
+}
+
+// CredentialsAnnotation carries a fingerprint of the credentials a pod was
+// built for.
+//
+// # Why a Deployment has to name its credentials
+//
+// A Deployment whose pods mount a Secret does not restart when that Secret
+// changes, and kcp reads its serving certificate once at startup. So a run that
+// mints new credentials into an existing namespace updates the Secret, leaves
+// the old pod running, and then cannot talk to it:
+//
+//	tls: failed to verify certificate: x509: certificate signed by unknown
+//	authority ... "kcp-cluster-api-scale-ca"
+//
+// which reads as a mistake in how the certificate was built rather than as a
+// server still serving the previous one. Putting the fingerprint in the pod
+// template makes new credentials a new template, so the Deployment rolls and
+// the pod that comes back is the one the client can verify.
+const CredentialsAnnotation = "scale.kcp-cluster-api/credentials"
+
+func annotateCredentials(tmpl *corev1.PodTemplateSpec, creds *Credentials) {
+	if creds == nil {
+		return
+	}
+	if tmpl.Annotations == nil {
+		tmpl.Annotations = map[string]string{}
+	}
+	tmpl.Annotations[CredentialsAnnotation] = creds.Fingerprint()
 }
 
 // ManagerObjects are the four Deployments, created separately and later.

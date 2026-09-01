@@ -425,3 +425,68 @@ func TestMetricsURL(t *testing.T) {
 		t.Errorf("MetricsURL = %q, want %q", got, want)
 	}
 }
+
+// TestKcpDeploymentRollsWhenCredentialsChange is the regression test for a run
+// that failed with
+//
+//	tls: failed to verify certificate: x509: certificate signed by unknown
+//	authority ... "kcp-cluster-api-scale-ca"
+//
+// against a namespace an interrupted run had left behind. The credentials Secret
+// was updated, but a Deployment does not restart for a changed Secret and kcp
+// reads its certificate once, so the pod kept serving the previous run's while
+// the client trusted the new CA. The error names the CA, which reads as a
+// mistake in building it rather than as a server still serving the old one.
+func TestKcpDeploymentRollsWhenCredentialsChange(t *testing.T) {
+	options := testOptions()
+
+	first, err := NewCredentials([]string{"kcp"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+	second, err := NewCredentials([]string{"kcp"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+
+	fingerprintOf := func(creds *Credentials) string {
+		objects, err := options.InfrastructureObjects(creds)
+		if err != nil {
+			t.Fatalf("building the manifests: %v", err)
+		}
+		for _, obj := range objects {
+			if d, ok := obj.(*appsv1.Deployment); ok && d.Name == KcpName {
+				return d.Spec.Template.Annotations[CredentialsAnnotation]
+			}
+		}
+		t.Fatal("no kcp Deployment in the infrastructure objects")
+		return ""
+	}
+
+	a, b := fingerprintOf(first), fingerprintOf(second)
+	if a == "" {
+		t.Fatalf("the kcp pod template carries no %s annotation, so it will not roll when the "+
+			"credentials change", CredentialsAnnotation)
+	}
+	if a == b {
+		t.Error("two different sets of credentials produced the same pod template, so a re-minted " +
+			"certificate would leave the old kcp pod running and serving the old one")
+	}
+	if again := fingerprintOf(first); again != a {
+		t.Error("the same credentials produced two different pod templates, which would roll kcp on " +
+			"every apply and restart the process a run is measuring")
+	}
+}
+
+// TestFingerprintDoesNotLeakTheToken pins that the annotation is derived from
+// public material only: it lands on a pod, readable by anything that can read
+// pods.
+func TestFingerprintDoesNotLeakTheToken(t *testing.T) {
+	creds, err := NewCredentials([]string{"kcp"}, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("minting: %v", err)
+	}
+	if strings.Contains(creds.Fingerprint(), creds.Token) {
+		t.Error("the fingerprint contains the bearer token")
+	}
+}
