@@ -45,6 +45,7 @@ limitations under the License.
 package kcpconfig
 
 import (
+	"path"
 	"strings"
 
 	"k8s.io/client-go/rest"
@@ -77,8 +78,12 @@ func Base(cfg *rest.Config) *rest.Config {
 
 // ForCluster returns a copy of cfg addressing one logical cluster, whatever
 // cfg addressed before.
+//
+// The path is built exactly as logicalcluster.Path.RequestPath does it, so this
+// is a drop-in for kcpclient.SetCluster wherever the base is already bare, and
+// a fix wherever it is not.
 func ForCluster(cfg *rest.Config, cluster string) *rest.Config {
 	out := rest.CopyConfig(cfg)
-	out.Host = BaseHost(out.Host) + "/clusters/" + cluster
+	out.Host = BaseHost(out.Host) + path.Join("/clusters", cluster)
 	return out
 }

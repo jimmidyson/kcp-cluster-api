@@ -25,13 +25,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
-	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
@@ -145,7 +145,7 @@ func New(ctx context.Context, opts Options) (*Runner, error) {
 		return nil, err
 	}
 
-	providerCfg := kcpclient.SetCluster(rest.CopyConfig(opts.BaseConfig), logicalcluster.NewPath(opts.ProviderPath))
+	providerCfg := kcpconfig.ForCluster(opts.BaseConfig, opts.ProviderPath)
 	providerClient, err := client.New(providerCfg, client.Options{Scheme: opts.Scheme})
 	if err != nil {
 		return nil, fmt.Errorf("building a client for %s: %w", opts.ProviderPath, err)
@@ -258,7 +258,7 @@ func newMaintainerManager(ctx context.Context, opts Options, providerClient clie
 	// it is visible only while this export is bound, so the count is one and
 	// reaches zero. See providerwiring.WithLogicalClusterDiscovery.
 	provider, err := providerwiring.NewAPIExportProvider(
-		kcpclient.SetCluster(rest.CopyConfig(opts.BaseConfig), logicalcluster.NewPath(opts.ProviderPath)),
+		kcpconfig.ForCluster(opts.BaseConfig, opts.ProviderPath),
 		export, opts.Scheme, registry, providerwiring.WithLogicalClusterDiscovery())
 	if err != nil {
 		return nil, fmt.Errorf("constructing the kcp APIExport provider for %s: %w", export, err)

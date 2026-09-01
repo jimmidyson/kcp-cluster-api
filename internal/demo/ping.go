@@ -22,8 +22,8 @@ import (
 
 	"k8s.io/client-go/rest"
 
-	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
-	"github.com/kcp-dev/logicalcluster/v3"
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
+
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,7 +45,7 @@ func ping(ctx context.Context, base *rest.Config) error {
 	if err != nil {
 		return err
 	}
-	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath("root"))
+	cfg := kcpconfig.ForCluster(base, "root")
 	cl, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return fmt.Errorf("building a client for root: %w", err)

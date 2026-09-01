@@ -50,11 +50,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
@@ -597,7 +598,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 
 	parentPath := logicalcluster.NewPath(opts.Parent)
-	parentCfg := kcpclient.SetCluster(rest.CopyConfig(opts.BaseConfig), parentPath)
+	parentCfg := kcpconfig.ForCluster(opts.BaseConfig, parentPath.String())
 	parentClient, err := client.New(parentCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return Result{}, fmt.Errorf("building a client for %s: %w", opts.Parent, err)
@@ -924,7 +925,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 
 // clientFor builds a client scoped to one workspace path.
 func clientFor(base *rest.Config, path string, scheme *runtime.Scheme) (client.Client, error) {
-	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(path))
+	cfg := kcpconfig.ForCluster(base, path)
 	cl, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("building a client for workspace %s: %w", path, err)

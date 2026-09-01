@@ -34,9 +34,10 @@ import (
 	metav1validation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v3"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 
@@ -212,7 +213,7 @@ func validateUsers(users []string) error {
 //
 // So the demo impersonates from the shard admin. See Options.ImpersonationConfig.
 func ConfigForUser(base *rest.Config, user, path string) *rest.Config {
-	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(path))
+	cfg := kcpconfig.ForCluster(base, path)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: user}
 	return cfg
 }
