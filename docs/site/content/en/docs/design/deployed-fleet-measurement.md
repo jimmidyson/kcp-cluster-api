@@ -258,6 +258,39 @@ and additionally prices a cluster, which the reference never saw.
 is divided into workspaces barely matters and the cluster count is what to size
 against — which is what the original 200x1-against-20x10 question was asking.
 
+### Two hundred clusters, measured
+
+The target this whole exercise was built for, [taken][ev200] and passed: 200
+clusters, each with its own workspace, every control plane ready and every
+Machine Ready.
+
+| Deployment | goroutines | resident | CPU |
+|---|--:|--:|--:|
+| core-manager | 3,744 | 293 MiB | 114s |
+| kubeadm-bootstrap-manager | 2,949 | 202 MiB | 30s |
+| kubeadm-control-plane-manager | 9,551 | 333 MiB | 190s |
+| dev-infrastructure-manager | 6,172 | 413 MiB | 61s |
+| **TOTAL** | **22,416** | **1.21 GiB** | **395s** |
+
+No container was OOM killed, none restarted, and every one stayed inside its
+2 GiB limit with room to spare — the largest, the infrastructure provider,
+peaked at a fifth of it.
+
+**The model predicted this before it was run**, from runs of a hundred clusters
+and fewer:
+
+| Deployment | Predicted | Measured | Error |
+|---|--:|--:|--:|
+| core-manager | 3,744 | 3,744 | 0.00% |
+| kubeadm-bootstrap-manager | 2,949 | 2,949 | 0.00% |
+| kubeadm-control-plane-manager | 9,545 | 9,551 | 0.06% |
+| dev-infrastructure-manager | 6,163 | 6,172 | 0.15% |
+| **TOTAL** | **22,401** | **22,416** | **0.07%** |
+
+Exact for two of the four deployments. The cost model is not a curve fitted
+after the fact — it was written down at a hundred clusters and it named two of
+these four figures to the goroutine.
+
 ### The model predicts out of sample
 
 Fit to the runs of fifty clusters and fewer, then asked for the hundred-cluster
@@ -283,27 +316,35 @@ which is wherever that falls relative to a garbage collection.
 
 ## Status
 
-**Calibrated, modelled to a hundred clusters, single-node.** The harness runs
-end to end on kind, the two instruments agree about one deployment, and a cost
-model fitted below fifty clusters predicts a hundred at two different packings
-without having seen either.
+**The 200-cluster target is measured.** The harness runs end to end on kind,
+the two instruments agree about one deployment, and a cost model written down
+at a hundred clusters predicted the two-hundred-cluster run to 0.07% before it
+was taken — exactly, for two of the four deployments.
+
+The fleet costs 22,416 goroutines and 1.21 GiB across the four managers, with
+no container above a fifth of its memory limit. Whatever stops this fleet
+growing further, it is not the managers.
 
 Not measured, and so not stated:
 
-- **The 200-cluster figure.** The largest run is a hundred. The model predicts
-  about 22,400 goroutines for 200 clusters in 200 workspaces and 21,500 for 200
-  in 20 — a 2x extrapolation from a model that survived a 2x holdout, which
-  makes it a good prediction and still a prediction. Per
-  [Principle IX][constitution] it is not printed as a measurement, and the run
-  that would make it one has not been taken.
-- **Anything at 50 nodes per cluster.** Every run is one node per cluster. The
-  target is 10,000 Machines and nothing has been near it.
+- **200 clusters in 20 workspaces.** Only the one-per-workspace distribution
+  has been taken at 200. The model gives about 21,500 goroutines for the packed
+  case, some 900 fewer; that is a prediction, and the two distributions have
+  been measured against each other only up to a hundred clusters.
+- **Anything at 50 nodes per cluster.** Every run is one node per cluster, so
+  the fleet measured at 200 clusters holds 200 Machines and not 10,000. Node
+  count is the dimension this instrument has never swept, and nothing here
+  supports a claim about it.
+- **Anything multi-node.** Every component ran on one kind node, which each
+  report says on its own face. What is measured is four deployments sharing a
+  machine, not four machines.
 - **Anything multi-node.** Every run so far is co-located, which each report
   says on its own face. `SPREAD=true` with `WORKERS` is how that changes.
 - **The cost of a connected workload cluster**, above.
 
 [evidence]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-core-8x1.json
 [ev25]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-25x1.json
+[ev200]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-200x1.json
 [evdir]: https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260831-210000-deployed-fleet-scale/evidence
 [ev50]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1.json
 

@@ -11,6 +11,7 @@ Three runs:
 | `deployed-all-5x10.json` | 50 | 10 |
 | `deployed-all-100x1.json` | 100 | 1 |
 | `deployed-all-10x10.json` | 100 | 10 |
+| `deployed-all-200x1.json` | 200 | 1 (the target) |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -95,6 +96,26 @@ residual of 0.0 goroutines: their three points are collinear to the integer.
 That is worth more than either run alone. A slope that reproduces across a
 doubled fleet, from a fresh set of pods, is a property of the software rather
 than of the afternoon.
+
+## The target, measured
+
+`deployed-all-200x1.json`: 200 clusters, one workspace each, every control
+plane ready and every Machine Ready.
+
+| Deployment | goroutines | resident | CPU | predicted | error |
+|---|--:|--:|--:|--:|--:|
+| core-manager | 3,744 | 293 MiB | 114s | 3,744 | 0.00% |
+| kubeadm-bootstrap-manager | 2,949 | 202 MiB | 30s | 2,949 | 0.00% |
+| kubeadm-control-plane-manager | 9,551 | 333 MiB | 190s | 9,545 | 0.06% |
+| dev-infrastructure-manager | 6,172 | 413 MiB | 61s | 6,163 | 0.15% |
+| **TOTAL** | **22,416** | **1.21 GiB** | **395s** | **22,401** | **0.07%** |
+
+The predictions come from the model below, which was fitted before this run
+existed, to runs of a hundred clusters and fewer. Nothing was refitted
+afterwards.
+
+No OOM kill, no restart, and the largest container peaked at a fifth of its
+2 GiB limit.
 
 ## The cost model
 

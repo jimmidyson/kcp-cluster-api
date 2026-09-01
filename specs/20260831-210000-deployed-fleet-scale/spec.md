@@ -20,11 +20,20 @@ the 20% tolerance, from 329, 331 and 339 goroutines at 2, 4 and 8 engaged
 workspaces. The run is committed as `evidence/deployed-core-8x1.json`.
 
 That is the calibration this specification set as the condition for believing
-anything else the deployed instrument says. It is not a fleet-size result: the
-largest run taken is ten clusters, every component so far has landed on one
-node, and per Constitution Principle IX nothing here is extrapolated to the
-200-cluster target — a slope carried twenty-five times beyond its data is a
-prediction, and this specification prints none.
+anything else the deployed instrument says.
+
+**The 200-cluster target has since been measured**, and passed:
+`evidence/deployed-all-200x1.json` holds 200 clusters, one workspace each,
+every control plane ready and every Machine Ready, at 22,416 goroutines and
+1.21 GiB across the four managers — no OOM kill, no restart, the largest
+container at a fifth of its limit. A cost model fitted to runs of a hundred
+clusters and fewer predicted that total to 0.07%, and two of the four
+deployments exactly, before the run was taken.
+
+What remains unmeasured is listed in `evidence/README.md` rather than filled
+in: the packed distribution at 200, anything above one node per cluster (the
+fleet measured holds 200 Machines, not the target's 10,000), and anything
+multi-node.
 
 One figure worth recording and not yet measurable: a run with all four
 providers deployed measures core-manager at 17.0 goroutines per workspace
