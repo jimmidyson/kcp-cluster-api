@@ -319,6 +319,73 @@ func (s *Scraper) SampleComponents(ctx context.Context, cl client.Client, namesp
 	return out, nil
 }
 
+// InterestingLogPatterns are what matters in kcp's output when a workspace
+// will not initialize.
+//
+// A filter rather than a tail, because a tail is the wrong window. kcp's
+// apibinder acts within a second of a workspace being created and then says
+// nothing more, while the server emits a couple of lines of CRD bookkeeping
+// every second for ever — so by the time a two-minute wait gives up, the lines
+// that explain it are thousands of lines back and an eighty-line tail contains
+// nothing but noise. That is not a hypothetical: two separate diagnoses of
+// this exact failure were handed a tail full of "skipping APIBinding CRD" and
+// nothing else.
+var InterestingLogPatterns = []string{
+	"apibinder", "initializ", "createdBy", "APIBinding",
+	"forbidden", "Unhandled Error", "\"err\"=", "err=",
+}
+
+// ContainerLogsMatching returns the lines of a component's output that match
+// any of the given patterns, over the whole life of the container.
+//
+// Matching is a plain case-insensitive substring test: the patterns are fixed
+// strings chosen for this, and a diagnostic is not the place to discover that
+// somebody's regular expression does not compile.
+func ContainerLogsMatching(ctx context.Context, cfg *rest.Config, cl client.Client, namespace, component string,
+	patterns []string, max int,
+) string {
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return ""
+	}
+	pods, err := ComponentPods(ctx, cl, namespace, component)
+	if err != nil || len(pods) == 0 {
+		return ""
+	}
+
+	raw, err := clientset.CoreV1().Pods(namespace).GetLogs(pods[0].Name, &corev1.PodLogOptions{
+		Container: component,
+	}).DoRaw(ctx)
+	if err != nil {
+		return ""
+	}
+
+	lowered := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		lowered = append(lowered, strings.ToLower(p))
+	}
+
+	var kept []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		haystack := strings.ToLower(line)
+		for _, p := range lowered {
+			if strings.Contains(haystack, p) {
+				kept = append(kept, line)
+				break
+			}
+		}
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	// The earliest matches, not the latest: what explains a stuck initializer
+	// is what happened when it ran, which is the start of the story.
+	if len(kept) > max {
+		kept = kept[:max]
+	}
+	return strings.Join(kept, "\n")
+}
+
 // ContainerLogs returns the tail of a component's container output, preferring
 // the previous container when there was one.
 //

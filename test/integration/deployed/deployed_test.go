@@ -27,6 +27,7 @@ package deployed_test
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -39,6 +40,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -241,6 +243,24 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		t.Fatalf("kcp did not come up: %v", err)
 	}
 
+	// Whether kcp can reach the address it advertises decides whether any
+	// workspace ever initializes, and a Service that already existed cannot
+	// be changed to headless — clusterIP is immutable, so a namespace left
+	// over from an earlier run keeps the old one. Recording what is actually
+	// in the cluster is the difference between knowing the fix was in effect
+	// and assuming it.
+	var kcpService corev1.Service
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: options.Namespace, Name: deployedscale.KcpName},
+		&kcpService); err == nil {
+		report.AddFact("kcpServiceClusterIP", kcpService.Spec.ClusterIP)
+		if kcpService.Spec.ClusterIP != corev1.ClusterIPNone {
+			t.Logf("NOTE: the kcp Service has a virtual IP (%s) rather than being headless. kcp has to reach "+
+				"the address it advertises, and a pod dialling its own ClusterIP is the hairpin case. If this "+
+				"namespace survived an earlier run, its Service predates the fix and cannot be changed in "+
+				"place — clusterIP is immutable. Delete the namespace and rerun.", kcpService.Spec.ClusterIP)
+		}
+	}
+
 	// --- Reach kcp from outside the cluster.
 	kcpPods, err := deployedscale.ComponentPods(ctx, cl, options.Namespace, deployedscale.KcpName)
 	if err != nil || len(kcpPods) == 0 {
@@ -280,8 +300,12 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		// on the Workspace — so reporting only the Workspace names the
 		// symptom and hides the cause.
 		diagnoseWorkspace(t, ctx, kcpCfg, rootClient, scheme, "scale-0000")
-		if logs := deployedscale.ContainerLogs(ctx, cfg, cl, options.Namespace, deployedscale.KcpName, 80); logs != "" {
-			t.Logf("kcp logs:\n%s", logs)
+		if logs := deployedscale.ContainerLogsMatching(ctx, cfg, cl, options.Namespace, deployedscale.KcpName,
+			deployedscale.InterestingLogPatterns, 60); logs != "" {
+			t.Logf("kcp logs (filtered to what bears on initialization):\n%s", logs)
+		} else {
+			t.Logf("kcp said nothing about initialization at all, which is itself the finding: its apibinder " +
+				"never ran for this workspace")
 		}
 		t.Fatalf("provisioning the first workspace: %v", err)
 	}
@@ -488,17 +512,35 @@ func diagnoseWorkspace(t *testing.T, ctx context.Context, base *rest.Config, roo
 		return
 	}
 
-	inside, err := client.New(kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(ws.Spec.Cluster)),
-		client.Options{Scheme: scheme})
+	// Read over raw REST rather than through a typed client. A typed client
+	// builds a RESTMapper by discovery against the workspace, and discovery
+	// inside a workspace that has not finished initializing does not answer —
+	// "failed to get server groups: the server could not find the requested
+	// resource". That is the diagnostic failing for the same reason as the
+	// thing being diagnosed, which leaves a reader with nothing.
+	inside := rest.CopyConfig(base)
+	inside.Host = strings.TrimSuffix(base.Host, "/clusters/"+deployedscale.RootWorkspace)
+	inside.GroupVersion = &corev1alpha1.SchemeGroupVersion
+	inside.APIPath = "/apis"
+	inside.NegotiatedSerializer = serializer.NewCodecFactory(scheme).WithoutConversion()
+
+	restClient, err := rest.RESTClientFor(inside)
 	if err != nil {
-		t.Logf("diagnose: building a client inside %s: %v", ws.Spec.Cluster, err)
+		t.Logf("diagnose: building a REST client for %s: %v", ws.Spec.Cluster, err)
+		return
+	}
+	raw, err := restClient.Get().
+		AbsPath("/clusters/"+ws.Spec.Cluster, "/apis", corev1alpha1.SchemeGroupVersion.Group,
+			corev1alpha1.SchemeGroupVersion.Version, "logicalclusters", "cluster").
+		DoRaw(ctx)
+	if err != nil {
+		t.Logf("diagnose: reading the LogicalCluster inside %s: %v", ws.Spec.Cluster, err)
 		return
 	}
 
-	// kcp names the LogicalCluster in every workspace "cluster".
 	var logical corev1alpha1.LogicalCluster
-	if err := inside.Get(ctx, client.ObjectKey{Name: "cluster"}, &logical); err != nil {
-		t.Logf("diagnose: reading the LogicalCluster inside %s: %v", ws.Spec.Cluster, err)
+	if err := json.Unmarshal(raw, &logical); err != nil {
+		t.Logf("diagnose: decoding the LogicalCluster inside %s: %v", ws.Spec.Cluster, err)
 		return
 	}
 	t.Logf("diagnose: LogicalCluster phase=%s initializers=%v", logical.Status.Phase, logical.Status.Initializers)
