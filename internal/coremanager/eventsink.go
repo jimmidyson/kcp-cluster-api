@@ -28,6 +28,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	"k8s.io/client-go/tools/record"
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
@@ -67,6 +69,10 @@ func NewWorkspaceEventSink(shard *rest.Config) (record.EventSink, error) {
 	if shard == nil {
 		return nil, errors.New("a shard rest.Config is required: the virtual workspace does not serve Events")
 	}
+
+	// See NewWorkspaceSecretReader: the cache appends a cluster path, so the
+	// config it is handed must not already carry one.
+	shard = kcpconfig.Base(shard)
 
 	httpClient, err := rest.HTTPClientFor(shard)
 	if err != nil {

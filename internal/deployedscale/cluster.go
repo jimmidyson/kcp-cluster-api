@@ -34,6 +34,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
@@ -648,17 +650,11 @@ func PortForward(ctx context.Context, cfg *rest.Config, namespace, pod string, r
 // base is replaced, so a bare, a root-scoped and an already-workspace-scoped
 // base all produce the same result.
 func WorkspaceConfig(base *rest.Config, cluster string) *rest.Config {
-	cfg := rest.CopyConfig(base)
-	cfg.Host = ServerURL(cfg.Host) + "/clusters/" + cluster
-	return cfg
+	return kcpconfig.ForCluster(base, cluster)
 }
 
 // ServerURL strips a /clusters/<path> suffix from a host, leaving the bare
 // server. A host with no such suffix is returned unchanged.
 func ServerURL(host string) string {
-	trimmed := strings.TrimSuffix(host, "/")
-	if i := strings.LastIndex(trimmed, "/clusters/"); i >= 0 {
-		return trimmed[:i]
-	}
-	return trimmed
+	return kcpconfig.BaseHost(host)
 }

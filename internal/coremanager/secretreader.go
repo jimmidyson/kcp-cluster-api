@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/kcpconfig"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
@@ -81,6 +83,14 @@ func NewWorkspaceSecretReader(shard *rest.Config) (client.Reader, error) {
 	if shard == nil {
 		return nil, errors.New("a shard rest.Config is required: the virtual workspace does not serve Secrets")
 	}
+
+	// Whatever workspace the caller's config addresses, this has to address
+	// others: kcpclient.NewCache appends /clusters/<name> to the host it is
+	// given, so a config already carrying one produces /clusters/root/clusters/
+	// <name> and a 404 on every read. A deployed manager's kubeconfig does
+	// carry one, an in-process fixture's base config does not, and the
+	// difference is invisible here. See kcpconfig.
+	shard = kcpconfig.Base(shard)
 
 	httpClient, err := rest.HTTPClientFor(shard)
 	if err != nil {
