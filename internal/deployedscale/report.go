@@ -147,7 +147,21 @@ func (r *Report) PerWorkspace(component string, measure func(ComponentSample) fl
 		xs = append(xs, float64(s.Workspaces))
 		ys = append(ys, measure(c))
 	}
-	if len(xs) < 2 {
+	// Three distinct workspace counts, not two.
+	//
+	// A two-point fit passes exactly through both points. Its residual is
+	// identically zero whatever the data, so it offers no way at all to tell a
+	// slope from the difference between two noisy samples — and goroutine counts
+	// are noisy: in-flight requests, a watch reconnecting, a worker pool that
+	// happens to be busy. A run at 1 and 2 workspaces reported 17.0 goroutines
+	// per workspace from 416 and 433, a 4% swing on a 400-goroutine process,
+	// and that number then disagreed 8.5x with a 61-sample in-process sweep. The
+	// disagreement was about the fit, not about the fleet.
+	//
+	// So a run too small to resolve a slope reports no slope. Publishing one it
+	// cannot support is the thing this repository has already decided is worse
+	// than publishing nothing.
+	if distinct(xs) < 3 {
 		return 0, false
 	}
 
@@ -278,12 +292,12 @@ func (r *Report) Markdown() string {
 		if slope, ok := r.PerWorkspace(component, Goroutines); ok {
 			fmt.Fprintf(&b, "- goroutines per workspace: **%.1f**\n", slope)
 		} else {
-			b.WriteString("- goroutines per workspace: not measured (fewer than two comparable samples, or the fit did not resolve)\n")
+			b.WriteString("- goroutines per workspace: " + notMeasured + "\n")
 		}
 		if slope, ok := r.PerWorkspace(component, Resident); ok {
 			fmt.Fprintf(&b, "- resident bytes per workspace: **%s**\n", humanBytes(uint64(slope)))
 		} else {
-			b.WriteString("- resident bytes per workspace: not measured (fewer than two comparable samples, or the fit did not resolve)\n")
+			b.WriteString("- resident bytes per workspace: " + notMeasured + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -335,4 +349,18 @@ func (s Sample) SortedNodes() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// notMeasured is what a report says instead of a per-workspace figure it cannot
+// support. See PerWorkspace for why three points rather than two.
+const notMeasured = "not measured (a slope needs at least three distinct workspace counts; " +
+	"a fit through two points has no residual and so cannot be told from noise)"
+
+// distinct counts how many different values appear in xs.
+func distinct(xs []float64) int {
+	seen := make(map[float64]struct{}, len(xs))
+	for _, x := range xs {
+		seen[x] = struct{}{}
+	}
+	return len(seen)
 }

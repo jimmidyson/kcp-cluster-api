@@ -59,8 +59,13 @@ func TestPerWorkspaceFitsASlope(t *testing.T) {
 // the sample is not comparable with the others.
 func TestARestartedSampleIsExcludedFromTheFit(t *testing.T) {
 	r := &Report{Title: "t"}
+	// Four samples, so that dropping the restarted one still leaves the three
+	// distinct workspace counts a slope needs. That is the real interaction:
+	// excluding a sample can take a run below what it can support, and then the
+	// honest answer is no figure rather than a figure from what is left.
 	r.Add(sample("8", 8, ComponentCore, "node-1", 500, 10_000_000, 30_000_000, 0))
 	r.Add(sample("16", 16, ComponentCore, "node-1", 900, 18_000_000, 54_000_000, 0))
+	r.Add(sample("24", 24, ComponentCore, "node-1", 1300, 26_000_000, 78_000_000, 0))
 	// A restarted container reporting a fresh process's small numbers at the
 	// widest point would drag the slope negative.
 	r.Add(sample("32", 32, ComponentCore, "node-1", 40, 1_000_000, 8_000_000, 1))
@@ -218,5 +223,60 @@ func TestHumanBytes(t *testing.T) {
 		if got := humanBytes(tc.in); got != tc.want {
 			t.Errorf("humanBytes(%d) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestTwoSamplesAreNotASlope is the regression test for a figure this harness
+// published and should not have.
+//
+// A run at 1 and 2 workspaces reported "17.0 goroutines per workspace" from
+// counts of 416 and 433 — a 4% swing on a 400-goroutine process, taken as a
+// marginal cost. It then disagreed 8.5x with a 61-sample in-process sweep, and
+// the run failed on a disagreement that was about the fit rather than the fleet.
+//
+// A line through two points passes exactly through both. Its residual is zero
+// whatever the data, so nothing in it distinguishes a slope from noise.
+func TestTwoSamplesAreNotASlope(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(sample("1", 1, ComponentCore, "node-1", 416, 15_000_000, 79_000_000, 0))
+	r.Add(sample("2", 2, ComponentCore, "node-1", 433, 17_000_000, 81_000_000, 0))
+
+	if slope, ok := r.PerWorkspace(ComponentCore, Goroutines); ok {
+		t.Errorf("two points produced a per-workspace figure of %v, which the data cannot support", slope)
+	}
+	if !strings.Contains(r.Markdown(), "at least three distinct workspace counts") {
+		t.Error("the report does not say why the figure was not measured")
+	}
+}
+
+// TestRepeatedWorkspaceCountsAreNotThreePoints: sampling the same size three
+// times says nothing about how cost varies with size, however many samples it
+// produces.
+func TestRepeatedWorkspaceCountsAreNotThreePoints(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(sample("4", 4, ComponentCore, "node-1", 500, 10_000_000, 30_000_000, 0))
+	r.Add(sample("4", 4, ComponentCore, "node-1", 505, 10_100_000, 30_100_000, 0))
+	r.Add(sample("8", 8, ComponentCore, "node-1", 900, 18_000_000, 54_000_000, 0))
+
+	if _, ok := r.PerWorkspace(ComponentCore, Goroutines); ok {
+		t.Error("three samples at two distinct sizes produced a slope")
+	}
+}
+
+// TestExcludingARestartCanLeaveTooFewPoints pins the other half of the
+// interaction above: when dropping a restarted sample takes the run below three
+// distinct workspace counts, the answer is no figure, not a figure fitted to
+// whatever survived.
+func TestExcludingARestartCanLeaveTooFewPoints(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(sample("8", 8, ComponentCore, "node-1", 500, 10_000_000, 30_000_000, 0))
+	r.Add(sample("16", 16, ComponentCore, "node-1", 900, 18_000_000, 54_000_000, 0))
+	r.Add(sample("32", 32, ComponentCore, "node-1", 40, 1_000_000, 8_000_000, 1))
+
+	if slope, ok := r.PerWorkspace(ComponentCore, Goroutines); ok {
+		t.Errorf("a slope of %v was fitted to the two samples left after excluding a restart", slope)
+	}
+	if len(r.Disturbed()) != 1 {
+		t.Errorf("the restart was not reported: %v", r.Disturbed())
 	}
 }
