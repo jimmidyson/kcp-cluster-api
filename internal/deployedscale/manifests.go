@@ -309,16 +309,37 @@ func (o Options) KubeconfigSecret(creds *Credentials) (*corev1.Secret, error) {
 
 // KcpService gives kcp a stable name inside the cluster.
 //
-// ClusterIP, deliberately. A NodePort would be reachable at a node's address,
-// which is the sort of thing that works on a single-node cluster and shapes a
-// harness around it; the driver outside the cluster reaches kcp through a
-// forwarded port instead, which works the same on one node and on fifty.
+// # Headless, and this is load-bearing
+//
+// kcp is told to advertise this Service's name as its shard URL, and it has to
+// be able to reach that address *itself* — its apibinder initializer resolves
+// the APIExports it binds through the advertised address. A virtual IP does
+// not satisfy that: a pod connecting to a ClusterIP whose only endpoint is
+// itself is the hairpin case, and where it does not work kcp cannot reach its
+// own advertised URL.
+//
+// The failure that produces is silent and looks like somebody else's. The
+// default APIBindings never bind, the system:apibindings initializer is never
+// removed, and every workspace sits in Initializing for ever — reported
+// against whatever created the workspace. Confirmed by starting kcp with an
+// advertised address it could not reach and watching workspaces hang exactly
+// that way.
+//
+// Headless removes the virtual IP: the name resolves straight to the pod, so
+// kcp reaches itself at its own address and the managers reach it directly
+// too. The certificate covers the name either way.
+//
+// Not a NodePort, for the reason it never was: a node-addressed Service is the
+// sort of thing that works on a single-node cluster and shapes a harness
+// around it. The driver outside the cluster reaches kcp through a forwarded
+// port, which works the same on one node and on fifty.
 func (o Options) KcpService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: KcpName, Namespace: o.Namespace, Labels: labels(KcpName)},
 		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: labels(KcpName),
+			Type:      corev1.ServiceTypeClusterIP,
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  labels(KcpName),
 			Ports: []corev1.ServicePort{{
 				Name:       "https",
 				Port:       KcpPort,

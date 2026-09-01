@@ -109,6 +109,27 @@ the managers inside the cluster and the driver outside it — which is what lets
 one measurement address kcp by two names. The certificate covers loopback for
 exactly that second case.
 
+### kcp has to reach the address it advertises
+
+kcp is told to advertise its Service name as its shard URL, and its own
+apibinder initializer resolves the `APIExport`s it binds through that address.
+So kcp has to be able to reach it — from inside the pod kcp is running in.
+
+A virtual IP does not satisfy that. A pod dialling a `ClusterIP` whose only
+endpoint is itself is the hairpin case, and where it does not work the failure
+is silent and misattributed: the default `APIBinding`s never bind, the
+`system:apibindings` initializer is never removed, and every workspace sits in
+`Initializing` for ever — reported against whatever created the workspace
+rather than against the server that could not reach itself.
+
+The Service is therefore **headless**, so the name resolves straight to the pod
+and kcp reaches itself at its own address. The managers reach it the same way,
+and the serving certificate covers the name for both.
+
+This was established by experiment rather than by reading: kcp started with an
+advertised address it could not reach hung workspaces in exactly that way, and
+the same kcp advertising a reachable one did not.
+
 ### Two ways in, for one reason each
 
 The driver runs outside the cluster, so that a managed cluster it cannot be
