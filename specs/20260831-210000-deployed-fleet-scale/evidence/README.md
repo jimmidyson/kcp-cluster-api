@@ -12,6 +12,7 @@ Three runs:
 | `deployed-all-100x1.json` | 100 | 1 |
 | `deployed-all-10x10.json` | 100 | 10 |
 | `deployed-all-200x1.json` | 200 | 1 (the target) |
+| `deployed-all-20x10.json` | 200 | 10 (the target, packed) |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -97,25 +98,30 @@ That is worth more than either run alone. A slope that reproduces across a
 doubled fleet, from a fresh set of pods, is a property of the software rather
 than of the afternoon.
 
-## The target, measured
+## The target, measured, both ways
 
-`deployed-all-200x1.json`: 200 clusters, one workspace each, every control
-plane ready and every Machine Ready.
+200 clusters, every control plane ready and every Machine Ready, taken as one
+cluster per workspace and as ten.
 
-| Deployment | goroutines | resident | CPU | predicted | error |
-|---|--:|--:|--:|--:|--:|
-| core-manager | 3,744 | 293 MiB | 114s | 3,744 | 0.00% |
-| kubeadm-bootstrap-manager | 2,949 | 202 MiB | 30s | 2,949 | 0.00% |
-| kubeadm-control-plane-manager | 9,551 | 333 MiB | 190s | 9,545 | 0.06% |
-| dev-infrastructure-manager | 6,172 | 413 MiB | 61s | 6,163 | 0.15% |
-| **TOTAL** | **22,416** | **1.21 GiB** | **395s** | **22,401** | **0.07%** |
+| Deployment | 200x1 | predicted | 20x10 | predicted |
+|---|--:|--:|--:|--:|
+| core-manager | 3,744 | 3,744 | 3,386 | 3,384 |
+| kubeadm-bootstrap-manager | 2,949 | 2,949 | 2,769 | 2,769 |
+| kubeadm-control-plane-manager | 9,551 | 9,545 | 9,375 | 9,387 |
+| dev-infrastructure-manager | 6,172 | 6,163 | 5,991 | 5,996 |
+| **TOTAL** | **22,416** | **22,401** | **21,521** | **21,535** |
+| **resident** | **1.21 GiB** | | **1.16 GiB** | |
 
-The predictions come from the model below, which was fitted before this run
-existed, to runs of a hundred clusters and fewer. Nothing was refitted
-afterwards.
+0.07% on both totals. The predictions come from the model below, fitted before
+either run existed, to runs of a hundred clusters and fewer. Nothing was
+refitted afterwards.
 
-No OOM kill, no restart, and the largest container peaked at a fifth of its
-2 GiB limit.
+**The two distributions differ by 895 goroutines out of 22,416 — 4%.** Spread
+or packed, 200 clusters cost about the same. That is the question this
+specification opened with, answered.
+
+No OOM kill, no restart in either run, and the largest container peaked at a
+fifth of its 2 GiB limit.
 
 ## The cost model
 

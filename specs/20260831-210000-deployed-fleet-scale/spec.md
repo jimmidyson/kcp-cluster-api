@@ -22,18 +22,20 @@ workspaces. The run is committed as `evidence/deployed-core-8x1.json`.
 That is the calibration this specification set as the condition for believing
 anything else the deployed instrument says.
 
-**The 200-cluster target has since been measured**, and passed:
-`evidence/deployed-all-200x1.json` holds 200 clusters, one workspace each,
-every control plane ready and every Machine Ready, at 22,416 goroutines and
-1.21 GiB across the four managers — no OOM kill, no restart, the largest
-container at a fifth of its limit. A cost model fitted to runs of a hundred
-clusters and fewer predicted that total to 0.07%, and two of the four
-deployments exactly, before the run was taken.
+**The 200-cluster target has since been measured in both distributions**, and
+passed both. 200 clusters one per workspace costs 22,416 goroutines and
+1.21 GiB across the four managers; packed ten per workspace, 21,521 and
+1.16 GiB. No OOM kill, no restart, the largest container at a fifth of its
+limit. A cost model fitted to runs of a hundred clusters and fewer predicted
+both totals to 0.07% before either run was taken.
+
+The two distributions differ by 4%, which answers the question this
+specification opened with: the original ask named 200x1 and 20x10 as two
+reported points, and they cost about the same.
 
 What remains unmeasured is listed in `evidence/README.md` rather than filled
-in: the packed distribution at 200, anything above one node per cluster (the
-fleet measured holds 200 Machines, not the target's 10,000), and anything
-multi-node.
+in: anything above one node per cluster (the fleet measured holds 200 Machines,
+not the target's 10,000) and anything multi-node.
 
 One figure worth recording and not yet measurable: a run with all four
 providers deployed measures core-manager at 17.0 goroutines per workspace
