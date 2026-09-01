@@ -2,11 +2,15 @@
 
 Three runs:
 
-| File | What it is for |
-|---|---|
-| `deployed-core-8x1.json` | the calibration: one manager, at the reference's end state |
-| `deployed-all-25x1.json` | all four managers, 25 clusters, one per workspace |
-| `deployed-all-50x1.json` | the same at 50, to see whether cost stays linear |
+| File | Clusters | Clusters per workspace |
+|---|--:|--:|
+| `deployed-core-8x1.json` | 8 | 1 (the calibration: one manager, at the reference's end state) |
+| `deployed-all-25x1.json` | 25 | 1 |
+| `deployed-all-5x5.json` | 25 | 5 |
+| `deployed-all-50x1.json` | 50 | 1 |
+| `deployed-all-5x10.json` | 50 | 10 |
+| `deployed-all-100x1.json` | 100 | 1 |
+| `deployed-all-10x10.json` | 100 | 10 |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -92,14 +96,55 @@ That is worth more than either run alone. A slope that reproduces across a
 doubled fleet, from a fresh set of pods, is a property of the software rather
 than of the afternoon.
 
-### What it does not yet establish
+## The cost model
 
-The two runs above both place one cluster in each workspace, so they cannot
-separate what a cluster costs from what a workspace costs — the two rise
-together. Runs that pack several clusters into a workspace do separate them and
-suggest core-manager pays about 15 per cluster and 2 per workspace, the latter
-matching the calibration above exactly. Those runs are not committed here, so
-that decomposition is a reading rather than a result.
+Runs that pack several clusters into one workspace separate what a cluster
+costs from what a workspace costs; runs that give each cluster its own
+workspace cannot, because the two rise together. With both kinds committed,
+fitting `goroutines = fixed + a·clusters + b·workspaces` across all six
+four-manager runs — 25 to 100 clusters, at 1, 5 and 10 clusters per workspace,
+21 samples per deployment:
+
+| Deployment | fixed | per cluster | per workspace | largest residual |
+|---|--:|--:|--:|--:|
+| core-manager | 344 | 15.00 | 2.00 | 1 |
+| kubeadm-bootstrap-manager | 149 | 13.00 | 1.00 | 0 |
+| kubeadm-control-plane-manager | 155 | 46.07 | 0.88 | 18 |
+| dev-infrastructure-manager | 175 | 29.01 | 0.93 | 17 |
+
+Core-manager and the bootstrap provider are fitted to within one goroutine and
+zero goroutines respectively, across every run and every fleet shape.
+
+**The per-workspace term is the calibration figure.** core-manager pays 2.00
+goroutines per workspace here, fitted from deployed runs at three packing
+ratios — and the in-process sweep, a different rig measuring a different way,
+reports 2.0. The deployed instrument prices the workspace exactly as the
+reference does and additionally prices the cluster, which the reference never
+saw.
+
+### It predicts out of sample
+
+Fitting only to the runs of 50 clusters and fewer, then predicting the
+100-cluster runs neither fit saw:
+
+| Deployment | Run | Predicted | Measured | Error |
+|---|---|--:|--:|--:|
+| core-manager | 100x1 | 2044 | 2044 | 0.0% |
+| core-manager | 10x10 | 1864 | 1864 | 0.0% |
+| kubeadm-bootstrap-manager | 100x1 | 1549 | 1549 | 0.0% |
+| kubeadm-bootstrap-manager | 10x10 | 1459 | 1459 | 0.0% |
+| kubeadm-control-plane-manager | 100x1 | 4852 | 4851 | 0.0% |
+| kubeadm-control-plane-manager | 10x10 | 4782 | 4765 | 0.4% |
+| dev-infrastructure-manager | 100x1 | 3171 | 3171 | 0.0% |
+| dev-infrastructure-manager | 10x10 | 3094 | 3082 | 0.4% |
+
+Exact for core-manager and the bootstrap provider, in both distributions;
+worst case 0.4%. A model fitted below fifty clusters predicts a hundred, at two
+different packings, without being told either.
+
+The clearest single illustration is core-manager at a hundred clusters: 2044
+goroutines in a hundred workspaces, 1864 in ten. The difference is 180, which
+is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
 
 ## What this is not
 
