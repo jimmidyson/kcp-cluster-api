@@ -138,16 +138,41 @@ func (r *Report) Disturbed() []ComponentSample {
 // signal across the swept range, and a negative cost per workspace is not a
 // cheaper fleet.
 func (r *Report) PerWorkspace(component string, measure func(ComponentSample) float64) (float64, bool) {
+	return r.slope(component, measure, func(s Sample) float64 { return float64(s.Workspaces) })
+}
+
+// PerCluster is the same fit against cluster count, and on the evidence so far
+// it is the one that predicts cost.
+//
+// # Why both are reported
+//
+// Twenty-five clusters were measured twice, as twenty-five workspaces of one
+// and as five workspaces of five. Per workspace the two disagree wildly —
+// core-manager at 17.0 against 77.0 — and a reader comparing those two reports
+// would conclude that packing clusters into fewer workspaces is four times
+// more expensive. Per cluster they agree: 17.0 against 15.4, and the control
+// plane manager at 46.0 against 46.1.
+//
+// So the workspace grouping is close to free and the cluster count is what
+// costs, which is exactly the question a fleet target asks: whether 200
+// clusters in 200 workspaces differs from 200 in 20. Reporting only the
+// per-workspace figure hides that behind an artefact of how the fleet was
+// arranged.
+func (r *Report) PerCluster(component string, measure func(ComponentSample) float64) (float64, bool) {
+	return r.slope(component, measure, func(s Sample) float64 { return float64(s.Clusters) })
+}
+
+func (r *Report) slope(component string, measure func(ComponentSample) float64, x func(Sample) float64) (float64, bool) {
 	var xs, ys []float64
 	for _, s := range r.Samples {
 		c, ok := s.Component(component)
 		if !ok || !c.Pod.Comparable() {
 			continue
 		}
-		xs = append(xs, float64(s.Workspaces))
+		xs = append(xs, x(s))
 		ys = append(ys, measure(c))
 	}
-	// Three distinct workspace counts, not two.
+	// Three distinct sample points, not two.
 	//
 	// A two-point fit passes exactly through both points. Its residual is
 	// identically zero whatever the data, so it offers no way at all to tell a
@@ -298,6 +323,15 @@ func (r *Report) Markdown() string {
 			fmt.Fprintf(&b, "- resident bytes per workspace: **%s**\n", humanBytes(uint64(slope)))
 		} else {
 			b.WriteString("- resident bytes per workspace: " + notMeasured + "\n")
+		}
+		// Per cluster as well as per workspace. See PerCluster: the two agree
+		// only when a workspace holds one cluster, and it is the per-cluster
+		// figure that has held across every distribution measured so far.
+		if slope, ok := r.PerCluster(component, Goroutines); ok {
+			fmt.Fprintf(&b, "- goroutines per cluster: **%.1f**\n", slope)
+		}
+		if slope, ok := r.PerCluster(component, Resident); ok {
+			fmt.Fprintf(&b, "- resident bytes per cluster: **%s**\n", humanBytes(uint64(slope)))
 		}
 		b.WriteString("\n")
 	}

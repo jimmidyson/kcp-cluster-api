@@ -420,6 +420,17 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		if slope, ok := report.PerWorkspace(component, deployedscale.Resident); ok {
 			report.AddFact(component+".residentBytesPerWorkspace", fmt.Sprintf("%.0f", slope))
 		}
+		// Per cluster too, and it is the one to read. Twenty-five clusters
+		// measured as 25x1 and as 5x5 disagree per workspace (17.0 against
+		// 77.0) and agree per cluster (17.0 against 15.4), so the per-workspace
+		// figure alone reads as a cost of packing that is not there. See
+		// deployedscale.PerCluster.
+		if slope, ok := report.PerCluster(component, deployedscale.Goroutines); ok {
+			report.AddFact(component+".goroutinesPerCluster", fmt.Sprintf("%.1f", slope))
+		}
+		if slope, ok := report.PerCluster(component, deployedscale.Resident); ok {
+			report.AddFact(component+".residentBytesPerCluster", fmt.Sprintf("%.0f", slope))
+		}
 		if last := lastSampleOf(report, component); last != nil {
 			report.AddFact(component+".residentToHeapRatio", fmt.Sprintf("%.2f", last.Process.ResidentToHeapRatio()))
 			report.AddFact(component+".node", last.Pod.Node)

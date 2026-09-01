@@ -39,6 +39,68 @@ func sample(label string, workspaces int, component, node string, goroutines int
 	}
 }
 
+// packed builds a sample where a workspace holds several clusters, which
+// sample() cannot express: it sets one cluster per workspace.
+func packed(label string, workspaces, clusters int, component string, goroutines int) Sample {
+	s := sample(label, workspaces, component, "node-1", goroutines, 10_000_000, 30_000_000, 0)
+	s.Clusters = clusters
+	return s
+}
+
+// TestPerClusterIsTheFigureThatHoldsAcrossDistributions is built from two real
+// runs of the same twenty-five clusters, arranged differently.
+//
+// Per workspace they look four times apart, which reads as a large cost to
+// packing clusters into fewer workspaces. Per cluster they agree, and the
+// control plane manager agrees to within 0.1 — so the packing is close to free
+// and the cluster count is what costs. A report showing only the per-workspace
+// column invites exactly the wrong conclusion from its own numbers.
+func TestPerClusterIsTheFigureThatHoldsAcrossDistributions(t *testing.T) {
+	// 25x1: 7, 13 and 25 workspaces, one cluster each. Measured 463/565/769.
+	spread := &Report{Title: "25x1"}
+	spread.Add(packed("7", 7, 7, ComponentCore, 463))
+	spread.Add(packed("13", 13, 13, ComponentCore, 565))
+	spread.Add(packed("25", 25, 25, ComponentCore, 769))
+
+	// 5x5: 2, 3 and 5 workspaces, five clusters each. Measured 498/575/729.
+	dense := &Report{Title: "5x5"}
+	dense.Add(packed("2", 2, 10, ComponentCore, 498))
+	dense.Add(packed("3", 3, 15, ComponentCore, 575))
+	dense.Add(packed("5", 5, 25, ComponentCore, 729))
+
+	spreadWS, ok := spread.PerWorkspace(ComponentCore, Goroutines)
+	if !ok {
+		t.Fatal("no per-workspace slope for 25x1")
+	}
+	denseWS, ok := dense.PerWorkspace(ComponentCore, Goroutines)
+	if !ok {
+		t.Fatal("no per-workspace slope for 5x5")
+	}
+	if denseWS/spreadWS < 3 {
+		t.Fatalf("the per-workspace figures were expected to look far apart (%.1f against %.1f); "+
+			"this test is not exercising what it thinks", spreadWS, denseWS)
+	}
+
+	spreadC, ok := spread.PerCluster(ComponentCore, Goroutines)
+	if !ok {
+		t.Fatal("no per-cluster slope for 25x1")
+	}
+	denseC, ok := dense.PerCluster(ComponentCore, Goroutines)
+	if !ok {
+		t.Fatal("no per-cluster slope for 5x5")
+	}
+	if ratio := denseC / spreadC; ratio < 0.8 || ratio > 1.25 {
+		t.Errorf("per cluster the two distributions disagree: %.1f for 25x1 against %.1f for 5x5 (%.2fx). "+
+			"The whole reason to report a per-cluster figure is that this is the quantity that holds.",
+			spreadC, denseC, ratio)
+	}
+
+	if md := dense.Markdown(); !strings.Contains(md, "goroutines per cluster") {
+		t.Error("the report does not carry a per-cluster figure, so a reader comparing two " +
+			"distributions sees only the column that misleads")
+	}
+}
+
 func TestPerWorkspaceFitsASlope(t *testing.T) {
 	r := &Report{Title: "t"}
 	r.Add(sample("8", 8, ComponentCore, "node-1", 500, 10_000_000, 30_000_000, 0))
