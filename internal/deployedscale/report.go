@@ -333,6 +333,9 @@ func (r *Report) Markdown() string {
 		if slope, ok := r.PerCluster(component, Resident); ok {
 			fmt.Fprintf(&b, "- resident bytes per cluster: **%s**\n", humanBytes(uint64(slope)))
 		}
+		if !monotonic(r, component, HeapAlloc) {
+			b.WriteString("- " + heapWobble + "\n")
+		}
 		b.WriteString("\n")
 	}
 
@@ -407,4 +410,49 @@ func distinct(xs []float64) int {
 		seen[x] = struct{}{}
 	}
 	return len(seen)
+}
+
+// heapWobble is the caveat on the memory figures, printed when a run's own heap
+// series says they cannot be trusted as a cost per unit of fleet.
+//
+// # Why the memory slopes get a caveat the goroutine ones do not
+//
+// Goroutine counts rise monotonically with fleet size in every run measured so
+// far, and their slopes reproduce: twenty-five clusters arranged as 25x1 and as
+// 5x5 agree to 1.6% in total, and the control plane manager to 0.3%.
+//
+// The memory slopes do not. The same two runs disagree by 29%, 15%, 78% and 76%
+// per component. The reason is in each run's own heap column: it does not climb
+// with the fleet, it wanders — the dev infrastructure manager sampled 26.3, 19.0
+// and 44.5 MiB in one sweep and 20.4, 27.3 and 86.9 MiB in the other. A sample
+// is taken whenever a checkpoint is reached, which is whenever it is reached
+// relative to a garbage collection, and a line fitted through that measures when
+// the collector last ran as much as it measures the fleet.
+//
+// The figures stay: resident memory is what a limit is set against, and a wide
+// figure is more use than none. What they do not get is the same standing as a
+// count that reproduces.
+const heapWobble = "**The memory figures above are weaker than the goroutine ones.** This run's heap did not " +
+	"climb monotonically with the fleet (see the Heap column), so a slope through it is fitted partly to " +
+	"garbage collection timing. Per-cluster memory has not reproduced across fleet distributions; " +
+	"per-cluster goroutines has."
+
+// monotonic reports whether a component's measure is non-decreasing across the
+// run's comparable samples, which is the cheapest available signal that a slope
+// through it describes the fleet rather than the runtime's timing.
+func monotonic(r *Report, component string, measure func(ComponentSample) float64) bool {
+	var last float64
+	first := true
+	for _, s := range r.Samples {
+		c, ok := s.Component(component)
+		if !ok || !c.Pod.Comparable() {
+			continue
+		}
+		v := measure(c)
+		if !first && v < last {
+			return false
+		}
+		last, first = v, false
+	}
+	return true
 }

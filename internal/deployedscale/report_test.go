@@ -342,3 +342,43 @@ func TestExcludingARestartCanLeaveTooFewPoints(t *testing.T) {
 		t.Errorf("the restart was not reported: %v", r.Disturbed())
 	}
 }
+
+// TestAWanderingHeapIsFlaggedOnTheMemoryFigures uses the dev-infrastructure
+// manager's real heap series from two runs of the same twenty-five clusters:
+// 26.3, 19.0, 44.5 MiB and 20.4, 27.3, 86.9 MiB. Neither climbs with the fleet.
+//
+// Those runs' per-cluster memory figures disagree by 76%, while their
+// per-cluster goroutine figures agree to 2%. Reporting both in the same bold
+// invites a reader to size a memory limit off the weaker of the two.
+func TestAWanderingHeapIsFlaggedOnTheMemoryFigures(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(heaped("7", 7, 402, 26_300_000, 85_700_000))
+	r.Add(heaped("13", 13, 562, 19_000_000, 94_200_000))
+	r.Add(heaped("25", 25, 921, 44_500_000, 116_400_000))
+
+	md := r.Markdown()
+	if !strings.Contains(md, "weaker than the goroutine ones") {
+		t.Error("a run whose heap wanders does not warn that its memory slope is fitted to GC timing")
+	}
+	// The figures are still reported: a wide number beats none when sizing a
+	// limit, so long as it is not dressed up as the reproducible one.
+	if !strings.Contains(md, "resident bytes per cluster") {
+		t.Error("the caveat suppressed the figure instead of qualifying it")
+	}
+}
+
+// TestAClimbingHeapIsNotFlagged: the caveat has to be a signal, not decoration.
+func TestAClimbingHeapIsNotFlagged(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(heaped("7", 7, 402, 19_000_000, 85_700_000))
+	r.Add(heaped("13", 13, 562, 26_300_000, 94_200_000))
+	r.Add(heaped("25", 25, 921, 44_500_000, 116_400_000))
+
+	if strings.Contains(r.Markdown(), "weaker than the goroutine ones") {
+		t.Error("a run whose heap climbs with the fleet was warned about anyway")
+	}
+}
+
+func heaped(label string, workspaces, goroutines int, heap, resident uint64) Sample {
+	return sample(label, workspaces, ComponentDevInfrastructure, "node-1", goroutines, heap, resident, 0)
+}
