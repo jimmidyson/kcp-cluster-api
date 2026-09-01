@@ -205,7 +205,11 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	if err != nil {
 		t.Fatalf("minting credentials: %v", err)
 	}
-	objects, err := options.Objects(creds)
+	infrastructure, err := options.InfrastructureObjects(creds)
+	if err != nil {
+		t.Fatalf("building the manifests: %v", err)
+	}
+	managerObjects, err := options.ManagerObjects()
 	if err != nil {
 		t.Fatalf("building the manifests: %v", err)
 	}
@@ -225,7 +229,9 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		})
 	}
 
-	if err := deployedscale.Apply(ctx, cl, objects); err != nil {
+	// kcp first, and the managers only once there is something for them to
+	// resolve. See Options.ManagerObjects.
+	if err := deployedscale.Apply(ctx, cl, infrastructure); err != nil {
 		t.Fatalf("applying the manifests: %v", err)
 	}
 
@@ -260,8 +266,30 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		t.Fatalf("publishing the provider exports: %v", err)
 	}
 
+	// One workspace bound before the managers are created. Publishing the
+	// export is not enough: its APIExportEndpointSlice carries no endpoints
+	// until something binds it, and a manager that starts before then exits
+	// and crash loops. See Options.ManagerObjects.
+	tenants := make([]*tenant, 0, plan.Shape.Workspaces)
+	first, err := newTenant(ctx, kcpCfg, rootClient, scheme, 0, plan, providers, discovery)
+	if err != nil {
+		t.Fatalf("provisioning the first workspace: %v", err)
+	}
+	tenants = append(tenants, first)
+
+	if err := deployedscale.Apply(ctx, cl, managerObjects); err != nil {
+		t.Fatalf("applying the manager manifests: %v", err)
+	}
+
 	for _, c := range options.Components {
 		if err := deployedscale.WaitForDeployment(ctx, cl, options.Namespace, c.Name, *readyTimeout, *pollInterval); err != nil {
+			// What the container said before it died. The pod status carries a
+			// reason; the logs carry the sentence that explains it, and a run
+			// that reports only "CrashLoopBackOff" has made somebody go and
+			// fetch them by hand.
+			if logs := deployedscale.ContainerLogs(ctx, cfg, cl, options.Namespace, c.Name, 40); logs != "" {
+				t.Logf("%s logs:\n%s", c.Name, logs)
+			}
 			t.Fatalf("%s did not come up: %v", c.Name, err)
 		}
 	}
@@ -273,7 +301,6 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 
 	// --- Walk to the target, sampling at each checkpoint.
 	deadline := time.Now().Add(*budget)
-	tenants := make([]*tenant, 0, plan.Shape.Workspaces)
 	var reached int
 	var stoppedBy string
 

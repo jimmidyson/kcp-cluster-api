@@ -319,6 +319,52 @@ func (s *Scraper) SampleComponents(ctx context.Context, cl client.Client, namesp
 	return out, nil
 }
 
+// ContainerLogs returns the tail of a component's container output, preferring
+// the previous container when there was one.
+//
+// The previous container is the one that matters: a pod in CrashLoopBackOff is
+// waiting to start again, so its current container has said nothing yet and
+// everything worth reading belongs to the run that failed.
+//
+// Best effort by design. This is called when something has already gone wrong,
+// and a diagnostic that can itself fail the run would replace one confusing
+// error with another.
+func ContainerLogs(ctx context.Context, cfg *rest.Config, cl client.Client, namespace, component string, lines int64) string {
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return ""
+	}
+	pods, err := ComponentPods(ctx, cl, namespace, component)
+	if err != nil || len(pods) == 0 {
+		return ""
+	}
+
+	pod := pods[0]
+	previous := false
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == component && pod.Status.ContainerStatuses[i].RestartCount > 0 {
+			previous = true
+		}
+	}
+
+	read := func(prev bool) string {
+		raw, err := clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+			Container: component, Previous: prev, TailLines: &lines,
+		}).DoRaw(ctx)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(raw))
+	}
+
+	if previous {
+		if out := read(true); out != "" {
+			return out
+		}
+	}
+	return read(false)
+}
+
 // PortForward opens a local port onto a pod and returns the local address.
 //
 // This is how the driver reaches kcp. It cannot go through the API server's

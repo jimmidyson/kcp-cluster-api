@@ -374,7 +374,8 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 							{Name: "credentials", MountPath: CredentialsMountPath, ReadOnly: true},
 							{Name: "data", MountPath: "/data"},
 						},
-						Resources: o.kcpResources(),
+						Resources:                o.kcpResources(),
+						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
 								Path:   "/readyz",
@@ -466,6 +467,11 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 				{Name: "kubeconfig", MountPath: KubeconfigMountPath, ReadOnly: true},
 			},
 			Resources: o.managerResources(),
+			// So a container that dies carries its last words in its own
+			// status. Nothing here writes to the default termination log, so
+			// without this a crash reports a reason and no message, which is
+			// most of the way to saying nothing.
+			TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
 					Path: "/readyz", Port: intstr.FromInt32(HealthPort),
@@ -514,13 +520,13 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 	}
 }
 
-// Objects is everything a run creates, in the order it must be created:
-// namespace, then the secrets a pod mounts, then kcp, then the managers.
+// InfrastructureObjects are what a run creates first: the namespace, the
+// secrets a pod mounts, and kcp itself.
 //
 // Ordered rather than sorted, because a Deployment whose Secret does not exist
 // yet does not fail — it starts a pod that cannot mount and waits, which is a
 // run that hangs rather than one that reports what is wrong.
-func (o Options) Objects(creds *Credentials) ([]client.Object, error) {
+func (o Options) InfrastructureObjects(creds *Credentials) ([]client.Object, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
@@ -528,18 +534,55 @@ func (o Options) Objects(creds *Credentials) ([]client.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	objects := []client.Object{
+	return []client.Object{
 		o.NamespaceObject(),
 		o.CredentialsSecret(creds),
 		kubeconfig,
 		o.KcpService(),
 		o.KcpDeployment(),
+	}, nil
+}
+
+// ManagerObjects are the four Deployments, created separately and later.
+//
+// # Why they are not created with the rest
+//
+// A manager resolves its APIExport's virtual workspace at startup, by polling
+// for its APIExportEndpointSlice, and exits when it does not find one — see
+// providerwiring.VirtualWorkspaceConfig. The slice carries no endpoints until
+// the export is published *and* a workspace has bound it, so a manager
+// deployed alongside kcp starts into a world where neither has happened yet,
+// exits, and enters CrashLoopBackOff.
+//
+// It would eventually recover, which is what makes this worth writing down
+// rather than fixing quietly: the run does not fail because the manager is
+// broken, it fails because the kubelet's backoff grows to minutes while the
+// harness waits, and what a measurement wants is a process that started once
+// and cleanly. So the exports are published and the first workspace bound
+// before any of this is created.
+func (o Options) ManagerObjects() ([]client.Object, error) {
+	if err := o.validate(); err != nil {
+		return nil, err
 	}
+	objects := make([]client.Object, 0, len(o.components()))
 	for _, c := range o.components() {
 		objects = append(objects, o.ManagerDeployment(c))
 	}
 	return objects, nil
+}
+
+// Objects is everything a run creates, in creation order. Callers that need
+// the two phases apart use InfrastructureObjects and ManagerObjects.
+func (o Options) Objects(creds *Credentials) ([]client.Object, error) {
+	infrastructure, err := o.InfrastructureObjects(creds)
+	if err != nil {
+		return nil, err
+	}
+	managers, err := o.ManagerObjects()
+	if err != nil {
+		return nil, err
+	}
+	return append(infrastructure, managers...), nil
 }
 
 // MetricsURL is where the harness scrapes one manager's process metrics.
