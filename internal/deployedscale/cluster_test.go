@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -303,5 +304,45 @@ func TestFilterLogFallsBackWhenTheServerNeverMentionedTheWorkspace(t *testing.T)
 	}
 	if !strings.Contains(got, "Unhandled Error") {
 		t.Errorf("the fallback did not surface the startup error, got %q", got)
+	}
+}
+
+// TestWorkspaceConfigDoesNotDoubleTheClusterPath is the regression test for a
+// run that got all the way to binding an APIExport and then failed with
+// "failed to get server groups: the server could not find the requested
+// resource".
+//
+// The cause was kcpclient.SetCluster appending to a host that already ended in
+// /clusters/root. Nothing in the error mentions the path or the workspace, so
+// it reads as a workspace that is not ready — which is why it survived two
+// rounds of diagnosis aimed at initialization.
+func TestWorkspaceConfigDoesNotDoubleTheClusterPath(t *testing.T) {
+	const want = "https://127.0.0.1:6443/clusters/2fj3k"
+
+	for name, host := range map[string]string{
+		"bare server":         "https://127.0.0.1:6443",
+		"trailing slash":      "https://127.0.0.1:6443/",
+		"root scoped":         "https://127.0.0.1:6443/clusters/root",
+		"already a workspace": "https://127.0.0.1:6443/clusters/1abcd",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := WorkspaceConfig(&rest.Config{Host: host}, "2fj3k")
+			if got.Host != want {
+				t.Errorf("from %q got host %q, want %q", host, got.Host, want)
+			}
+		})
+	}
+}
+
+// TestWorkspaceConfigCopies checks the base is not mutated. SetCluster assigns
+// to the config it is given, so a caller that forgets to copy first scopes
+// every later client to the first workspace it built one for.
+func TestWorkspaceConfigCopies(t *testing.T) {
+	base := &rest.Config{Host: "https://127.0.0.1:6443", BearerToken: "t"}
+	if got := WorkspaceConfig(base, "2fj3k"); got.BearerToken != "t" {
+		t.Errorf("the copy lost the bearer token, got %q", got.BearerToken)
+	}
+	if base.Host != "https://127.0.0.1:6443" {
+		t.Errorf("the base was mutated to %q", base.Host)
 	}
 }

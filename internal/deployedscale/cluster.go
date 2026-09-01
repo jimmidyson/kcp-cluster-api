@@ -552,3 +552,40 @@ func PortForward(ctx context.Context, cfg *rest.Config, namespace, pod string, r
 
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(int(ports[0].Local))), func() { close(stopCh) }, nil
 }
+
+// WorkspaceConfig returns a copy of base addressing one logical cluster.
+//
+// # Why this exists rather than kcpclient.SetCluster
+//
+// SetCluster appends the cluster path to whatever host it is given:
+//
+//	cfg.Host += clusterPath.RequestPath()
+//
+// which is correct for a bare server URL and silently wrong for a config that
+// already addresses a workspace. Handing it the root-scoped config produced
+//
+//	https://host/clusters/root/clusters/2fj3k…
+//
+// and every request through the resulting client failed at discovery with
+// "failed to get server groups: the server could not find the requested
+// resource" — an error that names neither the doubled path nor the workspace,
+// and reads like the workspace is not ready yet.
+//
+// This normalises instead of assuming: any trailing /clusters/<path> on the
+// base is replaced, so a bare, a root-scoped and an already-workspace-scoped
+// base all produce the same result.
+func WorkspaceConfig(base *rest.Config, cluster string) *rest.Config {
+	cfg := rest.CopyConfig(base)
+	cfg.Host = ServerURL(cfg.Host) + "/clusters/" + cluster
+	return cfg
+}
+
+// ServerURL strips a /clusters/<path> suffix from a host, leaving the bare
+// server. A host with no such suffix is returned unchanged.
+func ServerURL(host string) string {
+	trimmed := strings.TrimSuffix(host, "/")
+	if i := strings.LastIndex(trimmed, "/clusters/"); i >= 0 {
+		return trimmed[:i]
+	}
+	return trimmed
+}

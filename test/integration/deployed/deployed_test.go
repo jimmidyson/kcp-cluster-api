@@ -45,8 +45,6 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kcpclient "github.com/kcp-dev/apimachinery/v2/pkg/client"
-	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
 	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
@@ -517,13 +515,15 @@ func diagnoseWorkspace(t *testing.T, ctx context.Context, base *rest.Config, roo
 	}
 
 	// Read over raw REST rather than through a typed client. A typed client
-	// builds a RESTMapper by discovery against the workspace, and discovery
-	// inside a workspace that has not finished initializing does not answer —
-	// "failed to get server groups: the server could not find the requested
-	// resource". That is the diagnostic failing for the same reason as the
-	// thing being diagnosed, which leaves a reader with nothing.
+	// builds a RESTMapper by discovery, and a diagnostic that can fail on its
+	// own machinery is one that leaves a reader with nothing at exactly the
+	// moment they need something — which is what happened here twice.
+	//
+	// The AbsPath below also means this addresses the workspace itself rather
+	// than relying on the host, so it reports on a workspace no typed client
+	// can be built for.
 	inside := rest.CopyConfig(base)
-	inside.Host = strings.TrimSuffix(base.Host, "/clusters/"+deployedscale.RootWorkspace)
+	inside.Host = deployedscale.ServerURL(base.Host)
 	inside.GroupVersion = &corev1alpha1.SchemeGroupVersion
 	inside.APIPath = "/apis"
 	inside.NegotiatedSerializer = serializer.NewCodecFactory(scheme).WithoutConversion()
@@ -569,8 +569,7 @@ func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client,
 		return nil, fmt.Errorf("creating workspace %s: %w", name, err)
 	}
 
-	cfg := kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(logical))
-	cl, err := client.New(cfg, client.Options{Scheme: scheme})
+	cl, err := client.New(deployedscale.WorkspaceConfig(base, logical), client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, fmt.Errorf("client for workspace %s: %w", name, err)
 	}
