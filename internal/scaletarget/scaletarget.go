@@ -192,6 +192,20 @@ func Checkpoints(workspaces int, percents []int) ([]int, error) {
 	return out, nil
 }
 
+// ParseCounts reads a comma-separated list of positive integers.
+func ParseCounts(s string) ([]int, error) {
+	values, err := ParsePercents(s)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range values {
+		if v < 1 {
+			return nil, fmt.Errorf("%d is not a count", v)
+		}
+	}
+	return values, nil
+}
+
 // ParsePercents reads a comma-separated percentage list.
 func ParsePercents(s string) ([]int, error) {
 	if strings.TrimSpace(s) == "" {

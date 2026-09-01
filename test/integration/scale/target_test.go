@@ -68,16 +68,19 @@ import (
 )
 
 var (
-	targetShapes = flag.String("target-shapes", "2x1",
-		"Comma-separated `<workspaces>x<clustersPerWorkspace>` shapes to drive to. Each is a sub-test with its own "+
-			"kcp server and its own report. The default is small enough to run beside the other scale measurements; "+
-			"the fleet-sized shapes are driven from `task test:scale:target`.")
-	targetControlPlaneMachines = flag.Int("target-control-plane-machines", 1,
-		"KubeadmControlPlane replicas per cluster. Each costs a fake etcd member and API server pod on the "+
-			"in-memory backend as well as a Node, so this is the expensive half of a node count.")
-	targetWorkerMachines = flag.Int("target-worker-machines", 0,
-		"Replicas of the single worker MachineDeployment per cluster. Together with the control plane replicas "+
-			"this is the node count each cluster reaches.")
+	targetClusters = flag.Int("clusters", 2,
+		"How many clusters the fleet holds in total.")
+	targetNodesPerCluster = flag.Int("nodes-per-cluster", 1,
+		"How many nodes each cluster reaches, control plane included. Fifty nodes means fifty machines, not "+
+			"fifty on top of a control plane.")
+	targetControlPlaneNodes = flag.Int("control-plane-nodes", 1,
+		"How many of each cluster's nodes are control plane machines. Part of the target rather than a detail "+
+			"of it: on the in-memory backend a control plane machine costs a fake etcd member and API server "+
+			"pod as well as a Node, so two runs at one node count and a different split are not one measurement.")
+	targetClustersPerWorkspace = flag.String("clusters-per-workspace", "1",
+		"How the clusters are spread over workspaces, comma separated for more than one spread. Each spread is "+
+			"a sub-test with its own kcp server and its own report. One fleet at two spreads is the comparison "+
+			"that separates what a workspace costs from what a cluster costs.")
 	targetCheckpoints = flag.String("target-checkpoints", "25,50",
 		"Percentages of the workspace target at which to stop and take a sample. The target itself is always the "+
 			"last one. Samples on the way up are what turn a run into a curve rather than one number.")
@@ -147,22 +150,27 @@ const (
 // no requirement states a budget for what a fleet of a given size may cost, and
 // inventing one in a test would make it fail for a reason nobody agreed on.
 func TestFleetTarget(t *testing.T) {
-	shapes, err := scaletarget.ParseShapes(*targetShapes)
-	if err != nil {
-		t.Fatalf("could not run: %v", err)
-	}
 	percents, err := scaletarget.ParsePercents(*targetCheckpoints)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
-	machines := scaletarget.Machines{ControlPlane: *targetControlPlaneMachines, Workers: *targetWorkerMachines}
+	spreads, err := scaletarget.ParseCounts(*targetClustersPerWorkspace)
+	if err != nil {
+		t.Fatalf("could not run: clusters per workspace: %v", err)
+	}
 
-	for i, shape := range shapes {
-		plan, err := scaletarget.NewPlan(shape, machines, percents)
-		if err != nil {
-			t.Fatalf("could not run: %v", err)
-		}
-		t.Run(shape.String(), func(t *testing.T) {
+	plans, err := scaletarget.Fleet{
+		Clusters:             *targetClusters,
+		NodesPerCluster:      *targetNodesPerCluster,
+		ControlPlaneNodes:    *targetControlPlaneNodes,
+		ClustersPerWorkspace: spreads,
+	}.Plans(percents)
+	if err != nil {
+		t.Fatalf("could not run: %v", err)
+	}
+
+	for i, plan := range plans {
+		t.Run(plan.Shape.String(), func(t *testing.T) {
 			runTarget(t, plan, i)
 		})
 	}

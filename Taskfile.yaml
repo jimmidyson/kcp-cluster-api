@@ -253,13 +253,19 @@ tasks:
     # which is never a pass.
     vars:
       # `<workspaces>x<clustersPerWorkspace>`, comma separated.
-      TARGET_SHAPES: '{{.TARGET_SHAPES | default "200x1,20x10"}}'
-      # Per cluster. Three control plane machines is the HA shape, and each of
-      # them costs a fake etcd member and API server pod on the in-memory
-      # backend where a worker costs a Node and a fake kubelet — so the split
-      # is part of the target rather than a detail of reaching it.
-      CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES | default "3"}}'
-      WORKER_MACHINES: '{{.WORKER_MACHINES | default "47"}}'
+      CLUSTERS: '{{.CLUSTERS | default "200"}}'
+      NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "50"}}'
+      # How many of each cluster's nodes are control plane machines. Three is
+      # the HA shape, and it is part of the target rather than a detail of it:
+      # a control plane machine costs a fake etcd member and API server pod on
+      # the in-memory backend where a worker costs a Node and a fake kubelet.
+      CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "3"}}'
+      # Two spreads of the same fleet: 200 clusters one per workspace and ten
+      # per workspace hold the same clusters and the same nodes, and the
+      # difference between what they cost is the per-workspace term this
+      # project exists to make small. One spread measures a sum; the pair
+      # separates it.
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1,10"}}'
       # Percentages of the target to stop and sample at. The target is always
       # the last one, whatever this says.
       TARGET_CHECKPOINTS: '{{.TARGET_CHECKPOINTS | default "10,25,50"}}'
@@ -280,9 +286,10 @@ tasks:
       # report, turning a measured shortfall into no measurement at all.
       - PATH="{{.BIN}}:$PATH" ARTIFACT_DIR="{{.BIN}}/artifacts"
         go test -tags=integration -timeout=8h -count=1 -v -run TestFleetTarget ./test/integration/scale/...
-        -args -target-shapes={{.TARGET_SHAPES}}
-        -target-control-plane-machines={{.CONTROL_PLANE_MACHINES}}
-        -target-worker-machines={{.WORKER_MACHINES}}
+        -args -clusters={{.CLUSTERS}}
+        -nodes-per-cluster={{.NODES_PER_CLUSTER}}
+        -control-plane-nodes={{.CONTROL_PLANE_NODES}}
+        -clusters-per-workspace={{.CLUSTERS_PER_WORKSPACE}}
         -target-checkpoints={{.TARGET_CHECKPOINTS}}
         -target-concurrency={{.TARGET_CONCURRENCY}}
         -target-budget={{.TARGET_BUDGET}} {{.TARGET_FLAGS}}
@@ -334,7 +341,6 @@ tasks:
       # lets SPREAD=true place the managers on different machines, which is the
       # whole reason to care where a component runs.
       WORKERS: '{{.WORKERS | default "0"}}'
-      SHAPE: '{{.SHAPE | default "8x1"}}'
     cmds:
       - |
         if ! {{.BIN}}/kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
@@ -363,11 +369,12 @@ tasks:
         vars:
           MANAGER_IMAGE: kind.local
           KUBECONTEXT: 'kind-{{.CLUSTER_NAME}}'
-          SHAPE: '{{.SHAPE}}'
+          CLUSTERS: '{{.CLUSTERS}}'
+          NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER}}'
+          CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES}}'
+          CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE}}'
           COMPONENTS: '{{.COMPONENTS}}'
           SPREAD: '{{.SPREAD}}'
-          CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES}}'
-          WORKER_MACHINES: '{{.WORKER_MACHINES}}'
           DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS}}'
 
   test:scale:kind:down:
@@ -400,9 +407,10 @@ tasks:
       # comparison the reconciliation below was built for, and it measures a
       # weaker end state, since a cluster is taken to readiness by all four.
       COMPONENTS: '{{.COMPONENTS | default "all"}}'
-      SHAPE: '{{.SHAPE | default "8x1"}}'
-      CONTROL_PLANE_MACHINES: '{{.CONTROL_PLANE_MACHINES | default "1"}}'
-      WORKER_MACHINES: '{{.WORKER_MACHINES | default "0"}}'
+      CLUSTERS: '{{.CLUSTERS | default "8"}}'
+      NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "1"}}'
+      CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "1"}}'
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1"}}'
       CHECKPOINTS: '{{.CHECKPOINTS | default "25,50"}}'
       # The committed in-process run this is checked against. Empty makes the
       # deployed run a second instrument with nothing keeping it honest, which
@@ -432,9 +440,10 @@ tasks:
         -deployed-namespace={{.NAMESPACE}}
         -deployed-context={{.KUBECONTEXT}}
         -deployed-kubeconfig={{.KUBECONFIG_PATH}}
-        -deployed-shape={{.SHAPE}}
-        -deployed-control-plane-machines={{.CONTROL_PLANE_MACHINES}}
-        -deployed-worker-machines={{.WORKER_MACHINES}}
+        -deployed-clusters={{.CLUSTERS}}
+        -deployed-nodes-per-cluster={{.NODES_PER_CLUSTER}}
+        -deployed-control-plane-nodes={{.CONTROL_PLANE_NODES}}
+        -deployed-clusters-per-workspace={{.CLUSTERS_PER_WORKSPACE}}
         -deployed-checkpoints={{.CHECKPOINTS}}
         -deployed-reference={{.REFERENCE}}
         -deployed-spread={{.SPREAD}} {{.DEPLOYED_FLAGS}}

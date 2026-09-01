@@ -154,5 +154,5 @@ run that spent an hour measuring the wrong fleet.
 - `task test:sweep` must still pass: the sweep now builds its fleet shape from
   `internal/fleetfixture`, and a change there is a change to the project's
   primary instrument.
-- `task test:scale:local TARGET_SHAPES=2x1 WORKER_MACHINES=2 CONTROL_PLANE_MACHINES=1`
+- `task test:scale:local CLUSTERS=2 NODES_PER_CLUSTER=3 CONTROL_PLANE_NODES=1 CLUSTERS_PER_WORKSPACE=1`
   is the small run that exercises every path in minutes.

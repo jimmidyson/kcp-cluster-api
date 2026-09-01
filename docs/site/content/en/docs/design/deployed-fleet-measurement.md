@@ -61,6 +61,11 @@ task test:scale:kind:down          # when you are finished with it
 # Components on different machines, which is the reason to care where one runs.
 task test:scale:kind WORKERS=3 SPREAD=true
 
+# Tune the fleet. The same knobs on every scale task.
+task test:scale:kind CLUSTERS=32 NODES_PER_CLUSTER=5
+task test:scale:cluster CLUSTERS=200 NODES_PER_CLUSTER=50 CONTROL_PLANE_NODES=3 \
+  MANAGER_IMAGE=registry.example/kcp KUBECONTEXT=my-cluster
+
 # On any cluster. Build the images somewhere it can pull from, then run.
 KO_DOCKER_REPO=registry.example/kcp task test:scale:images
 task test:scale:cluster MANAGER_IMAGE=registry.example/kcp KUBECONTEXT=my-cluster

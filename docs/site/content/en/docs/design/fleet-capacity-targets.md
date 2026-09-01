@@ -25,9 +25,27 @@ reports what a stated fleet cost to host.
 A target is three things, and all three are part of it:
 
 ```sh
-task test:scale:local                      # the default: 200 clusters, 50 nodes each, two spreads
-task test:scale:local TARGET_SHAPES=32x1   # one spread, smaller
+# The default: 200 clusters, 50 nodes each, at two spreads.
+task test:scale:local
+
+# Tune it.
+task test:scale:local CLUSTERS=32 NODES_PER_CLUSTER=5
+task test:scale:local CLUSTERS=200 NODES_PER_CLUSTER=50 CONTROL_PLANE_NODES=1
+task test:scale:local CLUSTERS=100 CLUSTERS_PER_WORKSPACE=1     # one spread only
 ```
+
+| | |
+|---|---|
+| `CLUSTERS` | how many clusters the fleet holds in total |
+| `NODES_PER_CLUSTER` | nodes each cluster reaches, **control plane included** |
+| `CONTROL_PLANE_NODES` | how many of those are control plane machines |
+| `CLUSTERS_PER_WORKSPACE` | how they are spread; a list runs each spread in turn |
+
+The node count includes the control plane rather than sitting on top of it —
+fifty nodes means fifty machines. The split is stated separately because the
+two do not cost the same: on the in-memory backend a control plane machine gets
+a fake etcd member and API server pod as well as a Node, where a worker gets a
+Node and a fake kubelet.
 
 This runs everything in one process and needs no cluster, which is what makes
 it the quickest way to a number. To measure the same fleet as an installation
@@ -36,9 +54,10 @@ see [Measuring a deployed fleet](deployed-fleet-measurement.md).
 
 | Term | Default | Why it is part of the target |
 |---|---|---|
-| `TARGET_SHAPES` | `200x1,20x10` | `<workspaces>x<clustersPerWorkspace>`, comma separated. Each shape is a sub-test with its own kcp server and its own report. |
-| `CONTROL_PLANE_MACHINES` | `3` | The HA shape. |
-| `WORKER_MACHINES` | `47` | With the control plane replicas, the node count each cluster reaches. |
+| `CLUSTERS` | `200` | The unit somebody sizing a fleet has in mind. |
+| `NODES_PER_CLUSTER` | `50` | Control plane included. |
+| `CONTROL_PLANE_NODES` | `3` | The HA shape, and the expensive half of a node count. |
+| `CLUSTERS_PER_WORKSPACE` | `1,10` | How they spread. Each entry is a sub-test with its own kcp server and its own report. |
 
 The control plane and worker counts are stated separately rather than as one
 node count because they do not cost the same. On the in-memory backend a

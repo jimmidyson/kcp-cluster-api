@@ -76,18 +76,24 @@ var (
 			"individually. Required.")
 	imageTag = flag.String("deployed-image-tag", "latest",
 		"Tag appended to the manager image prefix.")
-	componentNames = flag.String("deployed-components", deployedscale.ComponentCore,
-		"Comma-separated managers to deploy. The specification's M1 is core-manager alone, reconciled against an "+
-			"in-process run of the same shape; M2 is all four. Use 'all' for every one.")
+	componentNames = flag.String("deployed-components", "all",
+		"Comma-separated managers to deploy, or 'all'. Narrowing to one is how a deployed figure gets checked "+
+			"against an in-process one for the same deployment; it also measures a weaker end state, since a "+
+			"cluster is taken to readiness by all four together.")
 	spreadAcrossNodes = flag.Bool("deployed-spread", false,
 		"Require every component on a different node. Needs a cluster with at least that many, and makes every pod "+
 			"unschedulable where there are not — which is the honest failure, rather than a co-located run "+
 			"reported as a spread one.")
-	shape = flag.String("deployed-shape", "4x1",
-		"`<workspaces>x<clustersPerWorkspace>` to drive to.")
-	controlPlaneMachines = flag.Int("deployed-control-plane-machines", 1, "KubeadmControlPlane replicas per cluster.")
-	workerMachines       = flag.Int("deployed-worker-machines", 0, "Worker MachineDeployment replicas per cluster.")
-	endState             = flag.String("deployed-end-state", "",
+	clusters = flag.Int("deployed-clusters", 4,
+		"How many clusters the fleet holds in total.")
+	nodesPerCluster = flag.Int("deployed-nodes-per-cluster", 1,
+		"How many nodes each cluster reaches, control plane included.")
+	controlPlaneNodes = flag.Int("deployed-control-plane-nodes", 1,
+		"How many of each cluster's nodes are control plane machines.")
+	clustersPerWorkspace = flag.Int("deployed-clusters-per-workspace", 1,
+		"How the clusters are spread over workspaces. One spread per run here, because a deployed run stands a "+
+			"whole cluster up: two spreads are two runs.")
+	endState = flag.String("deployed-end-state", "",
 		"What a checkpoint waits for: 'engaged' (every workspace bound and holding its objects) or 'ready' "+
 			"(every control plane ready and every Machine Ready). Empty picks the strongest state the deployed "+
 			"set can actually reach — 'ready' needs all four providers, because a cluster is taken to readiness "+
@@ -565,23 +571,20 @@ func componentNamesOf(components []deployedscale.Component) []string {
 
 func planFromFlags(t *testing.T) scaletarget.Plan {
 	t.Helper()
-	shapes, err := scaletarget.ParseShapes(*shape)
-	if err != nil {
-		t.Fatalf("could not run: %v", err)
-	}
-	if len(shapes) != 1 {
-		t.Fatalf("could not run: one shape at a time, got %d: a deployed run stands a cluster up per shape", len(shapes))
-	}
 	percents, err := scaletarget.ParsePercents(*checkpoints)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
-	plan, err := scaletarget.NewPlan(shapes[0],
-		scaletarget.Machines{ControlPlane: *controlPlaneMachines, Workers: *workerMachines}, percents)
+	plans, err := scaletarget.Fleet{
+		Clusters:             *clusters,
+		NodesPerCluster:      *nodesPerCluster,
+		ControlPlaneNodes:    *controlPlaneNodes,
+		ClustersPerWorkspace: []int{*clustersPerWorkspace},
+	}.Plans(percents)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
-	return plan
+	return plans[0]
 }
 
 func optionsFromFlags(t *testing.T) deployedscale.Options {
