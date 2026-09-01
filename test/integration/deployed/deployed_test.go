@@ -47,6 +47,7 @@ import (
 	"github.com/kcp-dev/logicalcluster/v3"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	apisv1alpha2 "github.com/kcp-dev/sdk/apis/apis/v1alpha2"
+	corev1alpha1 "github.com/kcp-dev/sdk/apis/core/v1alpha1"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/capiexports"
@@ -273,6 +274,15 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	tenants := make([]*tenant, 0, plan.Shape.Workspaces)
 	first, err := newTenant(ctx, kcpCfg, rootClient, scheme, 0, plan, providers, discovery)
 	if err != nil {
+		// Everything the cluster knows about why. A workspace held out of
+		// Ready reports the initializer that is outstanding, and the reason
+		// that initializer is stuck lives on the LogicalCluster rather than
+		// on the Workspace — so reporting only the Workspace names the
+		// symptom and hides the cause.
+		diagnoseWorkspace(t, ctx, kcpCfg, rootClient, scheme, "scale-0000")
+		if logs := deployedscale.ContainerLogs(ctx, cfg, cl, options.Namespace, deployedscale.KcpName, 80); logs != "" {
+			t.Logf("kcp logs:\n%s", logs)
+		}
 		t.Fatalf("provisioning the first workspace: %v", err)
 	}
 	tenants = append(tenants, first)
@@ -440,6 +450,61 @@ func lastSampleOf(report *deployedscale.Report, component string) *deployedscale
 		}
 	}
 	return nil
+}
+
+// diagnoseWorkspace prints what kcp knows about a workspace that will not
+// become ready.
+//
+// # Why the LogicalCluster and not just the Workspace
+//
+// A Workspace held out of Ready says which initializer is outstanding and
+// nothing more: "Initializers still exist: [system:apibindings]". The reason
+// that initializer cannot finish — the APIBindingsInitialized condition, and
+// the server error inside its message — is written on the LogicalCluster
+// inside the workspace, which is a different object in a different logical
+// cluster. Reading only the Workspace therefore reports the symptom every
+// time and the cause never, which is what made this failure take several
+// rounds to place.
+//
+// Best effort throughout: this runs when something has already gone wrong,
+// and a diagnostic that fails should not replace the error being diagnosed.
+func diagnoseWorkspace(t *testing.T, ctx context.Context, base *rest.Config, rootClient client.Client,
+	scheme *k8sruntime.Scheme, name string,
+) {
+	t.Helper()
+
+	var ws tenancyv1alpha1.Workspace
+	if err := rootClient.Get(ctx, client.ObjectKey{Name: name}, &ws); err != nil {
+		t.Logf("diagnose: reading workspace %s: %v", name, err)
+		return
+	}
+	t.Logf("diagnose: workspace %s phase=%s cluster=%s", name, ws.Status.Phase, ws.Spec.Cluster)
+	for _, c := range ws.Status.Conditions {
+		t.Logf("diagnose:   workspace condition %s=%s %s: %s", c.Type, c.Status, c.Reason, c.Message)
+	}
+
+	if ws.Spec.Cluster == "" {
+		t.Logf("diagnose: the workspace has no logical cluster yet, so there is no LogicalCluster to read")
+		return
+	}
+
+	inside, err := client.New(kcpclient.SetCluster(rest.CopyConfig(base), logicalcluster.NewPath(ws.Spec.Cluster)),
+		client.Options{Scheme: scheme})
+	if err != nil {
+		t.Logf("diagnose: building a client inside %s: %v", ws.Spec.Cluster, err)
+		return
+	}
+
+	// kcp names the LogicalCluster in every workspace "cluster".
+	var logical corev1alpha1.LogicalCluster
+	if err := inside.Get(ctx, client.ObjectKey{Name: "cluster"}, &logical); err != nil {
+		t.Logf("diagnose: reading the LogicalCluster inside %s: %v", ws.Spec.Cluster, err)
+		return
+	}
+	t.Logf("diagnose: LogicalCluster phase=%s initializers=%v", logical.Status.Phase, logical.Status.Initializers)
+	for _, c := range logical.Status.Conditions {
+		t.Logf("diagnose:   logicalcluster condition %s=%s %s: %s", c.Type, c.Status, c.Reason, c.Message)
+	}
 }
 
 // tenant is one workspace and the clusters in it.
@@ -702,6 +767,7 @@ func deployedScheme(t *testing.T) *k8sruntime.Scheme {
 		apisv1alpha1.AddToScheme,
 		apisv1alpha2.AddToScheme,
 		tenancyv1alpha1.AddToScheme,
+		corev1alpha1.AddToScheme,
 		clusterv1.AddToScheme,
 		bootstrapv1.AddToScheme,
 		controlplanev1.AddToScheme,
