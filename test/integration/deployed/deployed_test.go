@@ -286,11 +286,22 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	if err != nil || len(kcpPods) == 0 {
 		t.Fatalf("finding the kcp pod: %v", err)
 	}
-	local, stopForward, err := deployedscale.PortForward(ctx, cfg, options.Namespace, kcpPods[0].Name, deployedscale.KcpPort)
+	forward, err := deployedscale.PortForward(ctx, cfg, options.Namespace, kcpPods[0].Name, deployedscale.KcpPort)
 	if err != nil {
 		t.Fatalf("forwarding a port to kcp: %v", err)
 	}
-	t.Cleanup(stopForward)
+	t.Cleanup(forward.Stop)
+	local := forward.Local
+	// Recorded because a flapping tunnel is the driver's problem and not the
+	// fleet's — the managers reach kcp through the Service — but a run that
+	// fought its instrument all the way through should say so on its face.
+	t.Cleanup(func() {
+		if n := forward.Restarts(); n > 0 {
+			report.AddFact("kcpPortForwardRestarts", fmt.Sprintf("%d", n))
+			t.Logf("NOTE: the port-forward to kcp was rebuilt %d time(s) during this run. That is the "+
+				"driver's path only; the managers reach kcp through its Service.", n)
+		}
+	})
 
 	kcpCfg := restConfigFor(creds, "https://"+local+"/clusters/"+deployedscale.RootWorkspace)
 	rootClient, err := client.New(kcpCfg, client.Options{Scheme: scheme})

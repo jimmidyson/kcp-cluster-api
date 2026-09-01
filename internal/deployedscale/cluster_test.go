@@ -18,9 +18,11 @@ package deployedscale
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -425,5 +427,103 @@ func TestPodTroubleStillPrefersTheWaitingReason(t *testing.T) {
 	}
 	if !strings.Contains(detail, "ImagePullBackOff") {
 		t.Errorf("the detail does not name the waiting reason:\n%s", detail)
+	}
+}
+
+// TestForwardSurvivesTheTunnelDying is the regression test for the run that
+// reported a fleet failing to converge when what had actually failed was the
+// harness's own tunnel:
+//
+//	50 of 50 workspaces short (listing control planes in 2wypd8khv58vy4t6:
+//	dial tcp 127.0.0.1:41579: connect: connection refused)
+//
+// Connection refused means nothing was listening. The forwarder had exited and
+// nobody was watching it — ForwardPorts ran in a goroutine whose error was read
+// once, at startup. Every request after that failed, and the failure was
+// attributed to the clusters.
+func TestForwardSurvivesTheTunnelDying(t *testing.T) {
+	var mu sync.Mutex
+	var starts []int
+	current := make(chan error, 1)
+
+	fake := func(localPort int) (int, <-chan error, func(), error) {
+		mu.Lock()
+		defer mu.Unlock()
+		starts = append(starts, localPort)
+		ch := make(chan error, 1)
+		current = ch
+		bound := localPort
+		if bound == 0 {
+			bound = 34567 // what the first call would have been given
+		}
+		return bound, ch, func() {}, nil
+	}
+
+	fwd, err := forwardWith(t.Context(), fake)
+	if err != nil {
+		t.Fatalf("establishing the forward: %v", err)
+	}
+	defer fwd.Stop()
+
+	before := fwd.Local
+	mu.Lock()
+	dead := current
+	mu.Unlock()
+	dead <- errors.New("error copying from remote stream to local connection: broken pipe")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for fwd.Restarts() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the tunnel died and was never rebuilt, so every later request would be refused")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if fwd.Local != before {
+		t.Errorf("the local address changed from %s to %s; every address already handed out is now wrong",
+			before, fwd.Local)
+	}
+
+	mu.Lock()
+	got := append([]int(nil), starts...)
+	mu.Unlock()
+	if len(got) < 2 {
+		t.Fatalf("the tunnel was started %d time(s), want at least 2", len(got))
+	}
+	if got[0] != 0 {
+		t.Errorf("the first tunnel asked for port %d, not any free port", got[0])
+	}
+	if got[1] != 34567 {
+		t.Errorf("the rebuilt tunnel asked for port %d rather than the one already published", got[1])
+	}
+}
+
+// TestForwardStopsSupervising: Stop has to end the supervisor, or a finished
+// run leaves a goroutine rebuilding a tunnel to a namespace being deleted.
+func TestForwardStopsSupervising(t *testing.T) {
+	started := make(chan int, 8)
+	fake := func(localPort int) (int, <-chan error, func(), error) {
+		started <- localPort
+		bound := localPort
+		if bound == 0 {
+			bound = 34568
+		}
+		return bound, make(chan error, 1), func() {}, nil
+	}
+
+	fwd, err := forwardWith(t.Context(), fake)
+	if err != nil {
+		t.Fatalf("establishing the forward: %v", err)
+	}
+	fwd.Stop()
+	fwd.Stop() // idempotent: cleanup runs it, and a caller may too.
+
+	drain := len(started)
+	for range drain {
+		<-started
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(started); n != 0 {
+		t.Errorf("the supervisor started %d more tunnel(s) after Stop", n)
 	}
 }

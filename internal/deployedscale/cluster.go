@@ -27,6 +27,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -579,53 +581,161 @@ func ContainerLogs(ctx context.Context, cfg *rest.Config, cl client.Client, name
 // The credentials cover 127.0.0.1 for exactly this reason: kcp is addressed by
 // its Service name from inside the cluster and by a loopback address from
 // outside it, and one certificate has to satisfy both.
-func PortForward(ctx context.Context, cfg *rest.Config, namespace, pod string, remotePort int) (local string, stop func(), err error) {
-	clientset, err := kubernetes.NewForConfig(cfg)
+// Forward is a supervised port-forward: a local address that stays valid while
+// the tunnel underneath it is re-established as often as it needs to be.
+//
+// # Why supervision rather than one forwarder
+//
+// A port-forward is a single SPDY stream through the API server, and it dies.
+// Earlier runs showed it fraying — "error copying from remote stream to local
+// connection: broken pipe", "connection reset by peer" — and survived, because
+// the driver's next request happened to land on a healthy moment. At 200
+// clusters of 50 nodes it died outright, and the run reported:
+//
+//	waiting for 50 workspaces to reach the end state: timed out after 20m0s:
+//	50 of 50 workspaces short (listing control planes in 2wypd8khv58vy4t6:
+//	dial tcp 127.0.0.1:41579: connect: connection refused)
+//
+// Nothing was listening because the forwarder had exited and nobody was
+// watching: ForwardPorts ran in a goroutine whose error was read once, at
+// startup, and never again. The failure then reads as a fleet that would not
+// converge, which is the opposite of what it was — the managers reach kcp
+// through the Service inside the cluster, so a dead tunnel blinds the driver
+// and leaves the fleet alone.
+//
+// So the tunnel is now watched and rebuilt on the same local port, and the
+// number of times that happened is recorded. A measurement taken across a flap
+// is still a measurement — the fleet never noticed — but a run that flapped
+// twenty times was fighting its instrument and should say so.
+type Forward struct {
+	// Local is the address to dial. It does not change across restarts.
+	Local string
+
+	restarts atomic.Int64
+	stop     func()
+}
+
+// Restarts is how many times the tunnel had to be rebuilt.
+func (f *Forward) Restarts() int { return int(f.restarts.Load()) }
+
+// Stop tears the forward down and stops supervising it.
+func (f *Forward) Stop() {
+	if f.stop != nil {
+		f.stop()
+	}
+}
+
+// tunnel starts one port-forward. A localPort of 0 asks for any free port; the
+// port actually bound is returned, along with a channel that receives when the
+// tunnel dies and a function that closes it.
+type tunnel func(localPort int) (bound int, died <-chan error, closeTunnel func(), err error)
+
+// PortForward forwards a local port to a pod's port and keeps it forwarded.
+func PortForward(ctx context.Context, cfg *rest.Config, namespace, pod string, remotePort int) (*Forward, error) {
+	return forwardWith(ctx, spdyTunnel(cfg, namespace, pod, remotePort))
+}
+
+// forwardWith is PortForward with the tunnel injected, so the supervision can
+// be tested without a cluster — which matters, because the bug this exists to
+// fix only appears when a tunnel dies, and a healthy one never does.
+func forwardWith(ctx context.Context, t tunnel) (*Forward, error) {
+	bound, died, closeTunnel, err := t(0)
 	if err != nil {
-		return "", nil, fmt.Errorf("building a clientset: %w", err)
+		return nil, err
 	}
 
-	transport, upgrader, err := spdy.RoundTripperFor(cfg)
-	if err != nil {
-		return "", nil, fmt.Errorf("building the port-forward transport: %w", err)
-	}
-	url := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").Namespace(namespace).Name(pod).SubResource("portforward").URL()
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, url)
-
-	ready := make(chan struct{})
-	stopCh := make(chan struct{})
-	// Port 0 asks the forwarder for any free local port, which is what keeps
-	// two runs on one machine from colliding.
-	fw, err := portforward.New(dialer, []string{fmt.Sprintf("0:%d", remotePort)}, stopCh, ready, os.Stderr, os.Stderr)
-	if err != nil {
-		close(stopCh)
-		return "", nil, fmt.Errorf("building the port forwarder: %w", err)
+	f := &Forward{Local: net.JoinHostPort("127.0.0.1", strconv.Itoa(bound))}
+	supervisorCtx, cancel := context.WithCancel(ctx)
+	var once sync.Once
+	f.stop = func() {
+		once.Do(func() {
+			cancel()
+			closeTunnel()
+		})
 	}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- fw.ForwardPorts() }()
+	go func() {
+		for {
+			select {
+			case <-supervisorCtx.Done():
+				return
+			case <-died:
+			}
+			closeTunnel()
 
-	select {
-	case <-ready:
-	case err := <-errCh:
-		close(stopCh)
-		return "", nil, fmt.Errorf("forwarding a port to %s/%s: %w", namespace, pod, err)
-	case <-ctx.Done():
-		close(stopCh)
-		return "", nil, ctx.Err()
-	case <-time.After(time.Minute):
-		close(stopCh)
-		return "", nil, errors.New("the port forward did not become ready within a minute")
+			// The same local port, so every address already handed out stays
+			// correct. Rebinding a listening port that has just been closed is
+			// ordinarily immediate; a retry covers the case where it is not.
+			for attempt := 0; ; attempt++ {
+				select {
+				case <-supervisorCtx.Done():
+					return
+				case <-time.After(backoff(attempt)):
+				}
+				_, next, nextClose, err := t(bound)
+				if err != nil {
+					continue
+				}
+				died, closeTunnel = next, nextClose
+				f.restarts.Add(1)
+				break
+			}
+		}
+	}()
+
+	return f, nil
+}
+
+func backoff(attempt int) time.Duration {
+	d := time.Duration(1<<min(attempt, 5)) * 100 * time.Millisecond
+	return min(d, 5*time.Second)
+}
+
+func spdyTunnel(cfg *rest.Config, namespace, pod string, remotePort int) tunnel {
+	return func(localPort int) (int, <-chan error, func(), error) {
+		clientset, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("building a clientset: %w", err)
+		}
+		transport, upgrader, err := spdy.RoundTripperFor(cfg)
+		if err != nil {
+			return 0, nil, nil, fmt.Errorf("building the port-forward transport: %w", err)
+		}
+		url := clientset.CoreV1().RESTClient().Post().
+			Resource("pods").Namespace(namespace).Name(pod).SubResource("portforward").URL()
+		dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, url)
+
+		ready := make(chan struct{})
+		stopCh := make(chan struct{})
+		fw, err := portforward.New(dialer,
+			[]string{fmt.Sprintf("%d:%d", localPort, remotePort)}, stopCh, ready, os.Stderr, os.Stderr)
+		if err != nil {
+			close(stopCh)
+			return 0, nil, nil, fmt.Errorf("building the port forwarder: %w", err)
+		}
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- fw.ForwardPorts() }()
+
+		select {
+		case <-ready:
+		case err := <-errCh:
+			close(stopCh)
+			return 0, nil, nil, fmt.Errorf("forwarding a port to %s/%s: %w", namespace, pod, err)
+		case <-time.After(time.Minute):
+			close(stopCh)
+			return 0, nil, nil, errors.New("the port forward did not become ready within a minute")
+		}
+
+		ports, err := fw.GetPorts()
+		if err != nil || len(ports) == 0 {
+			close(stopCh)
+			return 0, nil, nil, fmt.Errorf("reading the forwarded port: %w", err)
+		}
+
+		var closeOnce sync.Once
+		return int(ports[0].Local), errCh, func() { closeOnce.Do(func() { close(stopCh) }) }, nil
 	}
-
-	ports, err := fw.GetPorts()
-	if err != nil || len(ports) == 0 {
-		close(stopCh)
-		return "", nil, fmt.Errorf("reading the forwarded port: %w", err)
-	}
-
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(int(ports[0].Local))), func() { close(stopCh) }, nil
 }
 
 // WorkspaceConfig returns a copy of base addressing one logical cluster.
