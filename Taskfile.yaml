@@ -265,7 +265,13 @@ tasks:
       # difference between what they cost is the per-workspace term this
       # project exists to make small. One spread measures a sum; the pair
       # separates it.
-      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1,10"}}'
+      #
+      # Empty rather than "1,10": the spread has to divide the cluster count,
+      # so a fixed default belongs to a fixed CLUSTERS and turning that down
+      # would fail a run over a knob nobody touched. Left empty the fleet
+      # derives its own — one per workspace, plus a denser spread when one
+      # divides and still leaves workspaces to count.
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default ""}}'
       # Percentages of the target to stop and sample at. The target is always
       # the last one, whatever this says.
       TARGET_CHECKPOINTS: '{{.TARGET_CHECKPOINTS | default "10,25,50"}}'
@@ -410,7 +416,7 @@ tasks:
       CLUSTERS: '{{.CLUSTERS | default "8"}}'
       NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "1"}}'
       CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "1"}}'
-      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1"}}'
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "1"}}'  # one spread per deployed run
       CHECKPOINTS: '{{.CHECKPOINTS | default "25,50"}}'
       # The committed in-process run this is checked against. Empty makes the
       # deployed run a second instrument with nothing keeping it honest, which

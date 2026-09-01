@@ -90,9 +90,9 @@ var (
 		"How many nodes each cluster reaches, control plane included.")
 	controlPlaneNodes = flag.Int("deployed-control-plane-nodes", 1,
 		"How many of each cluster's nodes are control plane machines.")
-	clustersPerWorkspace = flag.Int("deployed-clusters-per-workspace", 1,
+	clustersPerWorkspace = flag.Int("deployed-clusters-per-workspace", 0,
 		"How the clusters are spread over workspaces. One spread per run here, because a deployed run stands a "+
-			"whole cluster up: two spreads are two runs.")
+			"whole cluster up: two spreads are two runs. Zero means one cluster per workspace.")
 	endState = flag.String("deployed-end-state", "",
 		"What a checkpoint waits for: 'engaged' (every workspace bound and holding its objects) or 'ready' "+
 			"(every control plane ready and every Machine Ready). Empty picks the strongest state the deployed "+
@@ -569,6 +569,17 @@ func componentNamesOf(components []deployedscale.Component) []string {
 	return out
 }
 
+// spreadFromFlag turns the single-spread flag into the list a Fleet takes.
+// Zero means unstated, which the fleet reads as one cluster per workspace —
+// the only spread a deployed run can take, since it stands a whole cluster up
+// per spread.
+func spreadFromFlag(per int) []int {
+	if per < 1 {
+		return []int{1}
+	}
+	return []int{per}
+}
+
 func planFromFlags(t *testing.T) scaletarget.Plan {
 	t.Helper()
 	percents, err := scaletarget.ParsePercents(*checkpoints)
@@ -579,7 +590,7 @@ func planFromFlags(t *testing.T) scaletarget.Plan {
 		Clusters:             *clusters,
 		NodesPerCluster:      *nodesPerCluster,
 		ControlPlaneNodes:    *controlPlaneNodes,
-		ClustersPerWorkspace: []int{*clustersPerWorkspace},
+		ClustersPerWorkspace: spreadFromFlag(*clustersPerWorkspace),
 	}.Plans(percents)
 	if err != nil {
 		t.Fatalf("could not run: %v", err)

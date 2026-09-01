@@ -98,6 +98,22 @@ func TestControlPlaneIsInsideTheNodeCount(t *testing.T) {
 	}
 }
 
+// An unstated spread is derived rather than refused: see DefaultSpreads. It is
+// the one field with a sensible answer the fleet can work out for itself, and
+// refusing it made tuning the cluster count break a knob nobody touched.
+func TestAnUnstatedSpreadIsDerived(t *testing.T) {
+	plans, err := Fleet{Clusters: 200, NodesPerCluster: 50, ControlPlaneNodes: 3}.Plans(nil)
+	if err != nil {
+		t.Fatalf("an unstated spread was refused: %v", err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("got %d spreads, want the pair that separates the two terms", len(plans))
+	}
+	if plans[0].Shape.ClustersPerWorkspace != 1 || plans[1].Shape.ClustersPerWorkspace != 10 {
+		t.Errorf("spreads = %s and %s, want one and ten per workspace", plans[0].Shape, plans[1].Shape)
+	}
+}
+
 func TestFleetRejectsWhatCannotBeBuilt(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -106,7 +122,6 @@ func TestFleetRejectsWhatCannotBeBuilt(t *testing.T) {
 	}{
 		{"no clusters", Fleet{Clusters: 0, NodesPerCluster: 1, ControlPlaneNodes: 1, ClustersPerWorkspace: []int{1}}, "at least one"},
 		{"no nodes", Fleet{Clusters: 1, NodesPerCluster: 0, ControlPlaneNodes: 0, ClustersPerWorkspace: []int{1}}, "not nodes"},
-		{"no spread", Fleet{Clusters: 1, NodesPerCluster: 1, ControlPlaneNodes: 1}, "no spread"},
 		{"zero per workspace", Fleet{Clusters: 1, NodesPerCluster: 1, ControlPlaneNodes: 1, ClustersPerWorkspace: []int{0}}, "at least one"},
 		// Workers with no control plane never converge; the machine split
 		// catches it wherever it is expressed.

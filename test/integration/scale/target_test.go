@@ -77,10 +77,11 @@ var (
 		"How many of each cluster's nodes are control plane machines. Part of the target rather than a detail "+
 			"of it: on the in-memory backend a control plane machine costs a fake etcd member and API server "+
 			"pod as well as a Node, so two runs at one node count and a different split are not one measurement.")
-	targetClustersPerWorkspace = flag.String("clusters-per-workspace", "1",
+	targetClustersPerWorkspace = flag.String("clusters-per-workspace", "",
 		"How the clusters are spread over workspaces, comma separated for more than one spread. Each spread is "+
 			"a sub-test with its own kcp server and its own report. One fleet at two spreads is the comparison "+
-			"that separates what a workspace costs from what a cluster costs.")
+			"that separates what a workspace costs from what a cluster costs. Empty derives it from the cluster "+
+			"count, so tuning the fleet does not break a knob nobody touched.")
 	targetCheckpoints = flag.String("target-checkpoints", "25,50",
 		"Percentages of the workspace target at which to stop and take a sample. The target itself is always the "+
 			"last one. Samples on the way up are what turn a run into a curve rather than one number.")
@@ -154,9 +155,14 @@ func TestFleetTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
-	spreads, err := scaletarget.ParseCounts(*targetClustersPerWorkspace)
-	if err != nil {
-		t.Fatalf("could not run: clusters per workspace: %v", err)
+	// Empty is not an error: the fleet derives its own spreads. See
+	// scaletarget.DefaultSpreads.
+	var spreads []int
+	if strings.TrimSpace(*targetClustersPerWorkspace) != "" {
+		spreads, err = scaletarget.ParseCounts(*targetClustersPerWorkspace)
+		if err != nil {
+			t.Fatalf("could not run: clusters per workspace: %v", err)
+		}
 	}
 
 	plans, err := scaletarget.Fleet{

@@ -17,7 +17,6 @@ limitations under the License.
 package scaletarget
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -76,15 +75,19 @@ func (f Fleet) Plans(percents []int) ([]Plan, error) {
 		return nil, fmt.Errorf("%d control plane nodes in a %d node cluster: the control plane is part of the node "+
 			"count, not on top of it", f.ControlPlaneNodes, f.NodesPerCluster)
 	}
-	if len(f.ClustersPerWorkspace) == 0 {
-		return nil, errors.New("no spread given: say how many clusters go in each workspace")
+	spreads := f.ClustersPerWorkspace
+	if len(spreads) == 0 {
+		// Derived rather than refused: a spread nobody asked for should follow
+		// the cluster count rather than make the run fail for a knob that was
+		// never touched.
+		spreads = DefaultSpreads(f.Clusters)
 	}
 	if err := f.Machines().Validate(); err != nil {
 		return nil, err
 	}
 
-	plans := make([]Plan, 0, len(f.ClustersPerWorkspace))
-	for _, per := range f.ClustersPerWorkspace {
+	plans := make([]Plan, 0, len(spreads))
+	for _, per := range spreads {
 		if per < 1 {
 			return nil, fmt.Errorf("clusters per workspace is %d: a workspace holds at least one", per)
 		}
@@ -92,8 +95,8 @@ func (f Fleet) Plans(percents []int) ([]Plan, error) {
 		// clusters than was asked for and reports the number that was asked
 		// for, which is the kind of wrong nobody checks.
 		if f.Clusters%per != 0 {
-			return nil, fmt.Errorf("%d clusters do not divide into %d per workspace: "+
-				"pick a spread that divides, or a cluster count that does", f.Clusters, per)
+			return nil, fmt.Errorf("%d clusters do not divide into %d per workspace. "+
+				"Spreads that divide %d: %s", f.Clusters, per, f.Clusters, describeDivisors(f.Clusters))
 		}
 		plan, err := NewPlan(Shape{Workspaces: f.Clusters / per, ClustersPerWorkspace: per}, f.Machines(), percents)
 		if err != nil {
