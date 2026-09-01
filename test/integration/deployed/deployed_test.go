@@ -300,12 +300,16 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		// on the Workspace — so reporting only the Workspace names the
 		// symptom and hides the cause.
 		diagnoseWorkspace(t, ctx, kcpCfg, rootClient, scheme, "scale-0000")
-		if logs := deployedscale.ContainerLogsMatching(ctx, cfg, cl, options.Namespace, deployedscale.KcpName,
-			deployedscale.InterestingLogPatterns, 60); logs != "" {
-			t.Logf("kcp logs (filtered to what bears on initialization):\n%s", logs)
-		} else {
-			t.Logf("kcp said nothing about initialization at all, which is itself the finding: its apibinder " +
-				"never ran for this workspace")
+		logs, narrow := deployedscale.ContainerLogsMatching(ctx, cfg, cl, options.Namespace, deployedscale.KcpName,
+			deployedscale.InitializationLogPatterns, deployedscale.StartupFailurePatterns, 60)
+		switch {
+		case logs != "" && narrow:
+			t.Logf("kcp logs about initialization:\n%s", logs)
+		case logs != "":
+			t.Logf("kcp never mentioned initialization for this workspace, which is itself the finding: its "+
+				"apibinder did not run. What it did complain about:\n%s", logs)
+		default:
+			t.Logf("kcp logged nothing about initialization and nothing that looks like a failure")
 		}
 		t.Fatalf("provisioning the first workspace: %v", err)
 	}

@@ -319,71 +319,90 @@ func (s *Scraper) SampleComponents(ctx context.Context, cl client.Client, namesp
 	return out, nil
 }
 
-// InterestingLogPatterns are what matters in kcp's output when a workspace
-// will not initialize.
+// InitializationLogPatterns match the lines that bear on a workspace failing
+// to initialize, and nothing else.
 //
-// A filter rather than a tail, because a tail is the wrong window. kcp's
-// apibinder acts within a second of a workspace being created and then says
-// nothing more, while the server emits a couple of lines of CRD bookkeeping
-// every second for ever — so by the time a two-minute wait gives up, the lines
-// that explain it are thousands of lines back and an eighty-line tail contains
-// nothing but noise. That is not a hypothetical: two separate diagnoses of
-// this exact failure were handed a tail full of "skipping APIBinding CRD" and
-// nothing else.
-var InterestingLogPatterns = []string{
-	"apibinder", "initializ", "createdBy", "APIBinding",
-	"forbidden", "Unhandled Error", "\"err\"=", "err=",
-}
+// Deliberately narrow. An earlier version of this also matched "err=" and
+// "Unhandled Error", which sounds thorough and is not: kcp emits a burst of
+// those in its first second — RBAC informers that cannot list yet, a
+// kube-system namespace it will never have — and taking the earliest matches
+// then returns a screenful of startup noise and truncates before reaching
+// anything about the workspace. A filter that matches everything interesting
+// is a filter that shows the first thing rather than the right thing.
+var InitializationLogPatterns = []string{"apibinder", "initializ", "createdby", "apibinding"}
 
-// ContainerLogsMatching returns the lines of a component's output that match
-// any of the given patterns, over the whole life of the container.
+// StartupFailurePatterns are the fallback, used only when nothing matched the
+// narrow set — a server that never mentioned the workspace at all did
+// something else wrong, and then the noise is the best evidence available.
+var StartupFailurePatterns = []string{"unhandled error", "forbidden", "failed to start", "panic"}
+
+// ContainerLogsMatching returns the lines of a component's output matching the
+// narrow patterns, falling back to the broad ones when the narrow set finds
+// nothing.
 //
 // Matching is a plain case-insensitive substring test: the patterns are fixed
 // strings chosen for this, and a diagnostic is not the place to discover that
 // somebody's regular expression does not compile.
+//
+// The whole life of the container is read rather than a tail. kcp's apibinder
+// acts within a second of a workspace being created and then says nothing
+// more, while the server emits a couple of lines of CRD bookkeeping every
+// second for ever — so by the time a two-minute wait gives up, the lines that
+// explain it are thousands back and a tail contains only noise. Two separate
+// diagnoses of this failure were handed exactly that.
 func ContainerLogsMatching(ctx context.Context, cfg *rest.Config, cl client.Client, namespace, component string,
-	patterns []string, max int,
-) string {
+	narrow, fallback []string, max int,
+) (lines string, matchedNarrow bool) {
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	pods, err := ComponentPods(ctx, cl, namespace, component)
 	if err != nil || len(pods) == 0 {
-		return ""
+		return "", false
 	}
 
 	raw, err := clientset.CoreV1().Pods(namespace).GetLogs(pods[0].Name, &corev1.PodLogOptions{
 		Container: component,
 	}).DoRaw(ctx)
 	if err != nil {
-		return ""
+		return "", false
 	}
+	all := strings.Split(string(raw), "\n")
 
-	lowered := make([]string, 0, len(patterns))
-	for _, p := range patterns {
-		lowered = append(lowered, strings.ToLower(p))
-	}
-
-	var kept []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		haystack := strings.ToLower(line)
-		for _, p := range lowered {
-			if strings.Contains(haystack, p) {
-				kept = append(kept, line)
-				break
+	match := func(patterns []string) []string {
+		lowered := make([]string, 0, len(patterns))
+		for _, p := range patterns {
+			lowered = append(lowered, strings.ToLower(p))
+		}
+		var kept []string
+		for _, line := range all {
+			haystack := strings.ToLower(line)
+			for _, p := range lowered {
+				if strings.Contains(haystack, p) {
+					kept = append(kept, line)
+					break
+				}
 			}
 		}
+		return kept
 	}
+
+	if kept := match(narrow); len(kept) > 0 {
+		if len(kept) > max {
+			kept = kept[:max]
+		}
+		return strings.Join(kept, "\n"), true
+	}
+
+	kept := match(fallback)
 	if len(kept) == 0 {
-		return ""
+		return "", false
 	}
-	// The earliest matches, not the latest: what explains a stuck initializer
-	// is what happened when it ran, which is the start of the story.
 	if len(kept) > max {
 		kept = kept[:max]
 	}
-	return strings.Join(kept, "\n")
+	return strings.Join(kept, "\n"), false
 }
 
 // ContainerLogs returns the tail of a component's container output, preferring
