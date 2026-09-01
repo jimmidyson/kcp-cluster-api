@@ -232,22 +232,53 @@ The per-connected-cluster figure implied by that gap is roughly 15 goroutines.
 It is **not** measured: no run producing it has its evidence committed. It is
 recorded here as the explanation for a gap, not as a number to quote.
 
+## What a fleet costs, so far
+
+All four managers, fitted against cluster count, from two runs over different
+ranges ([25 clusters][ev25], [50 clusters][ev50]):
+
+| Deployment | goroutines/cluster, 25 | goroutines/cluster, 50 | fixed |
+|---|--:|--:|--:|
+| core-manager | 17.0 | 17.0 | 344 |
+| kubeadm-bootstrap-manager | 14.0 | 14.0 | 149 |
+| kubeadm-control-plane-manager | 46.0 | 47.0 | 153–174 |
+| dev-infrastructure-manager | 29.0 | 30.1 | 171–194 |
+| **TOTAL** | **105.9** | **108.0** | |
+
+Linear, and repeatable. Two runs over 7–25 and 13–50 clusters agree to 2% in
+total; core and bootstrap agree exactly on both slope and intercept, their
+points collinear to the integer.
+
+**Cost tracks clusters, not workspaces.** Runs that pack several clusters into
+one workspace cost the same per cluster as runs that give each its own, so how
+a fleet is divided into workspaces is close to free and the cluster count is
+what to size against.
+
+The memory figures are weaker than the goroutine ones and each report says so
+where its own heap series wanders: a checkpoint is sampled when it is reached,
+which is wherever that falls relative to a garbage collection.
+
 ## Status
 
-**Calibrated, and not yet a fleet-size result.** The harness runs end to end on
-a kind cluster and the two instruments agree about one deployment. What is
-measured is eight clusters of one node, with every component on a single node.
+**Calibrated, linear to fifty clusters, single-node.** The harness runs end to
+end on kind, the two instruments agree about one deployment, and cost per
+cluster reproduces across fleet size and across distributions.
 
 Not measured, and so not stated:
 
-- **Anything about 200 clusters.** The largest run is ten. Extrapolating a
-  slope twenty-five times beyond its data is a prediction, and per
-  [Principle IX][constitution] this page does not print predictions as figures.
+- **The 200-cluster figure.** The largest run is fifty. Carrying these slopes to
+  200 predicts roughly 22,400 goroutines across the four managers — a prediction
+  from a 4x extrapolation, labelled as one, and per [Principle IX][constitution]
+  not printed as a figure.
+- **Anything at 50 nodes per cluster.** Every run is one node per cluster. The
+  target is 10,000 Machines and nothing has been near it.
 - **Anything multi-node.** Every run so far is co-located, which each report
   says on its own face. `SPREAD=true` with `WORKERS` is how that changes.
 - **The cost of a connected workload cluster**, above.
 
 [evidence]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-core-8x1.json
+[ev25]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-25x1.json
+[ev50]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md
