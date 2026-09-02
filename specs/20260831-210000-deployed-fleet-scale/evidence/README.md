@@ -157,11 +157,41 @@ Two measurements say the cost is not the storing. Goroutines stay flat near
 cheap and quiet; this one is expensive and busy, which points at the traffic
 over those objects rather than the objects themselves.
 
-**That last step is a reading, not a measurement.** What is measured is that
-the memory is heap, that it scales with Machines and not workspaces, and that
-it comes with CPU saturation. Which requests produce it needs
-`apiserver_current_inflight_requests` and `apiserver_request_total`, which this
-harness does not yet read.
+### The profile says what it is
+
+Taken at 25 workspaces of ten nodes, `kcp-heap-50x1.pb.gz`:
+
+```
+Showing nodes accounting for 0.80GB, 64.16% of 1.25GB total
+      flat  flat%                cum   cum%
+    0.29GB 23.25%             0.34GB 26.97%  encoding/json.(*decodeState).objectInterface
+    0.16GB 12.92%             0.16GB 12.92%  apimachinery/pkg/runtime.DeepCopyJSONValue
+    0.04GB  3.56%             0.05GB  3.68%  encoding/json.unquote
+    0.04GB  3.37%             0.10GB  7.87%  sigs.k8s.io/json ... objectInterface
+    0.04GB  3.33%             0.04GB  3.33%  reflect.mapassign_faststr0
+    0.04GB  3.17%             0.43GB 34.61%  apimachinery/pkg/runtime.structToUnstructured
+    0.03GB  2.60%             0.03GB  2.60%  etcdserverpb.(*InternalRaftRequest).Marshal
+```
+
+**It is the unstructured representation.** `objectInterface` is JSON being
+decoded into `map[string]interface{}`. `DeepCopyJSONValue` is those maps being
+deep-copied. `structToUnstructured` is 34.6% cumulatively. Between them, the
+handling of objects as maps rather than as typed structs is most of the heap.
+
+Every Cluster API type reaches this shard as a CRD through an APIBinding, and
+CRD-backed resources are unstructured end to end — decoded, stored, cached,
+deep-copied per read and re-encoded, with every field a string key and an
+`interface{}` box. A Machine that serializes to a few kilobytes is a large
+object graph of small allocations once it is a map.
+
+That accounts for everything else measured. It is heap, because maps are heap.
+It scales with objects rather than workspaces, because it is per object. It
+comes with CPU saturation, because JSON decoding and deep-copying are what the
+CPU is doing. Goroutines stay flat, because none of it is per connection.
+
+And it settles the two earlier hypotheses, both of which this file previously
+carried and both of which were wrong. etcd is present in the profile at 2.6%,
+which is not a memory problem. Response buffering does not appear at all.
 
 ## The first limit found, and it is not the managers
 
