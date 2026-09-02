@@ -367,6 +367,16 @@ one cluster per workspace, and 21,521 and 1.16 GiB packed ten per workspace —
 with no container above a fifth of its memory limit. Whatever stops this fleet
 growing further, it is not the managers.
 
+**And the shard, which is what stops it, is priced.** A Machine costs kcp
+1.41 MiB of retained heap and no goroutines; a cluster costs 7.99 MiB and about
+52 goroutines. Carried to the 200x50 target — 200 clusters of fifty nodes,
+10,000 Machines — that model asks for **roughly 16 GB of retained heap**, which
+is why a 4 GiB shard was OOM killed before its first checkpoint. That is a
+prediction and is labelled as one: it extrapolates fourfold in clusters and
+fivefold in nodes from where it was fitted, and the multiplier from retained
+heap to a container limit is not something these runs measure cleanly, because
+resident memory in them carries collections the harness itself forced.
+
 Not measured, and so not stated:
 
 - **Anything at 50 nodes per cluster.** The largest node count measured is ten,
@@ -387,73 +397,39 @@ Not measured, and so not stated:
   `structToUnstructured` between them — which is what every Cluster API type
   is, reaching the shard as a CRD through an APIBinding.
 
-  **The shard costs about 52 goroutines per cluster, whatever is in the
-  cluster.** Three runs at one, five and ten nodes each — [one][ev50x1b],
-  [five][ev50x5b], [ten][ev50x10] — agree to within 1%, with the middle one the
-  highest, so a Machine costs the shard no goroutines at all. Those goroutines
-  are per logical cluster, not per object in it.
+  **A Machine costs the shard 1.41 MiB of retained heap, on top of 7.99 MiB per
+  cluster.** Three runs of fifty clusters at one, five and ten nodes each, every
+  sample taken after a forced collection, price a cluster at 9.98, 15.51 and
+  23.22 MB; those three against their node counts fit to a worst residual of
+  1.8%. The figure is computed from the committed evidence rather than written
+  down beside it, by a test that fails if a run is added, replaced or corrected
+  and this page is not.
 
-  **A Machine costs 1.5 to 3.0 CPU-seconds** to provision, falling as clusters
-  get larger: 10.6, 20.2 and 27.7 CPU-seconds per cluster at the three node
-  counts, all three fitted to under 1%. The wide end of that range is what the
-  collected runs give before subtracting the collections the harness itself
-  forces.
+  A Machine brings six to eight stored objects with it — itself, its
+  infrastructure object, its bootstrap config, the Secret that config renders,
+  and the Events they generate — so that is around 200 KB of retained heap
+  apiece. The three runs' whole-fleet ratios agree: 197, 190 and 215 KB per
+  stored object across a tenfold change in Machines per cluster. Uncollected,
+  the same arithmetic on the same runs gave 170, 410 and 117 KiB.
 
-  **A Machine's memory cost is not measured**, and three runs were spent
-  establishing why. The three heap slopes are 7.6, 33.7 and 13.0 MiB per
-  cluster: the five-node run prices a cluster at more than twice the ten-node
-  run with half the Machines in it. Each run fits its own samples well — 14.1%,
-  2.5%, 1.4% — because within a run the collector's state is consistent between
-  checkpoints; between runs it is not. Live heap as a fraction of heapSys at the
-  three last samples was 55%, 73% and 52%, which is the whole explanation.
-  Resident memory is monotonic across the three but carries the collector's
-  headroom, and at ten nodes the GOMEMLIMIT ceiling too.
+  **A Machine costs the shard no goroutines.** 52.18, 52.08 and 51.97 per
+  cluster across that same tenfold change, so the split reads -0.02 per Machine.
+  Those goroutines are per logical cluster, not per object in it.
 
-  So the harness now asks the shard to collect before each sample, through
-  net/http/pprof's own `?gc=1`, and says on the report's face which kind of heap
-  figure a run carries. What survived contact with a second and third run are
-  the two quantities that do not depend on when the collector last ran.
+  **A Machine costs roughly 1.2 to 3.0 CPU-seconds** to provision, and that one
+  is a range rather than a figure: the three points miss a line by 14.4% because
+  the cost falls as clusters get bigger — 3.0 CPU-seconds each between one node
+  and five, 1.2 between five and ten. Resident memory does not split either, at
+  14.7%, because it carries the collector's headroom and, in these runs, the
+  collections the harness itself forced.
 
-  **That fix works.** [Retaking the one-node run][ev50x1c] with the collection
-  forced puts live heap at 47%, 46% and 47% of heapSys across its three samples,
-  where the uncollected run of the same shape wandered 63%, 49%, 55%. Its heap
-  fit goes from a refused 14.1% to 0.4% — the tightest memory fit this
-  instrument has taken — and the figure it produces, 9.5 MiB per one-node
-  cluster, is 26% higher than the uncollected one. Against 50.8 stored objects
-  per cluster that is 192 KiB of retained heap per object.
-
-  **The five-node run, retaken the same way, agrees.** Its slope drops from 35.3
-  to 15.5 MB per cluster and fits to 0.4%, and its 81.7 stored objects per
-  cluster work out at 190 KB of retained heap each — within 3.4% of the one-node
-  run's 196 KB. Two runs at different node counts now say the shard's memory is
-  its object count times something close to 190 KB, for objects that serialize
-  to a few kilobytes. Arithmetically the two slopes split into 1.32 MiB per
-  Machine plus 8.20 MiB per cluster, which is still a two-point split and still
-  not a measurement; [the ten-node run retaken with collection][ev50x5c] is the
-  third point.
-
-  Forcing a collection costs the shard CPU, and it lands on whichever checkpoint
-  forced it: the five-node run's CPU per cluster went from 20.2 seconds
-  uncollected to 22.2 collected. Runs from here on scrape either side of each
-  collection and record `kcpForcedCollectionCPUSeconds`, so that inflation is a
-  number to subtract rather than a bias to guess at.
-
-  The managers are not collected before sampling, because they do not serve
-  pprof, so their heap figures still carry the artefact. The shard is what runs
-  out, so the shard is what got the fix.
-
-  What can still be said about memory: a cluster costs the shard tens of MiB,
-  and Machines are part of that rather than the bulk — a bare one-node cluster
-  is 17.5 MiB resident against 37.7 MiB for a ten-node one, so nine Machines
-  roughly double a cluster rather than multiplying it. Against the objects the
-  shard holds — 45 to 114 per cluster, six to ten per Machine — that is of the
-  order of 10^5 bytes of live heap per stored object, for objects that serialize
-  to a few kilobytes, which is what makes the shard rather than the controllers
-  the thing that binds.
-
-  Three per-Machine figures have now been withdrawn: 4 to 8 MiB (fitted against
-  heapSys), 1.6 MiB (a two-point delta), and 1.30 MiB (a ten-node cluster's
-  whole cost attributed to its Machines).
+  Getting there took four runs that could not answer it and one instrument fix.
+  Three per-Machine figures were withdrawn on the way — 4 to 8 MiB (fitted
+  against heapSys, so tracking the collector), 1.6 MiB (a two-point delta on an
+  uncollected heap) and 1.30 MiB (a ten-node cluster's whole cost charged to its
+  Machines). The measured answer sits between the last two, which is the lesson
+  about all three: a plausible number derived from a series that cannot support
+  it is not made right by landing near the truth.
 
   The idle shard is around 5,760 goroutines and 730 to 800 MiB resident, and it
   is **not** a point on the loaded runs' lines: they put the fixed cost several
@@ -487,6 +463,7 @@ Not measured, and so not stated:
 [ev50x5b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x5-with-baseline.json
 [ev50x1c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-collected.json
 [ev50x5c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x5-collected.json
+[ev50x10c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x10-collected.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md

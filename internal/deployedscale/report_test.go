@@ -510,3 +510,86 @@ func TestPointsThatDoNotLieOnALineAreNotAMeasurement(t *testing.T) {
 		t.Errorf("the report does not say why the resident figure is missing:\n%s", md)
 	}
 }
+
+// TestTheShardsPerMachineCostIsMeasuredFromTheCommittedRuns is the arithmetic
+// behind the one figure this whole feature was trying to reach, run against the
+// evidence rather than written down beside it.
+//
+// Three runs of fifty clusters at one, five and ten nodes each, all sampled
+// after a forced collection, price a cluster at 9.98, 15.51 and 23.22 MB of
+// retained heap. Those three slopes against their node counts give the split.
+//
+// It exists as a test because the number is quoted in two documents and was
+// derived by hand three times before it was right. If a run is added, replaced
+// or corrected, this fails rather than the documents quietly becoming wrong.
+func TestTheShardsPerMachineCostIsMeasuredFromTheCommittedRuns(t *testing.T) {
+	dir := filepath.Join("..", "..", "specs", "20260831-210000-deployed-fleet-scale", "evidence")
+	var reports []*Report
+	for _, name := range []string{
+		"deployed-all-50x1-collected.json",
+		"deployed-all-50x5-collected.json",
+		"deployed-all-50x10-collected.json",
+	} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		var r Report
+		if err := json.Unmarshal(raw, &r); err != nil {
+			t.Fatalf("decoding %s: %v", name, err)
+		}
+		// Every run in this fit must have been collected before sampling.
+		// Mixing one that was not is what made the first three runs disagree
+		// by a factor of four.
+		if got := r.Facts["kcpHeapSample"]; !strings.Contains(got, "after a forced collection") {
+			t.Fatalf("%s was not sampled after a forced collection (%q), so its heap slope is not "+
+				"comparable with the others", name, got)
+		}
+		reports = append(reports, &r)
+	}
+
+	split := SplitByNodes(reports, KcpName, HeapAlloc)
+	if !split.OK {
+		t.Fatalf("no split: %s", split.Why)
+	}
+	// 1.474 MB per Machine, 8.377 MB per cluster, worst residual 1.8%.
+	if split.Slope < 1.40e6 || split.Slope > 1.55e6 {
+		t.Errorf("heap per Machine = %s, want about 1.41 MiB", humanBytes(uint64(split.Slope)))
+	}
+	if split.Base < 8.0e6 || split.Base > 8.8e6 {
+		t.Errorf("heap per cluster = %s, want about 7.99 MiB", humanBytes(uint64(split.Base)))
+	}
+
+	// And the property that makes the figure worth having: a Machine costs the
+	// shard no goroutines, which is a different claim from a small slope.
+	goroutines := SplitByNodes(reports, KcpName, Goroutines)
+	if goroutines.OK && (goroutines.Slope > 0.5 || goroutines.Slope < -0.5) {
+		t.Errorf("goroutines per Machine = %.2f, want indistinguishable from zero", goroutines.Slope)
+	}
+}
+
+// TestASplitNeedsThreeNodeCountsToo. The rule that governs every other fit here
+// governs this one: two points make a line whatever the data says. The two-point
+// split of the first two collected runs read 1.38 MB per Machine and the
+// three-point fit reads 1.47, so the third point moved it by 7% — which is the
+// size of the error a two-point answer would have carried unannounced.
+func TestASplitNeedsThreeNodeCountsToo(t *testing.T) {
+	one := &Report{}
+	one.Add(nodesSample("a", 10, 1, 100))
+	one.Add(nodesSample("b", 20, 1, 200))
+	one.Add(nodesSample("c", 30, 1, 300))
+	five := &Report{}
+	five.Add(nodesSample("a", 10, 5, 500))
+	five.Add(nodesSample("b", 20, 5, 1000))
+	five.Add(nodesSample("c", 30, 5, 1500))
+
+	if split := SplitByNodes([]*Report{one, five}, ComponentCore, Goroutines); split.OK {
+		t.Errorf("two node counts produced a split: %v", split.Slope)
+	}
+}
+
+func nodesSample(label string, clusters, nodesPer, goroutines int) Sample {
+	s := sample(label, clusters, ComponentCore, "node-1", goroutines, 10_000_000, 30_000_000, 0)
+	s.Nodes = clusters * nodesPer
+	return s
+}

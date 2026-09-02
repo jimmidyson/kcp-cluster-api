@@ -255,6 +255,76 @@ func (r *Report) fit(component string, measure func(ComponentSample) float64, x 
 		return Fit{Why: notMeasured}
 	}
 
+	return fitPoints(xs, ys)
+}
+
+// SplitByNodes separates what a cluster costs from what a Machine in it costs,
+// across runs that differ in nodes per cluster.
+//
+// # Why this cannot be done inside one run
+//
+// A run gives every cluster the same number of nodes, so its cluster count and
+// its Machine count rise together and no fit through its samples can tell the
+// two apart. What separates them is the same fleet measured at more than one
+// node count: each run's cost per cluster is one point, its nodes per cluster
+// is the x, and the slope through those points is the cost of a Machine.
+//
+// Three node counts, not two, for the reason every other fit here needs three:
+// the two-point split of the first two collected runs read 1.38 MB per Machine
+// and the three-point fit reads 1.47.
+//
+// Every run in the set must have been sampled the same way. Live heap read
+// without forcing a collection first carries the collector's timing, and three
+// runs that did that disagreed by a factor of four — see
+// [CollectGarbage]. This function cannot check that, because it is a property
+// of how the samples were taken rather than of the samples; the caller checks
+// the kcpHeapSample fact.
+func SplitByNodes(reports []*Report, component string, measure func(ComponentSample) float64) Fit {
+	var xs, ys []float64
+	for _, r := range reports {
+		nodes, ok := r.NodesPerCluster()
+		if !ok {
+			continue
+		}
+		perCluster := r.FitPerCluster(component, measure)
+		if !perCluster.OK {
+			return Fit{Why: "not measured (one of the runs could not price a cluster: " + perCluster.Why + ")"}
+		}
+		xs = append(xs, float64(nodes))
+		ys = append(ys, perCluster.Slope)
+	}
+	if distinct(xs) < 3 {
+		return Fit{Why: notMeasuredNodeCounts}
+	}
+	return fitPoints(xs, ys)
+}
+
+// NodesPerCluster is how many nodes each cluster in this run was given, and
+// whether every loaded sample agrees. A run whose samples disagree is not one
+// point on a line against node count.
+func (r *Report) NodesPerCluster() (int, bool) {
+	nodes := 0
+	for _, s := range r.Samples {
+		if s.Clusters == 0 || s.Nodes == 0 {
+			continue
+		}
+		per := s.Nodes / s.Clusters
+		if per*s.Clusters != s.Nodes {
+			return 0, false
+		}
+		if nodes == 0 {
+			nodes = per
+		} else if nodes != per {
+			return 0, false
+		}
+	}
+	return nodes, nodes > 0
+}
+
+// fitPoints is the least squares, the sign check and the residual gate that
+// every figure in a report goes through. It takes points rather than samples so
+// that a fit across runs is held to the same standard as a fit within one.
+func fitPoints(xs, ys []float64) Fit {
 	var sumX, sumY, sumXY, sumXX float64
 	n := float64(len(xs))
 	for i := range xs {
@@ -549,6 +619,12 @@ const notMeasuredNegative = "not measured (the fit came back negative, which is 
 // See [Report.fit] for where the threshold comes from.
 const notALine = "not measured (the samples do not lie on a line: the furthest is %.0f%% of their own " +
 	"range away from it, against the %.0f%% this harness will call a measurement)"
+
+// notMeasuredNodeCounts is what a split says when the runs it was given do not
+// span enough node counts to separate a cluster's cost from a Machine's.
+const notMeasuredNodeCounts = "not measured (separating a cluster's cost from a Machine's needs runs " +
+	"at three distinct nodes-per-cluster counts; two of them make a line through both whatever the " +
+	"data says, and the two-point split of the first two collected runs was 7% from the three-point one)"
 
 // maxRelativeResidual is how far the furthest sample may lie from the fitted
 // line, as a fraction of the range the samples span, before the fit stops being

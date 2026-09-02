@@ -18,6 +18,7 @@ Every run with an evidence file, and what it measured:
 | `deployed-all-50x5-with-baseline.json` | 50 | 1, at five nodes each — and a third |
 | `deployed-all-50x1-collected.json` | 50 | 1, at one node each, **sampled after a forced collection** |
 | `deployed-all-50x5-collected.json` | 50 | 1, at five nodes each, sampled the same way |
+| `deployed-all-50x10-collected.json` | 50 | 1, at ten nodes each, sampled the same way |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -275,35 +276,86 @@ the dev provider's were refused while the other two passed — and their residen
 figures are what the cost model uses. This is an asymmetry, not an oversight:
 the shard is what runs out, so the shard is what got the fix.
 
-### Two collected runs agree on what an object costs
+### What a Machine costs the shard, measured
 
-The five-node run retaken the same way:
+Three runs of fifty clusters at one, five and ten nodes each, every sample taken
+after a forced collection:
 
-| per cluster | 1 node, collected | 5 nodes, collected |
-|---|--:|--:|
-| goroutines | 52.18 (0.2%) | 52.08 (0.0%) |
-| live heap | 9.52 MiB (0.4%) | 14.79 MiB (0.4%) |
-| stored objects | 50.8 | 81.7 |
-| **live heap per stored object** | **196.5 KB** | **189.8 KB** |
+| per cluster | 1 node | 5 nodes | 10 nodes |
+|---|--:|--:|--:|
+| goroutines | 52.18 (0.2%) | 52.08 (0.0%) | 51.97 (0.2%) |
+| live heap | 9.98 MB (0.4%) | 15.51 MB (0.4%) | 23.22 MB (1.7%) |
+| stored objects | 50.8 | 81.7 | 108.2 |
+| heap per stored object | 197 KB | 190 KB | 215 KB |
 
-**Two runs at different node counts agree on 190 KB of retained heap per stored
-object, to within 3.4%.** Uncollected, the same arithmetic on three runs gave
-174, 420 and 117 KB. That agreement is the strongest single statement this file
-has about the shard: its memory is its object count times something close to
-190 KB, for objects that serialize to a few kilobytes.
+Those three per-cluster figures against their node counts:
 
-The five-node run's own slope moved from 35.3 MB per cluster to 15.5 MB — a 56%
-drop — which is the pre-collection figure for what it was. Both collected runs
-fit their own samples to 0.4%.
+> **1.41 MiB of retained heap per Machine, on top of 7.99 MiB per cluster.**
+> Worst residual 1.8% of the range the three span.
 
-**A per-Machine figure is now one run away.** The two collected slopes, 9.98 and
-15.51 MB per cluster at one and five nodes, arithmetically split into 1.32 MiB
-per Machine plus 8.20 MiB per cluster — still a two-point split and still not
-quoted as a measurement. The ten-node run, retaken with collection, is the third
-point. It is worth noting that this two-point split agrees with a completely
-different route to the same number: the two runs differ by 7.73 stored objects
-per extra Machine, and 1.38 MB over 7.73 objects is 179 KB each, against the
-190 KB the whole-fleet ratio gives.
+That is the figure this feature spent four days failing to measure, and it is
+computed from the committed evidence rather than written down beside it — see
+`TestTheShardsPerMachineCostIsMeasuredFromTheCommittedRuns`, which fails if a
+run is added, replaced or corrected and these documents are not.
+
+**The third point was worth having.** The two-point split of the first two
+collected runs read 1.38 MB per Machine; the three-point fit reads 1.47. A
+two-point answer would have been 7% out and would have carried no way to know
+it — which is the rule this repository applies everywhere else, applied here.
+
+**And the estimate that started this was close.** 1.6 MiB per Machine, withdrawn
+as a two-point delta on an uncollected heap, is 14% above the measured 1.41. It
+was still not a measurement: the same method on the same data at a different
+moment of a collection cycle gave 6.7 MiB, and nothing about it said which of
+the two to believe.
+
+#### What it is made of
+
+A Machine adds six to eight stored objects — itself, its DevMachine, its
+KubeadmConfig, the Secret that config renders, and the Events they generate —
+so 1.47 MB per Machine is around 200 KB apiece. The three runs' whole-fleet
+ratios agree: 197, 190 and 215 KB per stored object, within 7% of each other
+across a tenfold change in Machines per cluster. (The ten-node figure is the
+high one because its storage snapshot caught the fleet still converging: 422 of
+500 DevMachines, which undercounts the denominator.)
+
+The profile below says where those 200 KB go, and it is not the object: it is
+the `map[string]interface{}` a CRD-backed object is decoded into, deep-copied
+per read and re-encoded per write.
+
+#### What it predicts for the target
+
+Carried to 200 clusters of fifty nodes — the 10,000 Machines this specification
+opened with — the model asks for
+
+> 200 x (7.99 + 50 x 1.41) MiB = **about 16 GB of retained heap**
+
+which is why a shard with a 4 GiB limit was OOM killed before its first
+checkpoint at roughly a quarter of that fleet.
+
+It is a prediction and not a measurement: it extrapolates fourfold in clusters
+and fivefold in nodes from where the model was fitted. Two things would test it
+— a run at 200 clusters of one node, which the goroutine model already predicts
+to 0.07%, and a run at fifty nodes with a shard given room to finish. The second
+is the one worth doing, and `KCP_MEMORY` is how.
+
+What it does **not** say is what limit to set. Retained heap is not resident
+memory, and the multiplier between them is the one quantity these runs cannot
+give: their resident figures are taken immediately after collections this
+harness forced.
+
+#### What still does not fit
+
+**Resident memory does not split.** 18.8, 38.3 and 48.1 MB per cluster miss
+their line by 14.7%, and each run's own resident series is refused too — 6.2%,
+5.8% and 10.1%. Resident carries the collector's headroom, and in these runs it
+carries collections this harness itself forced. A container limit is still set
+against resident, so the numbers are reported; they are not a cost per Machine.
+
+**CPU does not split either**, though it is close: 10.05, 22.18 and 28.39
+CPU-seconds per cluster miss by 14.4%, because the cost of a Machine falls as
+clusters get bigger — 3.0 CPU-seconds each between one node and five, 1.2
+between five and ten. A straight line reads 2.0 per Machine and is refused.
 
 ### The collections cost CPU, and the run now says how much
 
@@ -320,27 +372,23 @@ subtract rather than a bias they cannot see. Until a run carries that fact, the
 honest range for a Machine's CPU is **1.5 to 3.0 CPU-seconds**, the wider end
 being what the collected runs' uncorrected slopes give.
 
-### What one Machine costs, as far as it is known
+### What one Machine costs the shard
 
-- **0 goroutines.** Measured, at three node counts, agreeing to 1%.
-- **1.5 to 3.0 CPU-seconds** to provision, falling as clusters get larger. The
-  narrow end is from the three uncollected runs; the wide end is what the
-  collected runs give before subtracting the collections this harness forced,
-  which runs from here on record.
-- **Memory: one run short.** Two node counts retaken with collection give
-  9.52 and 14.79 MiB per cluster, both fitted to 0.4%, and agree on 190 KB of
-  retained heap per stored object to within 3.4%. Splitting them into a
-  per-cluster and a per-Machine term is still a two-point fit; the ten-node run
-  retaken the same way is the third point. What can be said is that a cluster costs the shard tens of MiB and
-  that Machines are a part of it rather than the bulk: the one-node run prices a
-  bare cluster at 17.5 MiB resident against 37.7 MiB for a ten-node one, so nine
-  Machines roughly double a cluster and do not multiply it.
+- **1.41 MiB of retained heap.** Measured, three node counts, 1.8% residual.
+- **0 goroutines.** Measured: 52.18, 52.08 and 51.97 per cluster across a
+  tenfold change in Machines per cluster, so the split reads -0.02 per Machine.
+- **Roughly 1.2 to 3.0 CPU-seconds** to provision, falling as clusters get
+  larger. Not a single figure: the three points are 14.4% off a line, and the
+  collected runs' CPU carries the collections this harness forced.
+- **Around 200 KB of heap per stored object it brings with it**, which is the
+  same statement as the first one from a different direction.
 
-Three earlier per-Machine figures have now been withdrawn: 4 to 8 MiB (fitted
-against heapSys, so tracking the collector), 1.6 MiB (a two-point delta on live
-heap), and 1.30 MiB (the whole of a ten-node cluster attributed to its
-Machines). Each was a plausible number derived from a series that could not
-support it.
+Three earlier per-Machine figures were withdrawn on the way here — 4 to 8 MiB
+(fitted against heapSys, so tracking the collector), 1.6 MiB (a two-point delta
+on an uncollected heap) and 1.30 MiB (a ten-node cluster's whole cost charged to
+its Machines). The measured answer sits between the last two, which is worth
+remembering about all three: a plausible number derived from a series that
+cannot support it is not made right by landing near the truth.
 
 ### The idle sample is not a point on the loaded line, and the fits leave it out
 
@@ -394,21 +442,16 @@ Live heap at any instant depends on where the collector is in its cycle, and
 with nothing running there is nothing to smooth it. The fitted fixed cost is
 the more stable statement about a loaded shard than the idle heap sample is.
 
-### Of the order of 100 KiB of heap per stored object
+### The uncollected runs said the same thing an order of magnitude apart
 
-The shard held 2,276 objects at fifty one-node clusters, 4,204 at five nodes and
-5,677 at ten — 45.5, 84.1 and 113.5 per cluster, so between six and ten stored
-objects per Machine once the Events are counted.
+Before collections were forced, the three runs held 2,276, 4,204 and 5,677
+objects — 45.5, 84.1 and 113.5 per cluster — and dividing those into their heap
+slopes gave 170, 410 and 117 KiB per stored object. Collected, the same
+arithmetic gives 197, 190 and 215 KB, within 7% of each other.
 
-Divided into each run's heap slope, that is 170, 410 and 117 KiB per stored
-object. The spread is the same collector artefact as everything else in this
-section, so the honest statement is an order of magnitude and not a figure:
-**something like 10^5 bytes of live heap per stored object**, for objects that
-serialize to a few kilobytes. The withdrawn 400 KiB figure was inside that band
-by accident, having counted only four objects per Machine and no Events at all.
-
-That ratio, not the fleet size, is what makes the shard the thing that binds.
-The profile says where it goes.
+That is the clearest illustration in this file of what the collection fix is
+worth: the ratio was always there, and the instrument was hiding it behind a
+factor of three and a half.
 
 ### The profile says what it is
 
@@ -547,11 +590,9 @@ is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
   only at fifty clusters. The 200x50 target is 10,000 Machines; the largest
   fleet any run here has held is 500 Machines, and it did so against its
   ceiling.
-- **Not a per-Machine memory figure.** Three node counts produced three heap
-  slopes that disagree by a factor of four in the wrong direction, because live
-  heap read from `/metrics` carries the collector's timing. The instrument now
-  forces a collection before it samples and one run has been retaken that way;
-  the other two node counts have not.
+- **Not a per-Machine figure for resident memory or CPU.** Retained heap
+  splits; those two do not — 14.7% and 14.4% off a line. Resident carries the
+  collector's headroom and CPU falls per Machine as clusters get larger.
 - **Not a per-cluster figure for kcp, strictly.** Every run that has sampled the
   shard put one cluster in each workspace, so its 52 goroutines and 13.0 MiB
   could as truthfully be called per workspace. The managers have been measured
