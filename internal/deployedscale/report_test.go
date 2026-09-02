@@ -382,3 +382,40 @@ func TestAClimbingHeapIsNotFlagged(t *testing.T) {
 func heaped(label string, workspaces, goroutines int, heap, resident uint64) Sample {
 	return sample(label, workspaces, ComponentDevInfrastructure, "node-1", goroutines, heap, resident, 0)
 }
+
+// TestABaselineAnchorsTheIntercept covers the sample this harness spent its
+// whole life without.
+//
+// Every slope it reports is a difference between two large numbers. kcp's
+// smallest sample was 130 Machines at 1.44 GiB, which says nothing about how
+// much of that is the shard merely existing — so a per-Machine figure derived
+// from it was a per-Machine figure plus a share of an unmeasured intercept.
+// With a sample at zero the intercept is measured, and the slope is the slope.
+func TestABaselineAnchorsTheIntercept(t *testing.T) {
+	r := &Report{Title: "t"}
+	// A large fixed cost and a small marginal one — the shape the shard is
+	// suspected of having, and the shape a run starting at 13 workspaces
+	// cannot tell from a large marginal cost.
+	r.Add(sample("baseline", 0, ComponentCore, "node-1", 1000, 1_200_000_000, 1_300_000_000, 0))
+	r.Add(sample("10", 10, ComponentCore, "node-1", 1100, 1_216_000_000, 1_320_000_000, 0))
+	r.Add(sample("20", 20, ComponentCore, "node-1", 1200, 1_232_000_000, 1_340_000_000, 0))
+
+	slope, ok := r.PerWorkspace(ComponentCore, Goroutines)
+	if !ok {
+		t.Fatal("a baseline plus two checkpoints is three distinct counts and should fit")
+	}
+	if slope < 9.5 || slope > 10.5 {
+		t.Errorf("goroutines per workspace = %.1f, want 10", slope)
+	}
+
+	// The point of the baseline: the marginal cost is 1.6 MB per workspace,
+	// against a fixed cost of 1.2 GB. Without a sample at zero the two are not
+	// separable, and the fixed cost is silently charged to the fleet.
+	mem, ok := r.PerWorkspace(ComponentCore, HeapAlloc)
+	if !ok {
+		t.Fatal("no heap slope")
+	}
+	if mem < 1_500_000 || mem > 1_700_000 {
+		t.Errorf("heap per workspace = %.0f, want about 1.6e6 — the fixed cost is leaking into it", mem)
+	}
+}

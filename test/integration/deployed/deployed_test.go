@@ -398,6 +398,34 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		t.Fatalf("building the scraper: %v", err)
 	}
 
+	// --- A sample before any workspace exists.
+	//
+	// Every slope this harness reports is a difference between two large
+	// numbers, and without this the smaller of them is still a fleet. kcp's
+	// first sample was at 130 Machines and 1.44 GiB, which says nothing about
+	// how much of that 1.44 GiB is the shard merely existing — so a per-Machine
+	// figure derived from it was quietly a per-Machine figure plus a share of
+	// an intercept nobody had measured.
+	//
+	// The in-process sweeps have taken a baseline from the beginning, labelled
+	// "baseline (manager not started)". This is the deployed equivalent: the
+	// managers are up and have engaged nothing.
+	if components, err := scraper.SampleComponents(ctx, cl, options.Namespace, options.Components); err == nil {
+		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
+			components = append(components, kcpSample)
+		}
+		report.Add(deployedscale.Sample{
+			Label:      "baseline (no workspaces)",
+			Workspaces: 0,
+			Clusters:   0,
+			Nodes:      0,
+			Components: components,
+		})
+	} else {
+		t.Logf("NOTE: no baseline sample (%v), so every slope in this run rests on an unmeasured "+
+			"intercept", err)
+	}
+
 	// --- Walk to the target, sampling at each checkpoint.
 	kcpScrapeReported := false
 	deadline := time.Now().Add(*budget)

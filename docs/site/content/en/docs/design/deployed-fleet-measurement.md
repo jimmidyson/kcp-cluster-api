@@ -348,9 +348,13 @@ Not measured, and so not stated:
   like. It is not the embedded etcd: resident memory tracks the Go runtime's
   heapSys to within a few percent, and a mapped database would show above it.
   It is not per workspace: 200 workspaces of one node fit in the same limit
-  that 25 workspaces of ten nodes exceeded. It is roughly 1.6 MiB of *live* Go
-  heap per Machine on a 1.2 GiB baseline, against objects that serialize to
-  kilobytes — and it arrives with kcp running 3.5 to 5 cores continuously while
+  that 25 workspaces of ten nodes exceeded. The marginal cost of a Machine is
+  **not measured**: two figures for it have been withdrawn, one fitted against
+  heapSys and so tracking the collector, one a two-point delta this
+  repository's own reports would refuse. The shard's fixed cost had never been
+  sampled, so both were differences between two large numbers charged to the
+  fleet; a baseline sample is now taken before any workspace exists. What is
+  measured is that the memory is heap and that it arrives with kcp running 3.5 to 5 cores continuously while
   goroutine count stays flat near 6,000.
 
   The OOM behind all of this was not the shard filling up. Live heap at 250

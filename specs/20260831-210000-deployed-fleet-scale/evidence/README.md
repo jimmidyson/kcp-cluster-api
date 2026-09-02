@@ -145,16 +145,32 @@ Whatever kcp is holding, it is holding it on the Go heap.
 each, completed inside the same 4 GiB limit. Twenty-five workspaces of ten
 nodes did not. Workspace count is close to free; machine count is not.
 
-**It is about 1.6 MiB of live heap per Machine**, on a baseline of roughly
-1.2 GiB — from 1.44 GiB live at 130 Machines to 1.63 GiB at 250.
+**The per-Machine cost is not yet measured, and two figures for it have been
+withdrawn.**
 
-An earlier version of this file said 4 to 8 MiB, fitted against heapSys. That
-is what the runtime has taken from the OS, and it bundles the collector's
-headroom with the live set; the headroom grew from 1.44x to 1.85x of live
-during these runs as allocation churned. The larger figure was measuring the
-collector, not the objects.
+The first, 4 to 8 MiB, was fitted against heapSys — what the runtime has taken
+from the OS, which bundles the collector's headroom with the live set. That
+headroom grew from 1.44x to 1.85x of live during these runs, so the figure was
+tracking the collector rather than the objects.
 
-1.6 MiB is still not a plausible cost for storing one Machine. The shard holds roughly four API objects per Machine — the
+The second, 1.6 MiB, was a two-point delta on live heap: 1.44 GiB at 130
+Machines, 1.63 GiB at 250. Two points is what this repository's own reports
+refuse as a slope, for the reason that applies here — heap at a sample is heap
+at an arbitrary moment of a GC cycle, and other runs have shown it *fall*
+between checkpoints. It also fails a sanity check: 120 extra Machines is about
+480 extra API objects, so 0.19 GiB works out at roughly 400 KiB per object,
+which is an order of magnitude beyond what an unstructured map costs.
+
+The likeliest reason both were wrong is that **the shard's fixed cost had never
+been measured**. The smallest sample was 130 Machines at 1.44 GiB. If kcp idles
+near that, almost everything observed is the shard existing rather than the
+fleet in it, and any slope drawn from those points is a difference between two
+large numbers charged entirely to the fleet.
+
+So a baseline sample is now taken before any workspace is created, which is
+what the in-process sweeps have always done. Until a run with one has been
+taken, the honest statement is that the shard costs a lot to stand up and the
+marginal cost of a Machine is unknown. The shard holds roughly four API objects per Machine — the
 Machine, its infrastructure object, its bootstrap config and the Secret that
 config renders — so this is on the order of a megabyte of heap per stored
 object, against objects that serialize to a few kilobytes.
