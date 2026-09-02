@@ -345,6 +345,11 @@ Three rules, each of which a real run earned:
   whose furthest point is more than 5% of the range away is reported as not
   measured, with that number in the reason.
 
+  The next run swapped them: at one node per cluster the shard's resident series
+  fits at 4.4% and its heap series misses at 14.1%. Neither quantity is
+  dependably the trustworthy one, which is why this is checked per series per
+  run rather than settled once and written down.
+
 The threshold is a judgement. The reasoning behind it is that the per-cluster
 goroutine figure reproduces across fleet distributions to about 1.6%, while the
 memory figures that disagreed between distributions by 29-78% came from series
@@ -382,24 +387,43 @@ Not measured, and so not stated:
   `structToUnstructured` between them — which is what every Cluster API type
   is, reaching the shard as a CRD through an APIBinding.
 
-  **The marginal cost is 13.0 MiB of live heap per cluster of ten nodes**, and
-  51.8 goroutines, measured in [the first run to sample the shard idle][ev50x10].
-  Per Machine that is 1.30 MiB, on the assumption — which this run cannot test,
-  having varied clusters and Machines together — that none of it is per cluster.
-  Against the 5,677 objects the shard held, it is roughly 120 KiB of live heap
-  per stored object, for objects that serialize to a few kilobytes.
+  **The marginal cost is 13.0 MiB of live heap and 51.8 goroutines per cluster
+  of ten nodes**, measured in [the first run to sample the shard idle][ev50x10],
+  and **7.6 MiB and 52.0 goroutines per cluster of one node** in [the same run
+  at a second node count][ev50x1b]. Between them:
 
-  The idle shard is 478.8 MiB and 5,757 goroutines, and it is **not** a point on
-  that line: the loaded samples put the fixed cost 701 MiB higher. Binding the
-  first workspaces costs most of a gigabyte; each cluster after that costs 13
-  MiB. The run does not resolve that step into what the shard built and what it
-  was holding in flight while building it, at 4.4 cores busy.
+  - **A Machine costs the shard no goroutines.** Nine more per cluster moved the
+    figure by 0.2 out of 52, in the direction of fewer. Those goroutines are per
+    logical cluster, not per object in it.
+  - **A Machine costs about 1.9 CPU-seconds** to provision, against 8.7 for the
+    cluster itself. Both slopes fit to under 1%.
+  - **A Machine costs memory, but not most of a cluster's.** Nine extra Machines
+    take a cluster from 7.6 to 13.0 MiB of live heap — 72% more, not 900% more.
+
+  A per-Machine memory figure is **not** stated, because two node counts split
+  `per cluster = a + b x nodes` only through a two-point fit, and a two-point fit
+  is what this instrument refuses everywhere else. The arithmetic gives 0.60 MiB
+  per Machine on live heap and 2.24 MiB on resident; a third node count is what
+  would make either a measurement. Neither is a per-*cluster* figure in the
+  strict sense either: every run that has sampled kcp put one cluster in each
+  workspace.
+
+  Against the objects the shard actually held, three separate arithmetics land
+  between 80 and 170 KiB of live heap per stored object, for objects that
+  serialize to a few kilobytes — which is what the unstructured profile predicts
+  and what makes the shard, not the controllers, the thing that binds.
+
+  The idle shard is 5,757 goroutines and 733.5 MiB resident, and it is **not** a
+  point on those lines: the loaded samples put the fixed cost 701 MiB higher.
+  Binding the first workspaces costs most of a gigabyte; each cluster after that
+  costs 13 MiB. The run does not resolve that step into what the shard built and
+  what it was holding in flight while building it, at 4.4 cores busy.
 
   Two earlier per-Machine figures were withdrawn — one fitted against heapSys
-  and so tracking the collector, one a two-point delta this repository's own
-  reports would refuse — and both failed the same way: the shard's fixed cost
-  had never been sampled, so each was a difference between two large numbers
-  charged entirely to the fleet.
+  and so tracking the collector, one a two-point delta this instrument would
+  refuse — and both failed the same way: the shard's fixed cost had never been
+  sampled, so each was a difference between two large numbers charged entirely
+  to the fleet.
 
   The OOM behind all of this was not the shard filling up. Live heap at 250
   Machines was 1.63 GiB against a 4 GiB limit, and the collector had taken
@@ -421,6 +445,7 @@ Not measured, and so not stated:
 [evdir]: https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260831-210000-deployed-fleet-scale/evidence
 [ev50]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1.json
 [ev50x10]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x10.json
+[ev50x1b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-with-baseline.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md
