@@ -18,12 +18,14 @@ package deployedscale
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/managermetrics"
@@ -488,5 +490,51 @@ func TestFingerprintDoesNotLeakTheToken(t *testing.T) {
 	}
 	if strings.Contains(creds.Fingerprint(), creds.Token) {
 		t.Error("the fingerprint contains the bearer token")
+	}
+}
+
+// TestProfilingRBACGrantsOnlyProfiling is the regression test for a refusal
+// that read as a bug in the harness and was a missing grant:
+//
+//	forbidden: User "kcp-admin" cannot get path "/debug/pprof/heap"
+//
+// from an identity that was reading /metrics on the same shard without
+// trouble. Shard-wide paths are non-resource URLs and cluster-admin in every
+// workspace does not imply them.
+func TestProfilingRBACGrantsOnlyProfiling(t *testing.T) {
+	objects := ProfilingRBAC()
+	if len(objects) != 2 {
+		t.Fatalf("got %d objects, want a ClusterRole and a ClusterRoleBinding", len(objects))
+	}
+
+	role, ok := objects[0].(*rbacv1.ClusterRole)
+	if !ok {
+		t.Fatalf("the first object is %T, not a ClusterRole", objects[0])
+	}
+	if len(role.Rules) != 1 {
+		t.Fatalf("the role has %d rules; it should grant profiling and nothing else", len(role.Rules))
+	}
+	rule := role.Rules[0]
+	if len(rule.Resources) > 0 || len(rule.APIGroups) > 0 {
+		t.Errorf("the role grants resource access as well as URLs: %+v", rule)
+	}
+	if !slices.Equal(rule.Verbs, []string{"get"}) {
+		t.Errorf("verbs = %v, want only get", rule.Verbs)
+	}
+	for _, want := range []string{"/debug/pprof", "/debug/pprof/*"} {
+		if !slices.Contains(rule.NonResourceURLs, want) {
+			t.Errorf("the role does not cover %s: %v", want, rule.NonResourceURLs)
+		}
+	}
+
+	binding, ok := objects[1].(*rbacv1.ClusterRoleBinding)
+	if !ok {
+		t.Fatalf("the second object is %T, not a ClusterRoleBinding", objects[1])
+	}
+	if binding.RoleRef.Name != role.Name {
+		t.Errorf("the binding refers to %q, not to the role it accompanies", binding.RoleRef.Name)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != AdminGroup {
+		t.Errorf("the binding's subjects are %+v, want just %s", binding.Subjects, AdminGroup)
 	}
 }

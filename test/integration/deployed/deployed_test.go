@@ -318,6 +318,25 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		t.Fatalf("building a kcp client: %v", err)
 	}
 
+	// Let the run read the shard's own profiles. cluster-admin in every
+	// workspace does not carry this: shard-wide paths are non-resource URLs,
+	// authorised by rules bound in :root, which is why kcp ships a ClusterRole
+	// holding exactly one of them for /metrics. Without the equivalent for
+	// profiling the first attempt came back
+	//
+	//	forbidden: User "kcp-admin" cannot get path "/debug/pprof/heap"
+	//
+	// from the same identity that was reading /metrics successfully.
+	//
+	// Not fatal. It buys a diagnostic, not a measurement.
+	for _, obj := range deployedscale.ProfilingRBAC() {
+		if err := rootClient.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Logf("NOTE: could not grant this run access to kcp's profiles (%v), so a heap profile "+
+				"will not be captured", err)
+			break
+		}
+	}
+
 	// --- Publish the exports an installation publishes, not a synthesised
 	// one. These managers discover through the real APIExportEndpointSlices,
 	// so the run has to create the real exports.
