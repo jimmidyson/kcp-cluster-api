@@ -406,6 +406,7 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 						Image:           o.KcpImage,
 						ImagePullPolicy: o.imagePullPolicy(),
 						Args:            KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort),
+						Env:             memoryLimitEnvFor(o.kcpResources()),
 						Ports:           []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "credentials", MountPath: CredentialsMountPath, ReadOnly: true},
@@ -481,6 +482,10 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 			},
 		})
 	}
+
+	// The same ceiling the shard gets, and for the same reason: a limit the
+	// collector does not know about is a limit it will walk past.
+	env = append(env, memoryLimitEnvFor(o.managerResources())...)
 
 	replicas := int32(1)
 	podLabels := labels(c.Name)
@@ -656,4 +661,48 @@ func (o Options) Objects(creds *Credentials) ([]client.Object, error) {
 // MetricsURL is where the harness scrapes one manager's process metrics.
 func MetricsURL(podIP string) string {
 	return fmt.Sprintf("http://%s:%d/metrics", podIP, MetricsPort)
+}
+
+// MemoryLimitEnv gives a Go process a heap ceiling matched to its container's.
+//
+// # Why a container memory limit is not enough on its own
+//
+// Go's collector runs when the heap reaches a multiple of the live set — twice
+// it, by default — and knows nothing about the cgroup it is in. A process whose
+// live data is comfortably inside its limit will still grow past that limit and
+// be killed, because nothing told the runtime the limit exists.
+//
+// kcp did exactly that. At 250 Machines its live heap was 1.63 GiB against a
+// 4 GiB limit, while the runtime had taken 3.02 GiB from the OS and was still
+// climbing — the ratio rose from 1.44x to 1.85x as allocation churned during
+// provisioning. It was then OOM killed with well under half the limit in use,
+// and the run recorded that as the fleet size the shard could not hold. It was
+// not: it was the fleet size at which an untuned collector overran a limit
+// nobody had told it about.
+//
+// GOMEMLIMIT is a soft limit: the collector works harder as the heap approaches
+// it rather than failing, which turns an OOM kill into CPU. That is the right
+// trade for a measurement — a slower shard is a data point, a dead one is not.
+//
+// Set below the container's limit, not equal to it. The limit covers the whole
+// process, and stacks, the binary and anything mapped live outside the heap.
+func MemoryLimitEnv(limit resource.Quantity) []corev1.EnvVar {
+	headroom := limit.Value() / 10
+	if max := int64(512 << 20); headroom > max {
+		headroom = max
+	}
+	return []corev1.EnvVar{{
+		Name:  "GOMEMLIMIT",
+		Value: fmt.Sprintf("%dB", limit.Value()-headroom),
+	}}
+}
+
+// memoryLimitEnvFor reads the limit off a container's requirements. A container
+// with no memory limit gets no ceiling, because there is none to respect.
+func memoryLimitEnvFor(r corev1.ResourceRequirements) []corev1.EnvVar {
+	limit, ok := r.Limits[corev1.ResourceMemory]
+	if !ok || limit.IsZero() {
+		return nil
+	}
+	return MemoryLimitEnv(limit)
 }

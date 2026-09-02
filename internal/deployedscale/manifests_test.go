@@ -490,3 +490,66 @@ func TestFingerprintDoesNotLeakTheToken(t *testing.T) {
 		t.Error("the fingerprint contains the bearer token")
 	}
 }
+
+// TestEveryContainerWithAMemoryLimitGetsAHeapCeiling is the regression test for
+// an OOM that was not a capacity finding.
+//
+// kcp was killed at 4 GiB while its live heap was 1.63 GiB: the collector had
+// grown the heap to 3.02 GiB and rising, because Go's default target is a
+// multiple of the live set and knows nothing about the cgroup. The run recorded
+// that as the fleet size the shard could not hold, which it was not.
+func TestEveryContainerWithAMemoryLimitGetsAHeapCeiling(t *testing.T) {
+	o := testOptions()
+	creds, err := NewCredentials(ServiceNames(KcpName, o.Namespace), LoopbackIPs(), time.Hour)
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	objects, err := o.Objects(creds)
+	if err != nil {
+		t.Fatalf("objects: %v", err)
+	}
+
+	checked := 0
+	for _, obj := range objects {
+		d, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			continue
+		}
+		container := d.Spec.Template.Spec.Containers[0]
+		limit, has := container.Resources.Limits[corev1.ResourceMemory]
+		if !has {
+			continue
+		}
+		checked++
+
+		var ceiling string
+		for _, e := range container.Env {
+			if e.Name == "GOMEMLIMIT" {
+				ceiling = e.Value
+			}
+		}
+		if ceiling == "" {
+			t.Errorf("%s has a %s memory limit and no GOMEMLIMIT, so its collector will walk past it",
+				d.Name, limit.String())
+			continue
+		}
+		var bytes int64
+		if _, err := fmt.Sscanf(ceiling, "%dB", &bytes); err != nil {
+			t.Errorf("%s has GOMEMLIMIT=%q, which Go will not parse: %v", d.Name, ceiling, err)
+			continue
+		}
+		// Below the container's limit, not equal to it: the limit covers stacks,
+		// the binary and anything mapped, none of which is heap.
+		if bytes >= limit.Value() {
+			t.Errorf("%s has GOMEMLIMIT %d at or above its container limit %d, which leaves the "+
+				"non-heap part of the process no room", d.Name, bytes, limit.Value())
+		}
+		if bytes < limit.Value()/2 {
+			t.Errorf("%s has GOMEMLIMIT %d against a limit of %d, which throws away half the container",
+				d.Name, bytes, limit.Value())
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no deployment had a memory limit, so this test checked nothing")
+	}
+}
