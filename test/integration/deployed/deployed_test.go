@@ -40,6 +40,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -114,7 +115,12 @@ var (
 			"reconciliation, which makes the run a second instrument with nothing keeping it honest.")
 	tolerance = flag.Float64("deployed-tolerance", deployedscale.DefaultTolerance,
 		"How far a deployed per-workspace figure may sit from the in-process one before it is a disagreement.")
-	budget       = flag.Duration("deployed-budget", 60*time.Minute, "Wall-clock budget for the run.")
+	budget         = flag.Duration("deployed-budget", 60*time.Minute, "Wall-clock budget for the run.")
+	kcpMemoryLimit = flag.String("deployed-kcp-memory-limit", "",
+		"Memory limit for kcp, e.g. 8Gi. Empty keeps the default. kcp is the component measured runs have "+
+			"found to hit its limit first, so this is the knob that maps where that limit sits.")
+	managerMemoryLimit = flag.String("deployed-manager-memory-limit", "",
+		"Memory limit for each manager, e.g. 4Gi. Empty keeps the default.")
 	readyTimeout = flag.Duration("deployed-ready-timeout", 10*time.Minute,
 		"How long to wait for kcp and each manager to become available.")
 	stepTimeout = flag.Duration("deployed-step-timeout", 20*time.Minute,
@@ -136,7 +142,10 @@ var (
 // `verify` and `check` for the same reason `test:scale` is.
 func TestDeployedFleet(t *testing.T) {
 	plans := plansFromFlags(t)
-	options := optionsFromFlags(t)
+	options, err := optionsFromFlags(t)
+	if err != nil {
+		t.Fatalf("could not run: %v", err)
+	}
 
 	for _, plan := range plans {
 		t.Run(plan.Shape.String(), func(t *testing.T) {
@@ -882,7 +891,7 @@ func plansFromFlags(t *testing.T) []scaletarget.Plan {
 	return plans
 }
 
-func optionsFromFlags(t *testing.T) deployedscale.Options {
+func optionsFromFlags(t *testing.T) (deployedscale.Options, error) {
 	t.Helper()
 
 	if *kcpImage == "" || *managerImage == "" {
@@ -907,7 +916,7 @@ func optionsFromFlags(t *testing.T) deployedscale.Options {
 		images[c.Name] = fmt.Sprintf("%s/%s:%s", strings.TrimSuffix(*managerImage, "/"), c.Name, *imageTag)
 	}
 
-	return deployedscale.Options{
+	opts := deployedscale.Options{
 		Namespace:         *namespace,
 		KcpImage:          *kcpImage,
 		Images:            images,
@@ -915,6 +924,27 @@ func optionsFromFlags(t *testing.T) deployedscale.Options {
 		SpreadAcrossNodes: *spreadAcrossNodes,
 		ImagePullPolicy:   corev1.PullPolicy(*imagePullPolicy),
 	}
+	// A memory limit is the knob that turns "it was OOM killed" into a
+	// capacity curve. Without it the limit is a constant and the only finding
+	// available is the one fleet size that happens to exceed it.
+	if *kcpMemoryLimit != "" {
+		q, err := resource.ParseQuantity(*kcpMemoryLimit)
+		if err != nil {
+			return deployedscale.Options{}, fmt.Errorf("parsing -deployed-kcp-memory-limit %q: %w", *kcpMemoryLimit, err)
+		}
+		opts.KcpResources = deployedscale.DefaultKcpResources()
+		opts.KcpResources.Limits[corev1.ResourceMemory] = q
+	}
+	if *managerMemoryLimit != "" {
+		q, err := resource.ParseQuantity(*managerMemoryLimit)
+		if err != nil {
+			return deployedscale.Options{}, fmt.Errorf("parsing -deployed-manager-memory-limit %q: %w",
+				*managerMemoryLimit, err)
+		}
+		opts.ManagerResources = deployedscale.DefaultManagerResources()
+		opts.ManagerResources.Limits[corev1.ResourceMemory] = q
+	}
+	return opts, nil
 }
 
 // restConfigFor addresses kcp with the credentials this run minted: the token

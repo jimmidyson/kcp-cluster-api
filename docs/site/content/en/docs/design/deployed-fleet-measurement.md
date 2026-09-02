@@ -335,10 +335,14 @@ growing further, it is not the managers.
 
 Not measured, and so not stated:
 
-- **Anything at 50 nodes per cluster.** Every run is one node per cluster, so
-  the fleet measured at 200 clusters holds 200 Machines and not 10,000. Node
-  count is the dimension this instrument has never swept, and nothing here
-  supports a claim about it.
+- **Anything at 50 nodes per cluster.** Every measured run is one node per
+  cluster, so the fleet measured at 200 clusters holds 200 Machines and not
+  10,000. The run that would change that does not complete: kcp is OOM killed
+  against its default 4 GiB before the first checkpoint, at roughly 2,500
+  Machines, while the four managers sit at a fifth of their own limits. **The
+  shard binds before the controllers do** — which is a finding, and is not a
+  number. Where kcp's limit actually sits is unmeasured; `KCP_MEMORY` raises it
+  so that it can be mapped rather than merely hit.
 - **Anything multi-node.** Every component ran on one kind node, which each
   report says on its own face. What is measured is four deployments sharing a
   machine, not four machines.

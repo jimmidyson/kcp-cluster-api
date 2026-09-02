@@ -443,6 +443,12 @@ tasks:
       # send the kubelet looking for one. Set Always for a real registry with a
       # moving tag.
       IMAGE_PULL_POLICY: '{{.IMAGE_PULL_POLICY | default "IfNotPresent"}}'
+      # kcp is the component measured runs have found to hit its memory limit
+      # first — at 200 clusters of 50 nodes it was OOM killed while the four
+      # managers sat at a fifth of theirs. Raising this is how the shard's
+      # capacity gets mapped rather than merely hit.
+      KCP_MEMORY: '{{.KCP_MEMORY | default ""}}'
+      MANAGER_MEMORY: '{{.MANAGER_MEMORY | default ""}}'
       DEPLOYED_FLAGS: '{{.DEPLOYED_FLAGS | default ""}}'
     requires:
       vars: [MANAGER_IMAGE]
@@ -468,7 +474,9 @@ tasks:
         -deployed-clusters-per-workspace={{.CLUSTERS_PER_WORKSPACE}}
         -deployed-checkpoints={{.CHECKPOINTS}}
         -deployed-reference={{.REFERENCE}}
-        -deployed-spread={{.SPREAD}} {{.DEPLOYED_FLAGS}}
+        -deployed-spread={{.SPREAD}}
+        -deployed-kcp-memory-limit={{.KCP_MEMORY}}
+        -deployed-manager-memory-limit={{.MANAGER_MEMORY}} {{.DEPLOYED_FLAGS}}
 
   scale:census:
     desc: Count the controllers and watches a deployment registers, by parsing its setup functions

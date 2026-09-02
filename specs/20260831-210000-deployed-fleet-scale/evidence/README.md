@@ -123,6 +123,29 @@ specification opened with, answered.
 No OOM kill, no restart in either run, and the largest container peaked at a
 fifth of its 2 GiB limit.
 
+## The first limit found, and it is not the managers
+
+`NODES_PER_CLUSTER=50` at 200 clusters does not run:
+
+```
+kcp stopped serving, so no workspace could advance and this run measured
+nothing about the fleet: kcp last exited 137 (OOMKilled) and has restarted
+1 time(s): it exceeded its memory limit
+```
+
+kcp was killed against its default 4 GiB limit before the first checkpoint, at
+50 workspaces of one cluster and fifty nodes — on the order of 2,500 Machines.
+In the same shape of run the four managers peaked at a fifth of their own
+limits.
+
+So **the shard is what binds, not the controllers**. That is a finding in its
+own right and it is not a number: what is measured is that 4 GiB is not enough
+for that fleet, not where enough begins. `KCP_MEMORY` exists to map that, by
+raising the limit until a run completes and reporting the size that needed it.
+
+Nothing about the managers at fifty nodes per cluster is measured, because no
+run has got far enough to sample them.
+
 ## The cost model
 
 Runs that pack several clusters into one workspace separate what a cluster
