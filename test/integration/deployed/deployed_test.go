@@ -391,7 +391,9 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 			break
 		}
 
-		if err := awaitEndState(ctx, wanted, tenants, plan, min(*stepTimeout, time.Until(deadline)), *pollInterval); err != nil {
+		health := func() string { return deployedscale.ServerTrouble(ctx, cl, options.Namespace) }
+		if err := awaitEndState(ctx, wanted, tenants, plan,
+			min(*stepTimeout, time.Until(deadline)), *pollInterval, health); err != nil {
 			stoppedBy = fmt.Sprintf("waiting for %d workspaces to reach the end state: %v", checkpoint, err)
 			break
 		}
@@ -711,11 +713,30 @@ func newTenant(ctx context.Context, base *rest.Config, rootClient client.Client,
 
 // awaitEndState waits for every workspace to reach the state this run can
 // reach.
-func awaitEndState(ctx context.Context, state string, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
+func awaitEndState(ctx context.Context, state string, tenants []*tenant, plan scaletarget.Plan,
+	timeout, poll time.Duration, health func() string,
+) error {
 	if state == deployedscale.EndStateEngaged {
-		return awaitEngaged(ctx, tenants, plan, timeout, poll)
+		return awaitEngaged(ctx, tenants, plan, timeout, poll, health)
 	}
-	return awaitReady(ctx, tenants, plan, timeout, poll)
+	return awaitReady(ctx, tenants, plan, timeout, poll, health)
+}
+
+// serverDown turns a health report into the error a wait should stop on.
+//
+// Checked only when workspaces are short, and then before the deadline: a run
+// where nothing is advancing has two possible causes and they want opposite
+// responses. A slow fleet is worth waiting out. A dead server is worth twenty
+// minutes of nobody's time.
+func serverDown(health func() string) error {
+	if health == nil {
+		return nil
+	}
+	if reason := health(); reason != "" {
+		return fmt.Errorf("kcp stopped serving, so no workspace could advance and this run measured "+
+			"nothing about the fleet: %s", reason)
+	}
+	return nil
 }
 
 // awaitEngaged waits for every workspace to hold the objects it was given.
@@ -723,7 +744,9 @@ func awaitEndState(ctx context.Context, state string, tenants []*tenant, plan sc
 // Reading them back through each workspace's own client is not a formality: it
 // is what shows the binding took and the objects are being served, which is
 // the whole of what a single deployment can be measured against.
-func awaitEngaged(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
+func awaitEngaged(ctx context.Context, tenants []*tenant, plan scaletarget.Plan,
+	timeout, poll time.Duration, health func() string,
+) error {
 	if timeout <= 0 {
 		return fmt.Errorf("no time left in the budget")
 	}
@@ -747,6 +770,9 @@ func awaitEngaged(ctx context.Context, tenants []*tenant, plan scaletarget.Plan,
 		if short == 0 {
 			return nil
 		}
+		if err := serverDown(health); err != nil {
+			return err
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s: %d of %d workspaces short (%s)", timeout, short, len(tenants), last)
 		}
@@ -759,7 +785,9 @@ func awaitEngaged(ctx context.Context, tenants []*tenant, plan scaletarget.Plan,
 }
 
 // awaitReady waits for every cluster to reach an initialized, Ready state.
-func awaitReady(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, timeout, poll time.Duration) error {
+func awaitReady(ctx context.Context, tenants []*tenant, plan scaletarget.Plan,
+	timeout, poll time.Duration, health func() string,
+) error {
 	if timeout <= 0 {
 		return fmt.Errorf("no time left in the budget")
 	}
@@ -803,6 +831,9 @@ func awaitReady(ctx context.Context, tenants []*tenant, plan scaletarget.Plan, t
 
 		if short == 0 {
 			return nil
+		}
+		if err := serverDown(health); err != nil {
+			return err
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s: %d of %d workspaces short (%s)", timeout, short, len(tenants), last)

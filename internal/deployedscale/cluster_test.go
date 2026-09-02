@@ -527,3 +527,48 @@ func TestForwardStopsSupervising(t *testing.T) {
 		t.Errorf("the supervisor started %d more tunnel(s) after Stop", n)
 	}
 }
+
+// TestServerTroubleNamesAnOOMKilledShard is the finding the 200x50 run should
+// have reported instead of "50 of 50 workspaces short".
+func TestServerTroubleNamesAnOOMKilledShard(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kcp-abc", Namespace: "scale",
+			Labels: map[string]string{ComponentLabel: KcpName},
+		},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: KcpName, Ready: false, RestartCount: 3,
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				ExitCode: 137, Reason: "OOMKilled",
+			}},
+		}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pod).Build()
+
+	got := ServerTrouble(t.Context(), cl, "scale")
+	for _, want := range []string{"OOMKilled", "memory limit", "restarted 3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the report does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestServerTroubleIsSilentWhenKcpIsHealthy: the gate has to be a signal. A
+// wait that stopped early on a healthy server would turn a slow fleet into a
+// failure.
+func TestServerTroubleIsSilentWhenKcpIsHealthy(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kcp-abc", Namespace: "scale",
+			Labels: map[string]string{ComponentLabel: KcpName},
+		},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: KcpName, Ready: true, RestartCount: 0,
+		}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pod).Build()
+
+	if got := ServerTrouble(t.Context(), cl, "scale"); got != "" {
+		t.Errorf("a healthy kcp was reported as trouble: %s", got)
+	}
+}

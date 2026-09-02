@@ -21,9 +21,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -666,18 +666,43 @@ func forwardWith(ctx context.Context, t tunnel) (*Forward, error) {
 			// The same local port, so every address already handed out stays
 			// correct. Rebinding a listening port that has just been closed is
 			// ordinarily immediate; a retry covers the case where it is not.
+			// A tunnel that dies as soon as it is used counts as a failed
+			// attempt, not a successful one.
+			//
+			// Establishing a forward succeeds whenever the pod exists; it says
+			// nothing about whether anything is listening inside it. When kcp
+			// is down the forwarder starts, reports "Forwarding from ...",
+			// fails on the first byte, and dies — so a backoff reset on each
+			// successful establish never grows, and the loop rebuilds about
+			// once a second for as long as the run lasts. That produced
+			// thousands of identical lines and buried the one fact that
+			// mattered, which was that kcp was not listening.
 			for attempt := 0; ; attempt++ {
 				select {
 				case <-supervisorCtx.Done():
 					return
 				case <-time.After(backoff(attempt)):
 				}
+				started := time.Now()
 				_, next, nextClose, err := t(bound)
 				if err != nil {
 					continue
 				}
-				died, closeTunnel = next, nextClose
 				f.restarts.Add(1)
+				if time.Since(started) < shortLived {
+					// Give it a moment to fail before believing in it.
+					select {
+					case <-supervisorCtx.Done():
+						nextClose()
+						return
+					case err := <-next:
+						_ = err
+						nextClose()
+						continue
+					case <-time.After(shortLived):
+					}
+				}
+				died, closeTunnel = next, nextClose
 				break
 			}
 		}
@@ -685,6 +710,10 @@ func forwardWith(ctx context.Context, t tunnel) (*Forward, error) {
 
 	return f, nil
 }
+
+// shortLived is how quickly a rebuilt tunnel has to fail to be treated as
+// having never worked.
+const shortLived = 2 * time.Second
 
 func backoff(attempt int) time.Duration {
 	d := time.Duration(1<<min(attempt, 5)) * 100 * time.Millisecond
@@ -707,8 +736,13 @@ func spdyTunnel(cfg *rest.Config, namespace, pod string, remotePort int) tunnel 
 
 		ready := make(chan struct{})
 		stopCh := make(chan struct{})
+		// io.Discard, deliberately. The forwarder logs a banner on every
+		// establish and an error on every failed byte, and a supervised
+		// forward against a server that is down produces thousands of both.
+		// What a reader needs is the restart count and the reason the server
+		// is down, and both are reported elsewhere.
 		fw, err := portforward.New(dialer,
-			[]string{fmt.Sprintf("%d:%d", localPort, remotePort)}, stopCh, ready, os.Stderr, os.Stderr)
+			[]string{fmt.Sprintf("%d:%d", localPort, remotePort)}, stopCh, ready, io.Discard, io.Discard)
 		if err != nil {
 			close(stopCh)
 			return 0, nil, nil, fmt.Errorf("building the port forwarder: %w", err)
@@ -767,4 +801,53 @@ func WorkspaceConfig(base *rest.Config, cluster string) *rest.Config {
 // server. A host with no such suffix is returned unchanged.
 func ServerURL(host string) string {
 	return kcpconfig.BaseHost(host)
+}
+
+// ServerTrouble reports what is wrong with kcp, if anything.
+//
+// # Why a wait has to look at the server
+//
+// Every wait in a run is a wait for workspaces, and every one of them fails the
+// same way when kcp is not serving: no workspace advances, and the wait times
+// out saying so. A run of 200 clusters at 50 nodes each timed out reporting
+// "50 of 50 workspaces short", which reads as 10,000 Machines that would not
+// converge. What had happened was that kcp's container had gone, and the
+// kubelet was refusing the forward with
+//
+//	failed to connect to localhost:6443 inside namespace "...": connection
+//	refused
+//
+// The workspaces were never the finding. A wait that cannot tell "the fleet is
+// slow" from "the server is dead" reports the first and means the second, and
+// twenty minutes are spent proving nothing.
+func ServerTrouble(ctx context.Context, cl client.Client, namespace string) string {
+	pods, err := ComponentPods(ctx, cl, namespace, KcpName)
+	if err != nil || len(pods) == 0 {
+		return "kcp has no pod in the namespace"
+	}
+
+	for i := range pods {
+		pod := &pods[i]
+		for j := range pod.Status.ContainerStatuses {
+			st := &pod.Status.ContainerStatuses[j]
+			if term := st.LastTerminationState.Terminated; term != nil {
+				reason := fmt.Sprintf("kcp last exited %d (%s) and has restarted %d time(s)",
+					term.ExitCode, term.Reason, st.RestartCount)
+				if term.Reason == "OOMKilled" {
+					// The capacity finding this measurement exists to produce,
+					// on the one component that is not a manager.
+					return reason + ": it exceeded its memory limit, which is the fleet size this " +
+						"shard cannot hold with the memory it was given"
+				}
+				return reason
+			}
+			if !st.Ready {
+				if w := st.State.Waiting; w != nil {
+					return fmt.Sprintf("kcp is not ready: %s: %s", w.Reason, w.Message)
+				}
+				return "kcp is running but not ready"
+			}
+		}
+	}
+	return ""
 }
