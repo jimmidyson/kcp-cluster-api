@@ -1,0 +1,486 @@
+{
+  "title": "Deployed fleet: 50 clusters over 50 workspaces, 10 nodes each",
+  "facts": {
+    "antiAffinity": "false",
+    "cluster": "https://127.0.0.1:37989",
+    "components": "core-manager, kubeadm-bootstrap-manager, kubeadm-control-plane-manager, dev-infrastructure-manager",
+    "core-manager.goroutinesPerCluster": "17.8",
+    "core-manager.goroutinesPerWorkspace": "17.8",
+    "core-manager.node": "kcp-scale-control-plane",
+    "core-manager.residentBytesPerCluster": "4084551",
+    "core-manager.residentBytesPerWorkspace": "4084551",
+    "core-manager.residentToHeapRatio": "1.71",
+    "deployment": "one Deployment per manager \u2014 the shape an installation runs",
+    "dev-infrastructure-manager.goroutinesPerCluster": "31.2",
+    "dev-infrastructure-manager.goroutinesPerWorkspace": "31.2",
+    "dev-infrastructure-manager.node": "kcp-scale-control-plane",
+    "dev-infrastructure-manager.residentBytesPerCluster": "2733884",
+    "dev-infrastructure-manager.residentBytesPerWorkspace": "2733884",
+    "dev-infrastructure-manager.residentToHeapRatio": "2.00",
+    "devClusterBackend": "inMemory",
+    "endState": "every control plane ready and every Machine Ready",
+    "imagePullPolicy": "IfNotPresent",
+    "kcp.goroutinesPerCluster": "52.0",
+    "kcp.goroutinesPerWorkspace": "52.0",
+    "kcp.node": "kcp-scale-control-plane",
+    "kcp.residentBytesPerCluster": "58173898",
+    "kcp.residentBytesPerWorkspace": "58173898",
+    "kcp.residentToHeapRatio": "2.02",
+    "kcpHeapProfile": "bin/kcp-heap-50x1.pb.gz (at 50 workspaces) \u2014 open with `go tool pprof bin/kcp-heap-50x1.pb.gz`",
+    "kcpHeapTop": "File: kcp / Build ID: 26dbe1f6e1bb735a4045c91d934f5aa22ed3a10b / Type: inuse_space / Time: 2026-09-02 11:15:05 UTC / Showing nodes accounting for 1.12GB, 73.47% of 1.53GB total / Dropped 1360 nodes (cum <= 0.01GB) / Showing top 15 nodes out of 284 /       flat  flat%   sum%        cum   cum% /     0.33GB 21.68% 21.68%     0.39GB 25.36%  encoding/json.(*decodeState).objectInterface /     0.18GB 11.88% 33.56%     0.18GB 11.88%  go.etcd.io/etcd/api/v3/mvccpb.(*KeyValue).Unmarshal /     0.18GB 11.77% 45.33%     0.18GB 11.77%  k8s.io/apimachinery/pkg/runtime.DeepCopyJSONValue /     0.06GB  3.97% 49.29%     0.14GB  9.08%  sigs.k8s.io/json/internal/golang/encoding/json.(*decodeState).objectInterface /     0.06GB  3.84% 53.13%     0.06GB  3.84%  reflect.mapassign_faststr0 /     0.06GB  3.77% 56.90%     0.06GB  3.77%  sigs.k8s.io/json/internal/golang/encoding/json.unquote (inline) /     0.06GB  3.68% 60.58%     0.06GB  3.68%  encoding/json.unquote (inline) /     0.05GB  3.17% 63.74%     0.51GB 33.48%  k8s.io/apimachinery/pkg/runtime.structToUnstructured /     0.03GB  1.96% 65.71%     0.03GB  1.96%  go.etcd.io/etcd/api/v3/etcdserverpb.(*InternalRaftRequest).Marshal /     0.03GB  1.92% 67.63%     0.03GB  1.95%  sigs.k8s.io/json/internal/golang/encoding/json.(*decodeState).literalStore",
+    "kcpServiceClusterIP": "None",
+    "kcpStorageObjects": "5677 objects in total, events=1867, secrets=759, devmachines.infrastructure.cluster.x-k8s.io=500, machines.cluster.x-k8s.io=500, kubeadmconfigs.bootstrap.cluster.x-k8s.io=457, apibindings.apis.kcp.io=308, devmachinetemplates.infrastructure.cluster.x-k8s.io=200, configmaps=111, namespaces=100, kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io=96, serviceaccounts=84, clusterroles.rbac.authorization.k8s.io=82",
+    "kubeadm-bootstrap-manager.goroutinesPerCluster": "25.6",
+    "kubeadm-bootstrap-manager.goroutinesPerWorkspace": "25.6",
+    "kubeadm-bootstrap-manager.node": "kcp-scale-control-plane",
+    "kubeadm-bootstrap-manager.residentBytesPerCluster": "1627159",
+    "kubeadm-bootstrap-manager.residentBytesPerWorkspace": "1627159",
+    "kubeadm-bootstrap-manager.residentToHeapRatio": "3.61",
+    "kubeadm-control-plane-manager.goroutinesPerCluster": "47.0",
+    "kubeadm-control-plane-manager.goroutinesPerWorkspace": "47.0",
+    "kubeadm-control-plane-manager.node": "kcp-scale-control-plane",
+    "kubeadm-control-plane-manager.residentBytesPerCluster": "2309987",
+    "kubeadm-control-plane-manager.residentBytesPerWorkspace": "2309987",
+    "kubeadm-control-plane-manager.residentToHeapRatio": "2.08",
+    "kubecontext": "kind-kcp-scale",
+    "nodesPerCluster": "10",
+    "outcome": "pass",
+    "reachedWorkspaces": "50",
+    "spread": "50x1",
+    "stoppedBy": "reached the requested target of 50 workspaces",
+    "targetClusters": "50",
+    "targetWorkspaces": "50"
+  },
+  "samples": [
+    {
+      "label": "baseline (no workspaces)",
+      "workspaces": 0,
+      "clusters": 0,
+      "nodes": 0,
+      "taken": "2026-09-02T11:09:39.855347817Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 352,
+            "heapAllocBytes": 11649904,
+            "heapSysBytes": 37185816,
+            "residentBytes": 77946880,
+            "cpuSeconds": 0.64
+          },
+          "pod": {
+            "name": "core-manager-5958c58f4f-6zkr5",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.140",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-bootstrap-manager",
+          "process": {
+            "goroutines": 123,
+            "heapAllocBytes": 7382968,
+            "heapSysBytes": 28178696,
+            "residentBytes": 59895808,
+            "cpuSeconds": 0.3
+          },
+          "pod": {
+            "name": "kubeadm-bootstrap-manager-54f8ff8647-l4p9f",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.141",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-control-plane-manager",
+          "process": {
+            "goroutines": 153,
+            "heapAllocBytes": 9195160,
+            "heapSysBytes": 32921864,
+            "residentBytes": 66965504,
+            "cpuSeconds": 0.78
+          },
+          "pod": {
+            "name": "kubeadm-control-plane-manager-7ffd687b64-tkdmv",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.142",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "dev-infrastructure-manager",
+          "process": {
+            "goroutines": 163,
+            "heapAllocBytes": 7905240,
+            "heapSysBytes": 28457224,
+            "residentBytes": 64675840,
+            "cpuSeconds": 0.25
+          },
+          "pod": {
+            "name": "dev-infrastructure-manager-857bdd54b5-c4m65",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.143",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kcp",
+          "process": {
+            "goroutines": 5757,
+            "heapAllocBytes": 502077944,
+            "heapSysBytes": 673975704,
+            "residentBytes": 769138688,
+            "cpuSeconds": 30.89
+          },
+          "pod": {
+            "name": "kcp-66dcd4c756-866b4",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.139",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        }
+      ]
+    },
+    {
+      "label": "13 workspaces",
+      "workspaces": 13,
+      "clusters": 13,
+      "nodes": 130,
+      "taken": "2026-09-02T11:11:10.018741464Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 620,
+            "heapAllocBytes": 55448208,
+            "heapSysBytes": 95021336,
+            "residentBytes": 136216576,
+            "cpuSeconds": 29.89
+          },
+          "pod": {
+            "name": "core-manager-5958c58f4f-6zkr5",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.140",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-bootstrap-manager",
+          "process": {
+            "goroutines": 483,
+            "heapAllocBytes": 19641648,
+            "heapSysBytes": 54749464,
+            "residentBytes": 90206208,
+            "cpuSeconds": 6.83
+          },
+          "pod": {
+            "name": "kubeadm-bootstrap-manager-54f8ff8647-l4p9f",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.141",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-control-plane-manager",
+          "process": {
+            "goroutines": 762,
+            "heapAllocBytes": 34236880,
+            "heapSysBytes": 84568344,
+            "residentBytes": 120000512,
+            "cpuSeconds": 15.75
+          },
+          "pod": {
+            "name": "kubeadm-control-plane-manager-7ffd687b64-tkdmv",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.142",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "dev-infrastructure-manager",
+          "process": {
+            "goroutines": 578,
+            "heapAllocBytes": 40344472,
+            "heapSysBytes": 71985432,
+            "residentBytes": 112558080,
+            "cpuSeconds": 8.02
+          },
+          "pod": {
+            "name": "dev-infrastructure-manager-857bdd54b5-c4m65",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.143",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kcp",
+          "process": {
+            "goroutines": 6439,
+            "heapAllocBytes": 1410078400,
+            "heapSysBytes": 2212490376,
+            "residentBytes": 2362662912,
+            "cpuSeconds": 399.13
+          },
+          "pod": {
+            "name": "kcp-66dcd4c756-866b4",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.139",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        }
+      ]
+    },
+    {
+      "label": "25 workspaces",
+      "workspaces": 25,
+      "clusters": 25,
+      "nodes": 250,
+      "taken": "2026-09-02T11:12:36.227819278Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 824,
+            "heapAllocBytes": 90533008,
+            "heapSysBytes": 142793000,
+            "residentBytes": 186482688,
+            "cpuSeconds": 56.31
+          },
+          "pod": {
+            "name": "core-manager-5958c58f4f-6zkr5",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.140",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-bootstrap-manager",
+          "process": {
+            "goroutines": 783,
+            "heapAllocBytes": 38075920,
+            "heapSysBytes": 72247576,
+            "residentBytes": 106209280,
+            "cpuSeconds": 12.67
+          },
+          "pod": {
+            "name": "kubeadm-bootstrap-manager-54f8ff8647-l4p9f",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.141",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-control-plane-manager",
+          "process": {
+            "goroutines": 1326,
+            "heapAllocBytes": 40872280,
+            "heapSysBytes": 101607704,
+            "residentBytes": 143003648,
+            "cpuSeconds": 28.48
+          },
+          "pod": {
+            "name": "kubeadm-control-plane-manager-7ffd687b64-tkdmv",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.142",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "dev-infrastructure-manager",
+          "process": {
+            "goroutines": 950,
+            "heapAllocBytes": 57793728,
+            "heapSysBytes": 105871656,
+            "residentBytes": 144343040,
+            "cpuSeconds": 15.05
+          },
+          "pod": {
+            "name": "dev-infrastructure-manager-857bdd54b5-c4m65",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.143",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kcp",
+          "process": {
+            "goroutines": 7061,
+            "heapAllocBytes": 1585035216,
+            "heapSysBytes": 3258914360,
+            "residentBytes": 3013373952,
+            "cpuSeconds": 745.16
+          },
+          "pod": {
+            "name": "kcp-66dcd4c756-866b4",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.139",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        }
+      ]
+    },
+    {
+      "label": "50 workspaces",
+      "workspaces": 50,
+      "clusters": 50,
+      "nodes": 500,
+      "taken": "2026-09-02T11:15:06.013711588Z",
+      "components": [
+        {
+          "component": "core-manager",
+          "process": {
+            "goroutines": 1249,
+            "heapAllocBytes": 165347648,
+            "heapSysBytes": 239286600,
+            "residentBytes": 283148288,
+            "cpuSeconds": 106.14
+          },
+          "pod": {
+            "name": "core-manager-5958c58f4f-6zkr5",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.140",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-bootstrap-manager",
+          "process": {
+            "goroutines": 1408,
+            "heapAllocBytes": 39722864,
+            "heapSysBytes": 106563864,
+            "residentBytes": 143593472,
+            "cpuSeconds": 24.63
+          },
+          "pod": {
+            "name": "kubeadm-bootstrap-manager-54f8ff8647-l4p9f",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.141",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kubeadm-control-plane-manager",
+          "process": {
+            "goroutines": 2503,
+            "heapAllocBytes": 90199240,
+            "heapSysBytes": 144931112,
+            "residentBytes": 187899904,
+            "cpuSeconds": 55.81
+          },
+          "pod": {
+            "name": "kubeadm-control-plane-manager-7ffd687b64-tkdmv",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.142",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "dev-infrastructure-manager",
+          "process": {
+            "goroutines": 1725,
+            "heapAllocBytes": 101998632,
+            "heapSysBytes": 162748712,
+            "residentBytes": 204124160,
+            "cpuSeconds": 29.85
+          },
+          "pod": {
+            "name": "dev-infrastructure-manager-857bdd54b5-c4m65",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.143",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 2147483648
+          }
+        },
+        {
+          "component": "kcp",
+          "process": {
+            "goroutines": 8357,
+            "heapAllocBytes": 1916582032,
+            "heapSysBytes": 3701307032,
+            "residentBytes": 3862323200,
+            "cpuSeconds": 1427.34
+          },
+          "pod": {
+            "name": "kcp-66dcd4c756-866b4",
+            "node": "kcp-scale-control-plane",
+            "podIP": "10.244.0.139",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        }
+      ]
+    }
+  ],
+  "reconciliations": [
+    {
+      "quantity": "goroutinesPerWorkspace",
+      "component": "core-manager",
+      "deployed": 17.76141384388807,
+      "inProcess": 2,
+      "ratio": 8.880706921944036,
+      "tolerance": 0.2,
+      "withinTolerance": false,
+      "source": "specs/20260820-152056-clusterclass-based-clusters/evidence/sweep-report-core.json",
+      "comparable": false,
+      "why": "This run measured \"every control plane ready and every Machine Ready\" while the in-process reference measured \"every workspace bound and holding its objects \u2014 the state a partial provider set can reach, and what the in-process deployment sweeps measure\", so the ratio above is not a disagreement between instruments. A ready cluster costs the core manager a live ClusterCache per workload cluster that the reference never opened. To check the two against each other, run one deployment (COMPONENTS=core-manager), which measures engagement as the reference does."
+    }
+  ]
+}

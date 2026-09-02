@@ -1,6 +1,6 @@
 # What the deployed instrument costs, and whether it can be believed
 
-Three runs:
+Every run with an evidence file, and what it measured:
 
 | File | Clusters | Clusters per workspace |
 |---|--:|--:|
@@ -13,6 +13,7 @@ Three runs:
 | `deployed-all-10x10.json` | 100 | 10 |
 | `deployed-all-200x1.json` | 200 | 1 (the target) |
 | `deployed-all-20x10.json` | 200 | 10 (the target, packed) |
+| `deployed-all-50x10.json` | 50 | 1, at **ten nodes each** — the first run to sample kcp idle |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -145,61 +146,112 @@ Whatever kcp is holding, it is holding it on the Go heap.
 each, completed inside the same 4 GiB limit. Twenty-five workspaces of ten
 nodes did not. Workspace count is close to free; machine count is not.
 
-**The per-Machine cost is not yet measured, and two figures for it have been
-withdrawn.**
+**The marginal cost is 13.0 MiB of live heap per cluster of ten nodes**, from
+`deployed-all-50x10.json` — the first run to sample the shard before it had
+anything to serve.
+
+| | goroutines | live heap | resident | CPU |
+|---|--:|--:|--:|--:|
+| idle, no workspaces | 5,757 | 478.8 MiB | 733.5 MiB | 30.9s |
+| 13 workspaces, 130 Machines | 6,439 | 1.31 GiB | 2.20 GiB | 399s |
+| 25 workspaces, 250 Machines | 7,061 | 1.48 GiB | 2.81 GiB | 745s |
+| 50 workspaces, 500 Machines | 8,357 | 1.78 GiB | 3.60 GiB | 1,427s |
+
+The three loaded samples lie on their line to within 1.4% of the range they
+span, which is the tightest memory fit this harness has taken. Per Machine that
+is 1.30 MiB — but this run cannot split a cost per cluster from a cost per
+Machine, because it varied the two together at ten nodes each. What is measured
+is the cluster; the per-Machine number assumes the whole of it is per Machine.
+
+Two earlier figures for this were withdrawn, and both were withdrawn for the
+same reason: they were differences between large numbers with nothing measured
+at zero.
 
 The first, 4 to 8 MiB, was fitted against heapSys — what the runtime has taken
 from the OS, which bundles the collector's headroom with the live set. That
-headroom grew from 1.44x to 1.85x of live during these runs, so the figure was
+headroom grew from 1.44x to 1.85x of live during those runs, so the figure was
 tracking the collector rather than the objects.
 
-The second, 1.6 MiB, was a two-point delta on live heap: 1.44 GiB at 130
-Machines, 1.63 GiB at 250. Two points is what this repository's own reports
-refuse as a slope, for the reason that applies here — heap at a sample is heap
-at an arbitrary moment of a GC cycle, and other runs have shown it *fall*
-between checkpoints. It also fails a sanity check: 120 extra Machines is about
-480 extra API objects, so 0.19 GiB works out at roughly 400 KiB per object,
-which is an order of magnitude beyond what an unstructured map costs.
+The second, 1.6 MiB per Machine, was a two-point delta on live heap. Two points
+is what this repository's own reports refuse as a slope. It landed within 20% of
+the answer, which is luck rather than method: the same arithmetic on the first
+two points of *this* run gives 7.0 MiB per Machine, five times too high.
 
-The likeliest reason both were wrong is that **the shard's fixed cost had never
-been measured**. The smallest sample was 130 Machines at 1.44 GiB. If kcp idles
-near that, almost everything observed is the shard existing rather than the
-fleet in it, and any slope drawn from those points is a difference between two
-large numbers charged entirely to the fleet.
+### The idle sample is not a fourth point on the line
 
-So a baseline sample is now taken before any workspace is created, which is
-what the in-process sweeps have always done. Until a run with one has been
-taken, the honest statement is that the shard costs a lot to stand up and the
-marginal cost of a Machine is unknown. The shard holds roughly four API objects per Machine — the
-Machine, its infrastructure object, its bootstrap config and the Secret that
-config renders — so this is on the order of a megabyte of heap per stored
-object, against objects that serialize to a few kilobytes.
+It sits 701 MiB below where the loaded samples put the intercept: the fit's own
+fixed cost is 1.19 GiB and the process idles at 478.8 MiB. So the shard does not
+grow smoothly out of nothing — binding the first workspaces costs it most of a
+gigabyte, and every cluster after that costs 13 MiB.
 
-Two measurements say the cost is not the storing. Goroutines stay flat near
-6,000 across a fourfold change in fleet size, and CPU does not: kcp runs 3.5 to
-5 cores continuously while a fleet provisions. A shard holding objects is
-cheap and quiet; this one is expensive and busy, which points at the traffic
-over those objects rather than the objects themselves.
+That step is why the fits here are taken over the loaded samples only, with the
+idle sample reported beside them rather than inside them. Drawing one line
+across both regimes nearly doubles the slope (25.5 MiB per cluster) while
+missing the idle point it was fitted through by 290 MB.
+
+**The change is checked against figures that were already established.** Fitted
+across all four points, this run put core-manager at 17.8 goroutines per
+cluster; over the loaded three it reads 17.0 — which is exactly what the 25x1
+and 50x1 runs measured, twice, before a baseline sample existed. The other three
+managers move the same way, from 25.6/47.0/31.2 to 25.0/47.1/31.0. Excluding the
+idle point does not just tidy the memory fit; it restores the goroutine figures
+this file already had.
+
+What the run does **not** resolve is what that 701 MiB step is made of. A
+shard binding its first workspaces is building caches, discovery and decoded
+schemas, and it is also allocating hard: 4.4 cores were busy through the first
+checkpoint. Live heap counts both what is retained and what has not been
+collected yet.
+
+### Two caveats on the numbers above
+
+**The top sample was against the ceiling.** kcp's 4 GiB limit puts GOMEMLIMIT at
+3.87 GB, and resident at 50 workspaces was 3.86 GB — 99.9% of it. The collector
+was holding the process at its soft limit rather than growing to demand, so this
+run measured a shard at the edge of the container it was given, and 50 clusters
+of ten nodes is roughly what a 4 GiB shard holds.
+
+**Resident is not reported per cluster for kcp, and that is the reason.** The
+same three samples miss their resident line by 7% of its range, against 1.4% for
+live heap, because resident carries the collector's headroom and, at the top
+point, the ceiling. A limit is still set against resident — it is in the table
+above — but it is not a cost per cluster and the harness no longer prints it as
+one.
+
+### Roughly 120 KiB per stored object
+
+The shard held 5,677 objects at 50 workspaces — 500 Machines, 500 DevMachines,
+457 KubeadmConfigs, 759 Secrets, 1,867 Events and the rest — which is about 113
+objects per cluster. Against 13.0 MiB per cluster that is roughly 120 KiB of
+live heap per stored object, for objects that serialize to a few kilobytes.
+
+The withdrawn 400 KiB figure counted only four objects per Machine and ignored
+the events, so it overstated the ratio by more than three times. 120 KiB is
+still one to two orders of magnitude above the serialized size, and the profile
+below says where it goes.
 
 ### The profile says what it is
 
-Taken at 25 workspaces of ten nodes, `kcp-heap-50x1.pb.gz`:
+Taken at 50 workspaces of ten nodes, `bin/kcp-heap-50x1.pb.gz` (the file is
+not committed; the run's `kcpHeapTop` fact carries this table):
 
 ```
-Showing nodes accounting for 0.80GB, 64.16% of 1.25GB total
+Showing nodes accounting for 1.12GB, 73.47% of 1.53GB total
       flat  flat%                cum   cum%
-    0.29GB 23.25%             0.34GB 26.97%  encoding/json.(*decodeState).objectInterface
-    0.16GB 12.92%             0.16GB 12.92%  apimachinery/pkg/runtime.DeepCopyJSONValue
-    0.04GB  3.56%             0.05GB  3.68%  encoding/json.unquote
-    0.04GB  3.37%             0.10GB  7.87%  sigs.k8s.io/json ... objectInterface
-    0.04GB  3.33%             0.04GB  3.33%  reflect.mapassign_faststr0
-    0.04GB  3.17%             0.43GB 34.61%  apimachinery/pkg/runtime.structToUnstructured
-    0.03GB  2.60%             0.03GB  2.60%  etcdserverpb.(*InternalRaftRequest).Marshal
+    0.33GB 21.68%             0.39GB 25.36%  encoding/json.(*decodeState).objectInterface
+    0.18GB 11.88%             0.18GB 11.88%  etcd/api/v3/mvccpb.(*KeyValue).Unmarshal
+    0.18GB 11.77%             0.18GB 11.77%  apimachinery/pkg/runtime.DeepCopyJSONValue
+    0.06GB  3.97%             0.14GB  9.08%  sigs.k8s.io/json ... objectInterface
+    0.06GB  3.84%             0.06GB  3.84%  reflect.mapassign_faststr0
+    0.06GB  3.77%             0.06GB  3.77%  sigs.k8s.io/json ... unquote
+    0.05GB  3.17%             0.51GB 33.48%  apimachinery/pkg/runtime.structToUnstructured
+    0.03GB  1.96%             0.03GB  1.96%  etcdserverpb.(*InternalRaftRequest).Marshal
 ```
+
 
 **It is the unstructured representation.** `objectInterface` is JSON being
 decoded into `map[string]interface{}`. `DeepCopyJSONValue` is those maps being
-deep-copied. `structToUnstructured` is 34.6% cumulatively. Between them, the
+deep-copied. `structToUnstructured` is 33.5% cumulatively. Between them, the
 handling of objects as maps rather than as typed structs is most of the heap.
 
 Every Cluster API type reaches this shard as a CRD through an APIBinding, and
@@ -211,11 +263,21 @@ object graph of small allocations once it is a map.
 That accounts for everything else measured. It is heap, because maps are heap.
 It scales with objects rather than workspaces, because it is per object. It
 comes with CPU saturation, because JSON decoding and deep-copying are what the
-CPU is doing. Goroutines stay flat, because none of it is per connection.
+CPU is doing.
+
+Goroutines are the one thing it does not account for, and they are not flat:
+the shard runs 51.8 more of them per cluster, on top of 5,760 idle. An earlier
+version of this file said they stayed near 6,000 across a fourfold change in
+fleet size. That came from reading samples across runs of different shapes; a
+single run with a baseline in it fits 51.8 per cluster with a worst residual of
+a fifth of a goroutine.
 
 And it settles the two earlier hypotheses, both of which this file previously
-carried and both of which were wrong. etcd is present in the profile at 2.6%,
-which is not a memory problem. Response buffering does not appear at all.
+carried and both of which were wrong. Response buffering does not appear at all.
+etcd does appear, and more than before: `KeyValue.Unmarshal` is 11.9% at fifty
+workspaces against nothing at twenty-five, which is values being decoded out of
+the store as watches are served, not a database held in memory. It is still not
+where the heap is.
 
 ## The first limit found, and it is not the managers
 
@@ -301,14 +363,14 @@ is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
 - **Not multi-node.** Every component ran on the kind control-plane node, so
   this says nothing about a deployment whose managers sit on different
   machines. `SPREAD=true` with `WORKERS` is how that gets measured.
-- **Not a 200-cluster figure.** The largest run is fifty. Carrying these slopes
-  to 200 predicts roughly 22,400 goroutines across the four managers; that is a
-  prediction from a 4x extrapolation and is labelled as one wherever it appears.
-  It is better supported than it would have been an hour ago — linearity now
-  holds over 7 to 50 clusters — and it is still not a measurement.
-- **Not a statement about nodes per cluster.** Every run here is one node per
-  cluster. The 200x50 target is 10,000 Machines and nothing here has been near
-  that.
+- **Not fifty nodes per cluster.** The largest node count measured is ten, and
+  only at fifty clusters. The 200x50 target is 10,000 Machines; the largest
+  fleet any run here has held is 500 Machines, and it did so against its
+  ceiling.
+- **Not a per-Machine figure for the managers.** Only kcp was sampled in the
+  ten-node run's fits against a baseline; the manager figures in the target
+  section come from one-node runs, where a cluster and a Machine are the same
+  thing.
 - **One quantity reconciled.** Goroutines per workspace is checked against the
   reference. The resident-bytes slope is reported and is not checked against
   anything.
@@ -317,4 +379,13 @@ is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
 
 The `source` path in the JSON was rewritten from the absolute path the run
 recorded to the repository-relative one, so the reference it names resolves for
-anyone who checks it out. No measured value was altered.
+anyone who checks it out. `deployed-all-50x10.json` had the same rewrite applied
+to its `kcpHeapProfile` fact. No measured value was altered.
+
+That run's `facts` block is left exactly as the run emitted it, which means it
+still carries `kcp.residentBytesPerCluster: 58173898` — 55 MiB per cluster,
+fitted across the idle sample and the loaded ones together. That number is
+wrong, it is what prompted the change described above, and it is kept rather
+than corrected because the samples underneath it are the measurement and the
+facts are derived from them. Re-derived from the same file today the harness
+reports no per-cluster resident figure for kcp at all, and 13.0 MiB of heap.

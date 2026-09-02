@@ -321,6 +321,35 @@ The memory figures are weaker than the goroutine ones and each report says so
 where its own heap series wanders: a checkpoint is sampled when it is reached,
 which is wherever that falls relative to a garbage collection.
 
+### What a report will and will not call a measurement
+
+Three rules, each of which a real run earned:
+
+- **Three distinct points, not two.** A two-point fit passes exactly through
+  both points, so its residual is identically zero whatever the data and a
+  slope cannot be told from the difference between two noisy samples.
+- **The idle sample is beside the fit, not in it.** A process with no fleet to
+  serve has not built the caches, watches and decoded schemas the first
+  workspace makes it build, so the step from nothing to something is not the
+  first stride of the line that follows. Fitting across it measures the step
+  and then charges it to whichever unit is on the x axis: with the idle sample
+  in, kcp reads 25.5 MiB of heap per cluster and misses that very sample by
+  290 MB; without it, 13.0 MiB with a worst residual of 1.4%. The same
+  exclusion moves core-manager from 17.8 goroutines per cluster to 17.0 —
+  which is what two earlier runs measured before any baseline sample existed.
+- **The points have to lie on a line.** Having three of them is not the same
+  thing. kcp's resident series climbs monotonically, is well spaced and has a
+  respectable R-squared, and still misses its own line by 7% of the range it
+  spans, because resident memory carries the collector's headroom as well as
+  the fleet. Its live heap over the same three samples misses by 1.4%. A fit
+  whose furthest point is more than 5% of the range away is reported as not
+  measured, with that number in the reason.
+
+The threshold is a judgement. The reasoning behind it is that the per-cluster
+goroutine figure reproduces across fleet distributions to about 1.6%, while the
+memory figures that disagreed between distributions by 29-78% came from series
+whose residuals were well above 5%.
+
 ## Status
 
 **The 200-cluster target is measured, in both distributions.** The harness runs
@@ -335,38 +364,54 @@ growing further, it is not the managers.
 
 Not measured, and so not stated:
 
-- **Anything at 50 nodes per cluster.** Every measured run is one node per
-  cluster, so the fleet measured at 200 clusters holds 200 Machines and not
-  10,000. The run that would change that does not complete: kcp is OOM killed
-  against its default 4 GiB before the first checkpoint, at roughly 2,500
-  Machines, while the four managers sit at a fifth of their own limits. **The
-  shard binds before the controllers do** — which is a finding, and is not a
-  number. Where kcp's limit actually sits is unmeasured; `KCP_MEMORY` raises it
-  so that it can be mapped rather than merely hit.
+- **Anything at 50 nodes per cluster.** The largest node count measured is ten,
+  and only at fifty clusters — 500 Machines, against the 10,000 the target
+  asks for. The run that would close that gap does not complete: kcp is OOM
+  killed against its default 4 GiB before the first checkpoint, at roughly
+  2,500 Machines, while the four managers sit at a fifth of their own limits.
+  **The shard binds before the controllers do** — which is a finding, and is
+  not a number. `KCP_MEMORY` raises the limit so the boundary can be mapped
+  rather than merely hit.
 
   What that memory *is* has since been measured, and it is not what it looked
   like. It is not the embedded etcd: resident memory tracks the Go runtime's
   heapSys to within a few percent, and a mapped database would show above it.
   It is not per workspace: 200 workspaces of one node fit in the same limit
-  that 25 workspaces of ten nodes exceeded. The marginal cost of a Machine is
-  **not measured**: two figures for it have been withdrawn, one fitted against
-  heapSys and so tracking the collector, one a two-point delta this
-  repository's own reports would refuse. The shard's fixed cost had never been
-  sampled, so both were differences between two large numbers charged to the
-  fleet; a baseline sample is now taken before any workspace exists. What is
-  measured is that the memory is heap and that it arrives with kcp running 3.5 to 5 cores continuously while
-  goroutine count stays flat near 6,000.
+  that 25 workspaces of ten nodes exceeded. A heap profile puts most of it in
+  the unstructured representation — `objectInterface`, `DeepCopyJSONValue` and
+  `structToUnstructured` between them — which is what every Cluster API type
+  is, reaching the shard as a CRD through an APIBinding.
+
+  **The marginal cost is 13.0 MiB of live heap per cluster of ten nodes**, and
+  51.8 goroutines, measured in [the first run to sample the shard idle][ev50x10].
+  Per Machine that is 1.30 MiB, on the assumption — which this run cannot test,
+  having varied clusters and Machines together — that none of it is per cluster.
+  Against the 5,677 objects the shard held, it is roughly 120 KiB of live heap
+  per stored object, for objects that serialize to a few kilobytes.
+
+  The idle shard is 478.8 MiB and 5,757 goroutines, and it is **not** a point on
+  that line: the loaded samples put the fixed cost 701 MiB higher. Binding the
+  first workspaces costs most of a gigabyte; each cluster after that costs 13
+  MiB. The run does not resolve that step into what the shard built and what it
+  was holding in flight while building it, at 4.4 cores busy.
+
+  Two earlier per-Machine figures were withdrawn — one fitted against heapSys
+  and so tracking the collector, one a two-point delta this repository's own
+  reports would refuse — and both failed the same way: the shard's fixed cost
+  had never been sampled, so each was a difference between two large numbers
+  charged entirely to the fleet.
 
   The OOM behind all of this was not the shard filling up. Live heap at 250
   Machines was 1.63 GiB against a 4 GiB limit, and the collector had taken
   3.02 GiB because no GOMEMLIMIT told it a limit existed. Both kcp and the
-  managers now carry one, and where a 4 GiB shard genuinely runs out has not
-  been measured since. Cost that tracks work rather than storage.
+  managers now carry one, and the fleet that used to be killed at 25 workspaces
+  of ten nodes now reaches fifty. It reaches them against the ceiling: resident
+  at the last checkpoint is 99.9% of GOMEMLIMIT, so 50 clusters of ten nodes is
+  about what a 4 GiB shard holds.
 - **Anything multi-node.** Every component ran on one kind node, which each
   report says on its own face. What is measured is four deployments sharing a
-  machine, not four machines.
-- **Anything multi-node.** Every run so far is co-located, which each report
-  says on its own face. `SPREAD=true` with `WORKERS` is how that changes.
+  machine, not four machines. `SPREAD=true` with `WORKERS` is how that
+  changes.
 - **The cost of a connected workload cluster**, above.
 
 [evidence]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-core-8x1.json
@@ -375,6 +420,7 @@ Not measured, and so not stated:
 [ev200]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-200x1.json
 [evdir]: https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260831-210000-deployed-fleet-scale/evidence
 [ev50]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1.json
+[ev50x10]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x10.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md

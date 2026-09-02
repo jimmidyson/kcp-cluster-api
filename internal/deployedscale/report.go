@@ -130,6 +130,21 @@ func (r *Report) Disturbed() []ComponentSample {
 	return out
 }
 
+// Fit is what a run can say about the cost of one more unit of fleet.
+type Fit struct {
+	// Slope is the marginal cost of one more workspace, or of one more
+	// cluster, depending on which fit was asked for.
+	Slope float64
+	// Base is the fitted cost at zero units of fleet. It is not what the
+	// process costs idle — see [Report.Idle], and see [Report.fit] for why an
+	// idle sample is not one of the points.
+	Base float64
+	// OK is false when the run cannot support a slope at all, and then Why
+	// says what is missing. A report prints Why where the figure would go.
+	OK  bool
+	Why string
+}
+
 // PerWorkspace fits a least-squares slope of one measure against the workspace
 // count, for one component.
 //
@@ -138,7 +153,8 @@ func (r *Report) Disturbed() []ComponentSample {
 // signal across the swept range, and a negative cost per workspace is not a
 // cheaper fleet.
 func (r *Report) PerWorkspace(component string, measure func(ComponentSample) float64) (float64, bool) {
-	return r.slope(component, measure, func(s Sample) float64 { return float64(s.Workspaces) })
+	f := r.FitPerWorkspace(component, measure)
+	return f.Slope, f.OK
 }
 
 // PerCluster is the same fit against cluster count, and on the evidence so far
@@ -159,14 +175,63 @@ func (r *Report) PerWorkspace(component string, measure func(ComponentSample) fl
 // per-workspace figure hides that behind an artefact of how the fleet was
 // arranged.
 func (r *Report) PerCluster(component string, measure func(ComponentSample) float64) (float64, bool) {
-	return r.slope(component, measure, func(s Sample) float64 { return float64(s.Clusters) })
+	f := r.FitPerCluster(component, measure)
+	return f.Slope, f.OK
 }
 
-func (r *Report) slope(component string, measure func(ComponentSample) float64, x func(Sample) float64) (float64, bool) {
+// FitPerWorkspace and FitPerCluster are the same two fits with the reason a
+// refused one gives, which is what a report prints in its place.
+func (r *Report) FitPerWorkspace(component string, measure func(ComponentSample) float64) Fit {
+	return r.fit(component, measure, func(s Sample) float64 { return float64(s.Workspaces) })
+}
+
+func (r *Report) FitPerCluster(component string, measure func(ComponentSample) float64) Fit {
+	return r.fit(component, measure, func(s Sample) float64 { return float64(s.Clusters) })
+}
+
+// Idle is what a component cost before the run created anything: the sample
+// taken with no workspaces and no clusters, if the run took one.
+//
+// It is reported beside the fits rather than inside them. See [Report.fit].
+func (r *Report) Idle(component string) (ComponentSample, bool) {
+	for _, s := range r.Samples {
+		if s.Workspaces != 0 || s.Clusters != 0 {
+			continue
+		}
+		if c, ok := s.Component(component); ok && c.Pod.Comparable() {
+			return c, true
+		}
+	}
+	return ComponentSample{}, false
+}
+
+func (r *Report) fit(component string, measure func(ComponentSample) float64, x func(Sample) float64) Fit {
 	var xs, ys []float64
 	for _, s := range r.Samples {
 		c, ok := s.Component(component)
 		if !ok || !c.Pod.Comparable() {
+			continue
+		}
+		// An idle process is not a small fleet.
+		//
+		// The 50x10 run sampled kcp before it had a workspace to serve: 502 MB
+		// of live heap, against 1.41 GB thirteen workspaces later and 1.92 GB
+		// at fifty. The loaded points lie on a line to within 1.4%; adding the
+		// idle one nearly doubles the slope, to 25.5 MiB per cluster, and still
+		// misses the idle point by 290 MB. Nothing about the fleet changed
+		// between those two answers.
+		//
+		// What changed is the regime. An idle apiserver has not built the
+		// caches, watches or decoded schemas that the first bound workspace
+		// makes it build, so the step from nothing to something is not the
+		// first stride of the line that follows. Fitting across it measures the
+		// step, and then attributes it to whichever unit is on the x axis.
+		//
+		// So the fit is over the loaded samples, and the idle sample is
+		// reported on its own, next to the fit's own base. The gap between them
+		// is a real quantity — for kcp, 735 MB — and it belongs in front of a
+		// reader rather than smeared across a per-cluster figure.
+		if x(s) == 0 {
 			continue
 		}
 		xs = append(xs, x(s))
@@ -187,7 +252,7 @@ func (r *Report) slope(component string, measure func(ComponentSample) float64, 
 	// cannot support is the thing this repository has already decided is worse
 	// than publishing nothing.
 	if distinct(xs) < 3 {
-		return 0, false
+		return Fit{Why: notMeasured}
 	}
 
 	var sumX, sumY, sumXY, sumXX float64
@@ -200,13 +265,51 @@ func (r *Report) slope(component string, measure func(ComponentSample) float64, 
 	}
 	denominator := n*sumXX - sumX*sumX
 	if denominator == 0 {
-		return 0, false
+		return Fit{Why: notMeasured}
 	}
 	slope := (n*sumXY - sumX*sumY) / denominator
 	if slope < 0 {
-		return 0, false
+		return Fit{Why: notMeasuredNegative}
 	}
-	return slope, true
+	base := (sumY - slope*sumX) / n
+
+	// Having three points is not the same as their lying on a line.
+	//
+	// Least squares answers whatever it is asked. The 50x10 run's resident
+	// series for kcp climbs monotonically, has three well-spaced points and a
+	// respectable R-squared of 0.9, and still misses its own line by 7% of the
+	// range it spans, because resident memory carries GOGC's headroom as well
+	// as the fleet. Its live heap over the same three samples misses by 1.4%.
+	// The two used to be printed side by side as though they were the same kind
+	// of number.
+	//
+	// The threshold is a judgement, and this is the reasoning behind it: the
+	// per-cluster goroutine figure reproduces across fleet distributions to
+	// about 1.6%, and the memory figures that disagreed between distributions
+	// by 29-78% came from series whose residuals were well above 5%. A fit
+	// looser than that has not earned the word "measured".
+	if worst, spread := worstResidual(xs, ys, slope, base); spread > 0 && worst > maxRelativeResidual*spread {
+		return Fit{Why: fmt.Sprintf(notALine, 100*worst/spread, 100*maxRelativeResidual)}
+	}
+	return Fit{Slope: slope, Base: base, OK: true}
+}
+
+// worstResidual returns how far the furthest point lies from the fitted line,
+// and the range the points span, which is what that distance is judged against.
+func worstResidual(xs, ys []float64, slope, base float64) (worst, spread float64) {
+	lo, hi := ys[0], ys[0]
+	for i := range xs {
+		d := ys[i] - (base + slope*xs[i])
+		if d < 0 {
+			d = -d
+		}
+		if d > worst {
+			worst = d
+		}
+		lo = min(lo, ys[i])
+		hi = max(hi, ys[i])
+	}
+	return worst, hi - lo
 }
 
 // Goroutines and Resident are the measures PerWorkspace is usually asked for.
@@ -314,24 +417,57 @@ func (r *Report) Markdown() string {
 		}
 		b.WriteString("\n")
 
-		if slope, ok := r.PerWorkspace(component, Goroutines); ok {
-			fmt.Fprintf(&b, "- goroutines per workspace: **%.1f**\n", slope)
-		} else {
-			b.WriteString("- goroutines per workspace: " + notMeasured + "\n")
+		// What the process cost before the run created anything, stated
+		// before the fits so that a reader meets the measured fixed cost
+		// before meeting the fitted one. See Report.fit.
+		if idle, ok := r.Idle(component); ok {
+			fmt.Fprintf(&b, "- measured idle, before any workspace existed: %d goroutines, %s resident, %s heap\n",
+				idle.Process.Goroutines, humanBytes(idle.Process.ResidentBytes), humanBytes(idle.Process.HeapAllocBytes))
 		}
-		if slope, ok := r.PerWorkspace(component, Resident); ok {
-			fmt.Fprintf(&b, "- resident bytes per workspace: **%s**\n", humanBytes(uint64(slope)))
-		} else {
-			b.WriteString("- resident bytes per workspace: " + notMeasured + "\n")
+
+		countPer := func(label string, f Fit) {
+			if f.OK {
+				fmt.Fprintf(&b, "- %s: **%.1f**\n", label, f.Slope)
+				return
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", label, f.Why)
 		}
+		bytesPer := func(label string, f Fit) {
+			if f.OK {
+				fmt.Fprintf(&b, "- %s: **%s**\n", label, humanBytes(uint64(f.Slope)))
+				return
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", label, f.Why)
+		}
+
+		countPer("goroutines per workspace", r.FitPerWorkspace(component, Goroutines))
+		bytesPer("resident bytes per workspace", r.FitPerWorkspace(component, Resident))
+		// Live heap as well as resident. The two answer different questions: a
+		// container limit is set against resident memory, but resident carries
+		// the collector's headroom, and on the evidence so far it is the heap
+		// series that lies on a line. Reporting only resident is how a figure
+		// fitted to GOGC gets published as a cost per cluster.
+		bytesPer("heap bytes per workspace", r.FitPerWorkspace(component, HeapAlloc))
 		// Per cluster as well as per workspace. See PerCluster: the two agree
 		// only when a workspace holds one cluster, and it is the per-cluster
 		// figure that has held across every distribution measured so far.
-		if slope, ok := r.PerCluster(component, Goroutines); ok {
-			fmt.Fprintf(&b, "- goroutines per cluster: **%.1f**\n", slope)
+		if f := r.FitPerCluster(component, Goroutines); f.OK {
+			countPer("goroutines per cluster", f)
 		}
-		if slope, ok := r.PerCluster(component, Resident); ok {
-			fmt.Fprintf(&b, "- resident bytes per cluster: **%s**\n", humanBytes(uint64(slope)))
+		if f := r.FitPerCluster(component, Resident); f.OK {
+			bytesPer("resident bytes per cluster", f)
+		}
+		if f := r.FitPerCluster(component, HeapAlloc); f.OK {
+			bytesPer("heap bytes per cluster", f)
+			// The step between the two fixed costs, which is a measured
+			// quantity in its own right and the largest single number in the
+			// kcp column of a small run.
+			if idle, ok := r.Idle(component); ok && f.Base > float64(idle.Process.HeapAllocBytes) {
+				fmt.Fprintf(&b, "  - the fit's own fixed cost is %s, which is %s above the idle process. "+
+					"The run does not resolve that step into what the first workspaces made the process "+
+					"build and what it was holding in flight while it built it.\n",
+					humanBytes(uint64(f.Base)), humanBytes(uint64(f.Base)-idle.Process.HeapAllocBytes))
+			}
 		}
 		if !monotonic(r, component, HeapAlloc) {
 			b.WriteString("- " + heapWobble + "\n")
@@ -402,6 +538,22 @@ func (s Sample) SortedNodes() []string {
 // support. See PerWorkspace for why three points rather than two.
 const notMeasured = "not measured (a slope needs at least three distinct workspace counts; " +
 	"a fit through two points has no residual and so cannot be told from noise)"
+
+// notMeasuredNegative is what a report says when least squares came back with a
+// negative cost per unit of fleet, which is noise exceeding signal rather than
+// a cheaper fleet.
+const notMeasuredNegative = "not measured (the fit came back negative, which is noise exceeding " +
+	"signal across the swept range rather than a fleet that costs less the larger it gets)"
+
+// notALine is what a report says when the points it has do not describe one.
+// See [Report.fit] for where the threshold comes from.
+const notALine = "not measured (the samples do not lie on a line: the furthest is %.0f%% of their own " +
+	"range away from it, against the %.0f%% this harness will call a measurement)"
+
+// maxRelativeResidual is how far the furthest sample may lie from the fitted
+// line, as a fraction of the range the samples span, before the fit stops being
+// reported as a measurement.
+const maxRelativeResidual = 0.05
 
 // distinct counts how many different values appear in xs.
 func distinct(xs []float64) int {

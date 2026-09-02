@@ -546,6 +546,21 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		if slope, ok := report.PerCluster(component, deployedscale.Resident); ok {
 			report.AddFact(component+".residentBytesPerCluster", fmt.Sprintf("%.0f", slope))
 		}
+		// Live heap as well as resident. Resident is what a limit is set
+		// against, but it carries the collector's headroom: in the run that
+		// first sampled kcp idle, the shard's resident series missed its own
+		// line by 7% of its range while its heap series missed by 1.4%. The
+		// heap figure is the one that reproduces, so it is recorded too.
+		if slope, ok := report.PerCluster(component, deployedscale.HeapAlloc); ok {
+			report.AddFact(component+".heapBytesPerCluster", fmt.Sprintf("%.0f", slope))
+		}
+		// And what the process cost before the run created anything, which is
+		// the only measurement that separates a fixed cost from a fleet's.
+		if idle, ok := report.Idle(component); ok {
+			report.AddFact(component+".idleGoroutines", fmt.Sprint(idle.Process.Goroutines))
+			report.AddFact(component+".idleResidentBytes", fmt.Sprint(idle.Process.ResidentBytes))
+			report.AddFact(component+".idleHeapBytes", fmt.Sprint(idle.Process.HeapAllocBytes))
+		}
 		if last := lastSampleOf(report, component); last != nil {
 			report.AddFact(component+".residentToHeapRatio", fmt.Sprintf("%.2f", last.Process.ResidentToHeapRatio()))
 			report.AddFact(component+".node", last.Pod.Node)

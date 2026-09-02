@@ -383,39 +383,130 @@ func heaped(label string, workspaces, goroutines int, heap, resident uint64) Sam
 	return sample(label, workspaces, ComponentDevInfrastructure, "node-1", goroutines, heap, resident, 0)
 }
 
-// TestABaselineAnchorsTheIntercept covers the sample this harness spent its
-// whole life without.
+// TestABaselineSeparatesFixedCostFromMarginalCost covers the sample this
+// harness spent its whole life without.
 //
 // Every slope it reports is a difference between two large numbers. kcp's
 // smallest sample was 130 Machines at 1.44 GiB, which says nothing about how
 // much of that is the shard merely existing — so a per-Machine figure derived
 // from it was a per-Machine figure plus a share of an unmeasured intercept.
-// With a sample at zero the intercept is measured, and the slope is the slope.
-func TestABaselineAnchorsTheIntercept(t *testing.T) {
+//
+// What the baseline is not is a fourth point on the same line. The run that
+// first took one found the idle shard 735 MB below where the loaded samples'
+// line put it, so the baseline separates the two costs by being reported
+// beside the fit, not by being fitted. This test is the shape of that: a
+// process that is cheap idle, expensive the moment it has anything to do, and
+// cheap again per unit after that.
+func TestABaselineSeparatesFixedCostFromMarginalCost(t *testing.T) {
 	r := &Report{Title: "t"}
-	// A large fixed cost and a small marginal one — the shape the shard is
-	// suspected of having, and the shape a run starting at 13 workspaces
-	// cannot tell from a large marginal cost.
-	r.Add(sample("baseline", 0, ComponentCore, "node-1", 1000, 1_200_000_000, 1_300_000_000, 0))
+	r.Add(sample("baseline", 0, ComponentCore, "node-1", 1000, 400_000_000, 500_000_000, 0))
 	r.Add(sample("10", 10, ComponentCore, "node-1", 1100, 1_216_000_000, 1_320_000_000, 0))
 	r.Add(sample("20", 20, ComponentCore, "node-1", 1200, 1_232_000_000, 1_340_000_000, 0))
+	r.Add(sample("30", 30, ComponentCore, "node-1", 1300, 1_248_000_000, 1_360_000_000, 0))
 
 	slope, ok := r.PerWorkspace(ComponentCore, Goroutines)
 	if !ok {
-		t.Fatal("a baseline plus two checkpoints is three distinct counts and should fit")
+		t.Fatal("three loaded checkpoints did not fit")
 	}
 	if slope < 9.5 || slope > 10.5 {
 		t.Errorf("goroutines per workspace = %.1f, want 10", slope)
 	}
 
-	// The point of the baseline: the marginal cost is 1.6 MB per workspace,
-	// against a fixed cost of 1.2 GB. Without a sample at zero the two are not
-	// separable, and the fixed cost is silently charged to the fleet.
+	// The marginal cost is 1.6 MB per workspace on top of a 1.2 GB fixed cost.
+	// A fit that took the idle sample as a fourth point would read 30 MB.
 	mem, ok := r.PerWorkspace(ComponentCore, HeapAlloc)
 	if !ok {
 		t.Fatal("no heap slope")
 	}
 	if mem < 1_500_000 || mem > 1_700_000 {
-		t.Errorf("heap per workspace = %.0f, want about 1.6e6 — the fixed cost is leaking into it", mem)
+		t.Errorf("heap per workspace = %.0f, want about 1.6e6 — the idle sample is in the fit", mem)
+	}
+
+	md := r.Markdown()
+	if !strings.Contains(md, "measured idle") {
+		t.Error("the idle sample was dropped rather than reported")
+	}
+	if !strings.Contains(md, "above the idle process") {
+		t.Errorf("the report does not state the step between the idle process and the fit's own "+
+			"fixed cost, which is the largest number in it:\n%s", md)
+	}
+}
+
+// TestAnIdleProcessIsNotASmallFleet uses kcp's own numbers from the 50x10 run,
+// the first run to sample the shard before it had anything to serve.
+//
+// The idle shard held 502 MB of live heap. Thirteen workspaces later it held
+// 1.41 GB, and from there to fifty it climbed only another 506 MB. A line
+// through all four points reads 25.5 MiB per cluster, which is nearly twice the
+// 13.6 MiB the loaded points agree on among themselves, and it misses the idle
+// point it was fitted through by 290 MB. That is not a cost per cluster; it is
+// one line drawn across two regimes.
+func TestAnIdleProcessIsNotASmallFleet(t *testing.T) {
+	r := &Report{Title: "50x10"}
+	r.Add(sample("baseline (no workspaces)", 0, KcpName, "node-1", 5757, 502_077_944, 769_138_688, 0))
+	r.Add(sample("13 workspaces", 13, KcpName, "node-1", 6439, 1_410_078_400, 2_362_662_912, 0))
+	r.Add(sample("25 workspaces", 25, KcpName, "node-1", 7061, 1_585_035_216, 3_013_373_952, 0))
+	r.Add(sample("50 workspaces", 50, KcpName, "node-1", 8357, 1_916_582_032, 3_862_323_200, 0))
+
+	slope, ok := r.PerCluster(KcpName, HeapAlloc)
+	if !ok {
+		t.Fatal("no heap slope: the loaded samples fit a line to within 1.4%, which is the " +
+			"tightest memory fit this harness has measured")
+	}
+	if slope < 13.0e6 || slope > 14.3e6 {
+		t.Errorf("heap per cluster = %s, want about 13.6 MiB. A fit including the idle sample "+
+			"reads 25.5 MiB, so this is the arithmetic that says whether the idle sample was in it",
+			humanBytes(uint64(slope)))
+	}
+
+	// The idle process is not discarded. It is the only measurement of what the
+	// shard costs before it serves anything, and the gap between it and the
+	// fit's own base is a quantity worth a reader's attention.
+	idle, ok := r.Idle(KcpName)
+	if !ok {
+		t.Fatal("the report cannot say what the idle process cost")
+	}
+	if idle.Process.Goroutines != 5757 {
+		t.Errorf("idle goroutines = %d, want 5757", idle.Process.Goroutines)
+	}
+	if md := r.Markdown(); !strings.Contains(md, "measured idle") {
+		t.Error("the report does not state what the process cost before the run created anything, " +
+			"so a reader cannot tell the fitted fixed cost from the process's own")
+	}
+}
+
+// TestPointsThatDoNotLieOnALineAreNotAMeasurement is the same run's resident
+// series, which does not fit.
+//
+// Resident memory is heap plus whatever the collector has not returned, so it
+// carries GOGC's headroom as well as the fleet. kcp's three loaded samples miss
+// their own least-squares line by 7% of the range they span; its live heap
+// misses by 1.4%. Reporting both as "resident bytes per cluster" and "heap
+// bytes per cluster" in the same list, with no way to tell them apart, is how
+// the 29-78% disagreements between distributions got published.
+func TestPointsThatDoNotLieOnALineAreNotAMeasurement(t *testing.T) {
+	r := &Report{Title: "50x10"}
+	r.Add(sample("13 workspaces", 13, KcpName, "node-1", 6439, 1_410_078_400, 2_362_662_912, 0))
+	r.Add(sample("25 workspaces", 25, KcpName, "node-1", 7061, 1_585_035_216, 3_013_373_952, 0))
+	r.Add(sample("50 workspaces", 50, KcpName, "node-1", 8357, 1_916_582_032, 3_862_323_200, 0))
+
+	if slope, ok := r.PerCluster(KcpName, Resident); ok {
+		t.Errorf("resident bytes per cluster = %s was reported as a measurement, "+
+			"though the three samples miss the line by 7%% of their own range",
+			humanBytes(uint64(slope)))
+	}
+	// The same run's heap does fit, and is not withheld along with it.
+	if _, ok := r.PerCluster(KcpName, HeapAlloc); !ok {
+		t.Error("the heap fit was refused too: the check is rejecting the component, not the series")
+	}
+	// And the goroutine counts, which lie on their line to within a fifth of a
+	// goroutine, are untouched.
+	if _, ok := r.PerCluster(KcpName, Goroutines); !ok {
+		t.Error("the goroutine fit was refused")
+	}
+
+	md := r.Markdown()
+	if !strings.Contains(md, "do not lie on a line") {
+		t.Errorf("the report does not say why the resident figure is missing:\n%s", md)
 	}
 }
