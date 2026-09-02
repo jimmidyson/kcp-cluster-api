@@ -348,10 +348,16 @@ Not measured, and so not stated:
   like. It is not the embedded etcd: resident memory tracks the Go runtime's
   heapSys to within a few percent, and a mapped database would show above it.
   It is not per workspace: 200 workspaces of one node fit in the same limit
-  that 25 workspaces of ten nodes exceeded. It is roughly 4–8 MiB of Go heap
-  per Machine, against objects that serialize to kilobytes — and it arrives
-  with kcp running 3.5 to 5 cores continuously while goroutine count stays flat
-  near 6,000. Cost that tracks work rather than storage.
+  that 25 workspaces of ten nodes exceeded. It is roughly 1.6 MiB of *live* Go
+  heap per Machine on a 1.2 GiB baseline, against objects that serialize to
+  kilobytes — and it arrives with kcp running 3.5 to 5 cores continuously while
+  goroutine count stays flat near 6,000.
+
+  The OOM behind all of this was not the shard filling up. Live heap at 250
+  Machines was 1.63 GiB against a 4 GiB limit, and the collector had taken
+  3.02 GiB because no GOMEMLIMIT told it a limit existed. Both kcp and the
+  managers now carry one, and where a 4 GiB shard genuinely runs out has not
+  been measured since. Cost that tracks work rather than storage.
 - **Anything multi-node.** Every component ran on one kind node, which each
   report says on its own face. What is measured is four deployments sharing a
   machine, not four machines.

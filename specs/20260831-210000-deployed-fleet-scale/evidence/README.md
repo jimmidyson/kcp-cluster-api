@@ -145,8 +145,16 @@ Whatever kcp is holding, it is holding it on the Go heap.
 each, completed inside the same 4 GiB limit. Twenty-five workspaces of ten
 nodes did not. Workspace count is close to free; machine count is not.
 
-**It is about 4 to 8 MiB of heap per Machine**, which is not a plausible cost
-for storing one. The shard holds roughly four API objects per Machine — the
+**It is about 1.6 MiB of live heap per Machine**, on a baseline of roughly
+1.2 GiB — from 1.44 GiB live at 130 Machines to 1.63 GiB at 250.
+
+An earlier version of this file said 4 to 8 MiB, fitted against heapSys. That
+is what the runtime has taken from the OS, and it bundles the collector's
+headroom with the live set; the headroom grew from 1.44x to 1.85x of live
+during these runs as allocation churned. The larger figure was measuring the
+collector, not the objects.
+
+1.6 MiB is still not a plausible cost for storing one Machine. The shard holds roughly four API objects per Machine — the
 Machine, its infrastructure object, its bootstrap config and the Secret that
 config renders — so this is on the order of a megabyte of heap per stored
 object, against objects that serialize to a few kilobytes.
@@ -207,6 +215,12 @@ kcp was killed against its default 4 GiB limit before the first checkpoint, at
 50 workspaces of one cluster and fifty nodes — on the order of 2,500 Machines.
 In the same shape of run the four managers peaked at a fifth of their own
 limits.
+
+**That kill was not the shard being full.** Its live heap at 250 Machines was
+1.63 GiB against a 4 GiB limit; the collector had grown the heap to 3.02 GiB
+because nothing had told it a limit existed. kcp now runs with GOMEMLIMIT, and
+the fleet size at which a 4 GiB shard actually runs out of room has not been
+measured since.
 
 So **the shard is what binds, not the controllers**. That is a finding in its
 own right and it is not a number: what is measured is that 4 GiB is not enough
