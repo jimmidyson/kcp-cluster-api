@@ -410,8 +410,11 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	// The in-process sweeps have taken a baseline from the beginning, labelled
 	// "baseline (manager not started)". This is the deployed equivalent: the
 	// managers are up and have engaged nothing.
+	// What the collections this harness forces have cost the shard in CPU, so
+	// that a per-Machine CPU figure drawn from these samples can be corrected.
+	var forcedCollectionCPU float64
 	if components, err := scraper.SampleComponents(ctx, cl, options.Namespace, options.Components); err == nil {
-		settleKcpHeap(t, ctx, profilingCfg, report)
+		settleKcpHeap(t, ctx, profilingCfg, kcpCfg, report, &forcedCollectionCPU)
 		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
 			components = append(components, kcpSample)
 		}
@@ -472,7 +475,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		// and it is still the newer half; a run that measures four managers and
 		// says why it could not measure kcp is worth more than one that throws
 		// the managers away too.
-		settleKcpHeap(t, ctx, profilingCfg, report)
+		settleKcpHeap(t, ctx, profilingCfg, kcpCfg, report, &forcedCollectionCPU)
 		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
 			components = append(components, kcpSample)
 			// What the shard is holding, not just how big it got. "kcp needed
@@ -1130,21 +1133,34 @@ func formatFloat(v float64) string {
 
 // settleKcpHeap asks the shard to collect before it is sampled, so that the
 // live heap in the sample means the same thing at every checkpoint and in every
-// run.
+// run, and reports what that cost.
 //
 // Three runs at one, five and ten nodes per cluster each fitted their own heap
 // samples cleanly and then disagreed with each other: the five-node run priced
 // a cluster at 35.3 MB and the ten-node run, with twice the Machines, at 13.6.
 // What differed was where the collector happened to be — 73% of heapSys live at
 // one sample against 52% at the other — and no amount of care about the fits
-// could recover from it. See deployedscale.CollectGarbage.
+// could recover from it. Retaken this way, that five-node figure is 15.5 MB.
+// See deployedscale.CollectGarbage.
+//
+// # Why the cost is reported rather than absorbed
+//
+// A forced collection is CPU the shard would not otherwise have spent, and the
+// run charges it to whatever checkpoint it happens at. The five-node run's CPU
+// per cluster went from 20.2 to 22.2 seconds across the change, which is the
+// same order as the per-Machine figure being drawn from it. So the seconds are
+// measured — a scrape either side of the collection — and recorded, rather than
+// left to inflate a cost per Machine that a reader has no way to correct.
 //
 // Best effort, and said out loud either way: a run whose heap figures are
 // post-collection and a run whose are not should not be compared, so the report
 // carries which it is.
-func settleKcpHeap(t *testing.T, ctx context.Context, cfg *rest.Config, report *deployedscale.Report) {
+func settleKcpHeap(t *testing.T, ctx context.Context, profiling, shard *rest.Config,
+	report *deployedscale.Report, forced *float64,
+) {
 	t.Helper()
-	if err := deployedscale.CollectGarbage(ctx, cfg); err != nil {
+	before, beforeErr := deployedscale.ScrapeKcp(ctx, shard)
+	if err := deployedscale.CollectGarbage(ctx, profiling); err != nil {
 		if _, already := report.Facts["kcpHeapSample"]; !already {
 			report.AddFact("kcpHeapSample", "as scraped, with no collection forced first: "+err.Error()+
 				" — heap figures include whatever had not been collected and are not comparable with "+
@@ -1157,6 +1173,13 @@ func settleKcpHeap(t *testing.T, ctx context.Context, cfg *rest.Config, report *
 	report.AddFact("kcpHeapSample", "after a forced collection (/debug/pprof/heap?gc=1), so live heap "+
 		"is the retained set — and the shard's resident figure in the same sample is taken immediately "+
 		"after that collection")
+	if beforeErr != nil {
+		return
+	}
+	if after, err := deployedscale.ScrapeKcp(ctx, shard); err == nil && after.CPUSeconds > before.CPUSeconds {
+		*forced += after.CPUSeconds - before.CPUSeconds
+		report.AddFact("kcpForcedCollectionCPUSeconds", fmt.Sprintf("%.1f", *forced))
+	}
 }
 
 // captureKcpHeap writes the shard's heap profile beside the report and
