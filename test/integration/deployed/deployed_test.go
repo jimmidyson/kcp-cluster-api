@@ -455,6 +455,14 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 					report.AddFact("kcpEtcdDBBytes", fmt.Sprint(etcd.DBTotalBytes))
 				}
 			}
+			// A heap profile of the shard at the largest fleet this run
+			// reached. Overwritten at each checkpoint, so what survives is the
+			// biggest — and the biggest is the one worth opening.
+			//
+			// Two explanations for this memory have been offered and both were
+			// wrong. A profile does not need one: it names what is holding the
+			// bytes.
+			captureKcpHeap(t, ctx, kcpCfg, report, checkpoint)
 		} else if !kcpScrapeReported {
 			kcpScrapeReported = true
 			report.AddFact("kcpMetrics", "not scraped: "+err.Error())
@@ -1065,4 +1073,46 @@ func findRepoRoot() (string, error) {
 // line and the report do not disagree about the same number.
 func formatFloat(v float64) string {
 	return fmt.Sprintf("%.1f goroutines per workspace", v)
+}
+
+// captureKcpHeap writes the shard's heap profile beside the report and
+// summarises it, best effort throughout.
+//
+// Nothing here is allowed to fail a run. A profile is a diagnostic for a
+// question this measurement raised rather than part of the measurement, and a
+// fleet that was successfully measured must not be thrown away because pprof
+// was unavailable.
+func captureKcpHeap(t *testing.T, ctx context.Context, kcpCfg *rest.Config,
+	report *deployedscale.Report, checkpoint int,
+) {
+	t.Helper()
+
+	raw, err := deployedscale.FetchProfile(ctx, kcpCfg, "heap")
+	if err != nil {
+		report.AddFact("kcpHeapProfile", "not captured: "+err.Error())
+		return
+	}
+	dir := reportDir(t)
+	path := filepath.Join(dir, fmt.Sprintf("kcp-heap-%s.pb.gz", report.Facts["spread"]))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		report.AddFact("kcpHeapProfile", "not written: "+err.Error())
+		return
+	}
+	report.AddFact("kcpHeapProfile", fmt.Sprintf("%s (at %d workspaces) — open with `go tool pprof %s`",
+		path, checkpoint, path))
+
+	if top, err := deployedscale.TopAllocations(ctx, path, 15); err == nil {
+		t.Logf("kcp heap at %d workspaces, by retained bytes:\n%s", checkpoint, top)
+		report.AddFact("kcpHeapTop", firstLines(top, 18))
+	}
+}
+
+// firstLines keeps a fact readable: a pprof top table is wide and a report is
+// a table, so the fact carries the head of it and the file carries the rest.
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, " / ")
 }

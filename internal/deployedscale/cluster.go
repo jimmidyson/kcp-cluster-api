@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"slices"
 	"sort"
 	"strconv"
@@ -1105,4 +1106,75 @@ func ScrapeEtcd(ctx context.Context, local string) (EtcdSample, error) {
 func (e EtcdSample) Describe() string {
 	return fmt.Sprintf("db %s (%s in use), %d keys including superseded revisions",
 		humanBytes(e.DBTotalBytes), humanBytes(e.DBInUseBytes), e.Keys)
+}
+
+// FetchProfile reads one of the shard's pprof profiles.
+//
+// # Why a profile rather than another gauge
+//
+// The shard's memory has now been explained wrongly twice. It was going to be
+// the embedded etcd's database, and the measurement said no — resident memory
+// tracks the Go runtime's heapSys to within a few percent, so there is no
+// mapped file of any size. It was going to be full response bodies buffered per
+// in-flight request, and reading the vendored apiserver said no — streaming
+// collection encoders are GA and locked on from 1.34, which is why upstream
+// switched the WatchList gate back off in 1.33: "the json and proto streaming
+// encoders appear to work better".
+//
+// Both were plausible, both were wrong, and each cost a round. A heap profile
+// does not need a hypothesis: it names the allocation sites holding the memory,
+// in order, and ends the guessing.
+//
+// Fetched the way a client fetches anything else — over the address the run
+// forwarded, with the credentials it minted. kube-apiserver serves these under
+// /debug/pprof when profiling is enabled, which is its default, and authorises
+// them as non-resource URLs.
+func FetchProfile(ctx context.Context, cfg *rest.Config, profile string) ([]byte, error) {
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("building a client for the shard: %w", err)
+	}
+	url := kcpconfig.BaseHost(cfg.Host) + "/debug/pprof/" + profile
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building the request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", url, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a response body.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048)) //nolint:errcheck // best effort.
+		return nil, fmt.Errorf("fetching %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	// A heap profile is a gzipped protobuf and is not large; a cap stops a
+	// wrong URL returning an HTML page forever.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", url, err)
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("%s returned an empty body", url)
+	}
+	return raw, nil
+}
+
+// TopAllocations summarises a heap profile by retained bytes.
+//
+// Shelled out to `go tool pprof` rather than parsed here. A Go heap profile
+// carries its own symbols, so the tool needs no binary and no symbol server,
+// and every machine that can run this test has it — which is a better trade
+// than a profile parser this repository would then own.
+//
+// Best effort by construction: the profile is written to disk first and is the
+// artefact that matters. This is the convenience of not having to open it.
+func TopAllocations(ctx context.Context, profilePath string, lines int) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "tool", "pprof",
+		"-top", "-inuse_space", "-nodecount", strconv.Itoa(lines), profilePath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go tool pprof: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }

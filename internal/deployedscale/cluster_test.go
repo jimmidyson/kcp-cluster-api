@@ -702,3 +702,47 @@ func TestParseEtcdSampleRejectsSomethingElsesMetrics(t *testing.T) {
 		t.Error("a non-etcd endpoint parsed as an empty database rather than as a mistake")
 	}
 }
+
+// TestFetchProfileAddressesTheShardAndReportsRefusals. The path must be the
+// bare server's: /debug/pprof is served by the shard, not inside a workspace,
+// and a run's kcp config addresses a workspace.
+func TestFetchProfileAddressesTheShardAndReportsRefusals(t *testing.T) {
+	var paths []string
+	code := http.StatusOK
+	payload := "not really a profile, but not empty either"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer server.Close()
+
+	cfg := &rest.Config{Host: server.URL + "/clusters/root"}
+
+	raw, err := FetchProfile(t.Context(), cfg, "heap")
+	if err != nil {
+		t.Fatalf("fetching: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "/debug/pprof/heap" {
+		t.Errorf("fetched %v, want [/debug/pprof/heap]", paths)
+	}
+	if string(raw) != payload {
+		t.Errorf("the body was not returned intact")
+	}
+
+	// Profiling can be disabled, and the authorizer can refuse a non-resource
+	// URL. Either must be reported, not written to disk as a profile.
+	code, payload = http.StatusForbidden, "forbidden"
+	if _, err := FetchProfile(t.Context(), cfg, "heap"); err == nil {
+		t.Error("a refused profile fetch returned no error")
+	} else if !strings.Contains(err.Error(), "403") {
+		t.Errorf("the error does not name the status: %v", err)
+	}
+
+	// An empty 200 is not a profile either: writing it would leave a file that
+	// pprof cannot open and nobody can explain.
+	code, payload = http.StatusOK, ""
+	if _, err := FetchProfile(t.Context(), cfg, "heap"); err == nil {
+		t.Error("an empty body was accepted as a profile")
+	}
+}
