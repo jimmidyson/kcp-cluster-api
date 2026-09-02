@@ -378,6 +378,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	}
 
 	// --- Walk to the target, sampling at each checkpoint.
+	kcpScrapeReported := false
 	deadline := time.Now().Add(*budget)
 	var reached int
 	var stoppedBy string
@@ -411,6 +412,31 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		if err != nil {
 			stoppedBy = fmt.Sprintf("sampling at %d workspaces: %v", checkpoint, err)
 			break
+		}
+		// The shard, alongside the managers. It is the component that runs out
+		// first — OOM killed at 200 clusters of fifty nodes while the managers
+		// sat at a fifth of their limits — and until now the only thing this
+		// harness could say about it was that it had died.
+		//
+		// Not fatal if it fails. The shard's cost is the more interesting half
+		// and it is still the newer half; a run that measures four managers and
+		// says why it could not measure kcp is worth more than one that throws
+		// the managers away too.
+		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
+			components = append(components, kcpSample)
+			// What the shard is holding, not just how big it got. "kcp needed
+			// more than 4 GiB" is not actionable; "it is holding 2,500
+			// Machines, 2,500 KubeadmConfigs and 2,600 Secrets" says where to
+			// look. Overwritten at each checkpoint, so the fact describes the
+			// largest fleet the run reached.
+			if counts, err := deployedscale.ScrapeKcpStorage(ctx, kcpCfg); err == nil {
+				report.AddFact("kcpStorageObjects", deployedscale.TopStorage(counts, 12))
+			}
+		} else if !kcpScrapeReported {
+			kcpScrapeReported = true
+			report.AddFact("kcpMetrics", "not scraped: "+err.Error())
+			t.Logf("NOTE: kcp's own metrics could not be read, so this run measures the managers and not "+
+				"the shard — which is the component that runs out first: %v", err)
 		}
 		report.Add(deployedscale.Sample{
 			Label:      fmt.Sprintf("%d workspaces", checkpoint),

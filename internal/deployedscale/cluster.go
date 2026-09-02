@@ -17,6 +17,7 @@ limitations under the License.
 package deployedscale
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -850,4 +852,160 @@ func ServerTrouble(ctx context.Context, cl client.Client, namespace string) stri
 		}
 	}
 	return ""
+}
+
+// ScrapeKcp reads the shard's own process metrics.
+//
+// # Why the shard is sampled at all
+//
+// It was not, for the whole of this feature's life, and that turned out to be
+// the omission that mattered. Every published figure was a manager figure, and
+// the managers are not what runs out: at 200 clusters of fifty nodes kcp was
+// OOM killed against 4 GiB while the four of them sat at a fifth of theirs.
+// A measurement that watches only the cheap half can say a fleet is affordable
+// right up to the point where it is not.
+//
+// Not through the pod proxy the managers use. That proxy speaks plain HTTP to
+// a port with no authentication in front of it, and kcp serves its metrics on
+// the same authenticated HTTPS port it serves everything else on. So this goes
+// the way a client goes: the address the run already forwarded, with the
+// credentials it already minted.
+func ScrapeKcp(ctx context.Context, cfg *rest.Config) (ProcessSample, error) {
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		return ProcessSample{}, fmt.Errorf("building a client for the shard: %w", err)
+	}
+	url := kcpconfig.BaseHost(cfg.Host) + "/metrics"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return ProcessSample{}, fmt.Errorf("building the request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ProcessSample{}, fmt.Errorf("scraping %s: %w", url, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a response body.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048)) //nolint:errcheck // best effort.
+		return ProcessSample{}, fmt.Errorf("scraping %s: HTTP %d: %s",
+			url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return ParseProcessSample(resp.Body)
+}
+
+// KcpSample pairs the shard's process metrics with its pod's facts, so it can
+// be reported and fitted exactly like a manager.
+func KcpSample(ctx context.Context, cfg *rest.Config, cl client.Client, namespace string) (ComponentSample, error) {
+	process, err := ScrapeKcp(ctx, cfg)
+	if err != nil {
+		return ComponentSample{}, err
+	}
+	sample := ComponentSample{Component: KcpName, Process: process}
+	if pods, err := ComponentPods(ctx, cl, namespace, KcpName); err == nil && len(pods) > 0 {
+		sample.Pod = PodFactsFrom(&pods[0], KcpName)
+	}
+	return sample, nil
+}
+
+// StorageObjects is what the shard is holding, by resource.
+//
+// # Why a count per resource
+//
+// "kcp needed more than 4 GiB" is not a finding anyone can act on. What a
+// reader wants to know is what was in it, and a Kubernetes API server already
+// says: apiserver_storage_objects is a gauge per resource, and kcp serves it
+// like any other apiserver.
+//
+// It answers the question a fleet size hides. A run of 50 clusters at 50 nodes
+// is "2,500 Machines" only in the sense that a Machine is what was asked for;
+// each one also has an infrastructure object, a bootstrap config and the Secret
+// that config renders, and every one of those is stored, cached and served.
+// Whether the shard is full of Machines or full of something nobody counted is
+// exactly the kind of thing this measurement should not be guessing at.
+func ScrapeKcpStorage(ctx context.Context, cfg *rest.Config) (map[string]int, error) {
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("building a client for the shard: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, kcpconfig.BaseHost(cfg.Host)+"/metrics", nil)
+	if err != nil {
+		return nil, fmt.Errorf("building the request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("scraping the shard: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a response body.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraping the shard: HTTP %d", resp.StatusCode)
+	}
+	return ParseStorageObjects(resp.Body)
+}
+
+// ParseStorageObjects reads apiserver_storage_objects out of a metrics body.
+func ParseStorageObjects(r io.Reader) (map[string]int, error) {
+	counts := map[string]int{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "apiserver_storage_objects{") {
+			continue
+		}
+		open, close := strings.Index(line, "{"), strings.LastIndex(line, "}")
+		if open < 0 || close < open {
+			continue
+		}
+		resource := ""
+		for _, label := range strings.Split(line[open+1:close], ",") {
+			if name, value, ok := strings.Cut(label, "="); ok && strings.TrimSpace(name) == "resource" {
+				resource = strings.Trim(strings.TrimSpace(value), `"`)
+			}
+		}
+		if resource == "" {
+			continue
+		}
+		var count float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(line[close+1:]), "%g", &count); err != nil {
+			continue
+		}
+		counts[resource] += int(count)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading the metrics body: %w", err)
+	}
+	if len(counts) == 0 {
+		return nil, errors.New("apiserver_storage_objects is not served, so what the shard holds cannot be counted")
+	}
+	return counts, nil
+}
+
+// TopStorage renders the n largest resource counts, biggest first, as a line
+// fit for a report fact.
+func TopStorage(counts map[string]int, n int) string {
+	type entry struct {
+		resource string
+		count    int
+	}
+	entries := make([]entry, 0, len(counts))
+	total := 0
+	for r, c := range counts {
+		entries = append(entries, entry{r, c})
+		total += c
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+		return entries[i].resource < entries[j].resource
+	})
+	if len(entries) > n {
+		entries = entries[:n]
+	}
+	parts := make([]string, 0, len(entries)+1)
+	parts = append(parts, fmt.Sprintf("%d objects in total", total))
+	for _, e := range entries {
+		parts = append(parts, fmt.Sprintf("%s=%d", e.resource, e.count))
+	}
+	return strings.Join(parts, ", ")
 }

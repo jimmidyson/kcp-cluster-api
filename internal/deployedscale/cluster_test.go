@@ -19,6 +19,8 @@ package deployedscale
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -570,5 +572,95 @@ func TestServerTroubleIsSilentWhenKcpIsHealthy(t *testing.T) {
 
 	if got := ServerTrouble(t.Context(), cl, "scale"); got != "" {
 		t.Errorf("a healthy kcp was reported as trouble: %s", got)
+	}
+}
+
+// TestScrapeKcpAddressesTheShardItself pins two things a wrong URL would break
+// silently: the metrics come from the bare server rather than from inside a
+// workspace, and a refusal is reported rather than parsed into zeroes.
+func TestScrapeKcpAddressesTheShardItself(t *testing.T) {
+	var paths []string
+	code := http.StatusOK
+	body := "go_goroutines 1234\n" +
+		"go_memstats_heap_alloc_bytes 5.5e+08\n" +
+		"go_memstats_sys_bytes 1.2e+09\n" +
+		"process_resident_memory_bytes 9.9e+08\n" +
+		"process_cpu_seconds_total 12.5\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	// A workspace-scoped config, as the run's own kcp config is: /metrics is
+	// served by the shard and does not exist under a workspace path.
+	cfg := &rest.Config{Host: server.URL + "/clusters/root"}
+
+	got, err := ScrapeKcp(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("scraping: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "/metrics" {
+		t.Errorf("scraped %v, want exactly [/metrics] — a workspace path would 404", paths)
+	}
+	if got.Goroutines != 1234 {
+		t.Errorf("goroutines = %d, want 1234", got.Goroutines)
+	}
+	if got.ResidentBytes != 990000000 {
+		t.Errorf("resident = %d, want 990000000", got.ResidentBytes)
+	}
+
+	code, body = http.StatusForbidden, "forbidden: user cannot get /metrics"
+	if _, err := ScrapeKcp(t.Context(), cfg); err == nil {
+		t.Error("a refused scrape returned no error, so a run would record an empty sample as a measurement")
+	} else if !strings.Contains(err.Error(), "403") {
+		t.Errorf("the error does not name the status: %v", err)
+	}
+}
+
+// TestParseStorageObjectsCountsWhatTheShardHolds. The question a fleet size
+// hides is what a fleet actually is: 50 clusters of 50 nodes is 2,500 Machines
+// only in the sense that a Machine is what was asked for, and the shard also
+// holds the infrastructure object, the bootstrap config and the rendered Secret
+// for every one of them.
+func TestParseStorageObjectsCountsWhatTheShardHolds(t *testing.T) {
+	body := `# HELP apiserver_storage_objects Number of stored objects
+# TYPE apiserver_storage_objects gauge
+apiserver_storage_objects{resource="machines.cluster.x-k8s.io"} 2500
+apiserver_storage_objects{resource="kubeadmconfigs.bootstrap.cluster.x-k8s.io"} 2500
+apiserver_storage_objects{resource="secrets"} 2612
+apiserver_storage_objects{resource="devmachines.infrastructure.cluster.x-k8s.io"} 2500
+apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 50
+go_goroutines 1234
+`
+	counts, err := ParseStorageObjects(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if counts["machines.cluster.x-k8s.io"] != 2500 {
+		t.Errorf("machines = %d, want 2500", counts["machines.cluster.x-k8s.io"])
+	}
+	if counts["secrets"] != 2612 {
+		t.Errorf("secrets = %d, want 2612", counts["secrets"])
+	}
+
+	top := TopStorage(counts, 3)
+	if !strings.Contains(top, "10162 objects in total") {
+		t.Errorf("the total is missing or wrong, which is the number that explains the memory:\n%s", top)
+	}
+	if !strings.Contains(top, "secrets=2612") {
+		t.Errorf("the largest resource is not first:\n%s", top)
+	}
+	if strings.Contains(top, "clusters.cluster.x-k8s.io") {
+		t.Errorf("TopStorage(3) returned more than three resources:\n%s", top)
+	}
+}
+
+// TestParseStorageObjectsSaysWhenTheMetricIsAbsent rather than reporting an
+// empty shard.
+func TestParseStorageObjectsSaysWhenTheMetricIsAbsent(t *testing.T) {
+	if _, err := ParseStorageObjects(strings.NewReader("go_goroutines 1\n")); err == nil {
+		t.Error("a body with no storage metric parsed as a shard holding nothing")
 	}
 }
