@@ -59,6 +59,9 @@ import (
 const (
 	KcpName = "kcp"
 	KcpPort = 6443
+	// KcpEtcdPort is the embedded etcd's client port, where its own metrics
+	// are served. kcp defaults to this and the run does not override it.
+	KcpEtcdPort = 2379
 	// RootWorkspace is where the exports are published and where every
 	// manager looks for its APIExportEndpointSlice.
 	RootWorkspace         = "root"

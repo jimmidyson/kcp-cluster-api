@@ -1009,3 +1009,100 @@ func TopStorage(counts map[string]int, n int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// EtcdSample is what the shard's embedded etcd is holding.
+//
+// # Why etcd is worth measuring separately
+//
+// kcp runs etcd in its own process, so one container limit covers both and
+// "kcp needed more than 4 GiB" does not say which half needed it. The two have
+// very different fixes: a watch cache full of decoded objects is bounded by
+// what is stored, while a backend database is bounded by what has been *written*
+// — every superseded revision of every object stays until compaction, and
+// Cluster API controllers patch status constantly while a fleet provisions.
+//
+// The Go heap does not distinguish them either, because etcd's own allocations
+// are on the same heap. What does distinguish them is the gap between heap and
+// resident: bbolt maps its database file, and mapped pages are resident without
+// being heap. A shard whose resident memory is far above its heap is holding a
+// database; one whose resident tracks its heap is holding objects.
+//
+// So both are recorded, and the database is asked directly how big it is.
+type EtcdSample struct {
+	// DBTotalBytes is the backend file's size, including space freed by
+	// compaction but not returned until defragmentation.
+	DBTotalBytes uint64 `json:"dbTotalBytes"`
+	// DBInUseBytes is the part of it still holding live data.
+	DBInUseBytes uint64 `json:"dbInUseBytes"`
+	// Keys is every key etcd holds, revisions included, which is what grows
+	// under a burst of status updates rather than under a bigger fleet.
+	Keys uint64 `json:"keys"`
+}
+
+// ParseEtcdSample reads the backend gauges out of an etcd metrics body.
+func ParseEtcdSample(r io.Reader) (EtcdSample, error) {
+	wanted := map[string]*uint64{}
+	var out EtcdSample
+	wanted["etcd_mvcc_db_total_size_in_bytes"] = &out.DBTotalBytes
+	wanted["etcd_mvcc_db_total_size_in_use_in_bytes"] = &out.DBInUseBytes
+	wanted["etcd_debugging_mvcc_keys_total"] = &out.Keys
+
+	seen := 0
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, rest, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		target, want := wanted[name]
+		if !want {
+			continue
+		}
+		var v float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(rest), "%g", &v); err != nil {
+			continue
+		}
+		*target = uint64(v)
+		seen++
+	}
+	if err := scanner.Err(); err != nil {
+		return EtcdSample{}, fmt.Errorf("reading the metrics body: %w", err)
+	}
+	if seen == 0 {
+		return EtcdSample{}, errors.New("no etcd backend gauges served: this is not an etcd metrics endpoint")
+	}
+	return out, nil
+}
+
+// ScrapeEtcd reads the embedded etcd's metrics from an address forwarded to it.
+//
+// Plain HTTP, and over a forward rather than the pod proxy: the embedded etcd
+// may listen on localhost inside the pod, which a proxy dialling the pod IP
+// cannot reach and a forward — which dials inside the pod's own network
+// namespace — can.
+func ScrapeEtcd(ctx context.Context, local string) (EtcdSample, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+local+"/metrics", nil)
+	if err != nil {
+		return EtcdSample{}, fmt.Errorf("building the request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return EtcdSample{}, fmt.Errorf("scraping etcd at %s: %w", local, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a response body.
+	if resp.StatusCode != http.StatusOK {
+		return EtcdSample{}, fmt.Errorf("scraping etcd at %s: HTTP %d", local, resp.StatusCode)
+	}
+	return ParseEtcdSample(resp.Body)
+}
+
+// Describe renders an etcd sample for a report fact.
+func (e EtcdSample) Describe() string {
+	return fmt.Sprintf("db %s (%s in use), %d keys including superseded revisions",
+		humanBytes(e.DBTotalBytes), humanBytes(e.DBInUseBytes), e.Keys)
+}

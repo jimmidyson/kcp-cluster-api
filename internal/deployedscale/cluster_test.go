@@ -664,3 +664,41 @@ func TestParseStorageObjectsSaysWhenTheMetricIsAbsent(t *testing.T) {
 		t.Error("a body with no storage metric parsed as a shard holding nothing")
 	}
 }
+
+// TestParseEtcdSampleSeparatesTheDatabaseFromTheCaches. kcp runs etcd in its
+// own process, so a single container limit covers both and an OOM says nothing
+// about which grew. These gauges do: a database far larger than the objects
+// stored means writes that have not been compacted, not a fleet that is too big.
+func TestParseEtcdSampleSeparatesTheDatabaseFromTheCaches(t *testing.T) {
+	body := `# TYPE etcd_mvcc_db_total_size_in_bytes gauge
+etcd_mvcc_db_total_size_in_bytes 2.147483648e+09
+etcd_mvcc_db_total_size_in_use_in_bytes 4.02653184e+08
+etcd_debugging_mvcc_keys_total 187432
+etcd_server_has_leader 1
+`
+	got, err := ParseEtcdSample(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.DBTotalBytes != 2147483648 {
+		t.Errorf("db total = %d", got.DBTotalBytes)
+	}
+	if got.DBInUseBytes != 402653184 {
+		t.Errorf("db in use = %d", got.DBInUseBytes)
+	}
+	if got.Keys != 187432 {
+		t.Errorf("keys = %d", got.Keys)
+	}
+
+	// The gap between allocated and in use is the whole point: 2 GiB held for
+	// 384 MiB of live data is a compaction story, not a capacity one.
+	if d := got.Describe(); !strings.Contains(d, "in use") || !strings.Contains(d, "superseded") {
+		t.Errorf("the description does not distinguish live data from history:\n%s", d)
+	}
+}
+
+func TestParseEtcdSampleRejectsSomethingElsesMetrics(t *testing.T) {
+	if _, err := ParseEtcdSample(strings.NewReader("go_goroutines 12\n")); err == nil {
+		t.Error("a non-etcd endpoint parsed as an empty database rather than as a mistake")
+	}
+}

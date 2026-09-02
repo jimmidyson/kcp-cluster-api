@@ -372,6 +372,19 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		}
 	}
 
+	// A second forward, to the embedded etcd's own metrics. Best effort: it
+	// answers which half of the shard's memory is the database and which is the
+	// watch cache, and a run that cannot tell is still a run.
+	var etcdLocal string
+	if f, err := deployedscale.PortForward(ctx, cfg, options.Namespace, kcpPods[0].Name,
+		deployedscale.KcpEtcdPort); err == nil {
+		t.Cleanup(f.Stop)
+		etcdLocal = f.Local
+	} else {
+		t.Logf("NOTE: no forward to the embedded etcd (%v), so this run cannot say how much of kcp's "+
+			"memory is its backend database rather than its caches", err)
+	}
+
 	scraper, err := deployedscale.NewScraper(cfg)
 	if err != nil {
 		t.Fatalf("building the scraper: %v", err)
@@ -431,6 +444,16 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 			// largest fleet the run reached.
 			if counts, err := deployedscale.ScrapeKcpStorage(ctx, kcpCfg); err == nil {
 				report.AddFact("kcpStorageObjects", deployedscale.TopStorage(counts, 12))
+			}
+			// The discriminator. kcp runs etcd in its own process, so one limit
+			// covers the watch cache and the backend database, and the two grow
+			// for different reasons — the cache with what is stored, the
+			// database with every write since the last compaction.
+			if etcdLocal != "" {
+				if etcd, err := deployedscale.ScrapeEtcd(ctx, etcdLocal); err == nil {
+					report.AddFact("kcpEtcd", etcd.Describe())
+					report.AddFact("kcpEtcdDBBytes", fmt.Sprint(etcd.DBTotalBytes))
+				}
 			}
 		} else if !kcpScrapeReported {
 			kcpScrapeReported = true
