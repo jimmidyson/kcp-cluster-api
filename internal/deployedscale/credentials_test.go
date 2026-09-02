@@ -155,10 +155,46 @@ func TestTokenAuthCSVIsWhatKcpParses(t *testing.T) {
 //
 // See AdminGroup.
 func TestTheIdentityIsNotSystemMasters(t *testing.T) {
-	line := testCredentials(t).TokenAuthCSV()
-	if strings.Contains(line, "system:masters") {
-		t.Error("the identity is in system:masters, so kcp will record no owner on the " +
-			"workspaces it creates and every one of them will hang in Initializing")
+	creds := testCredentials(t)
+
+	var work, profiling string
+	for _, line := range strings.Split(strings.TrimSpace(creds.TokenAuthCSV()), "\n") {
+		switch {
+		case strings.Contains(line, ",kcp-admin,"):
+			work = line
+		case strings.Contains(line, ",kcp-profiler,"):
+			profiling = line
+		}
+	}
+
+	if work == "" {
+		t.Fatal("no kcp-admin line in the token file; the run has no identity")
+	}
+	if strings.Contains(work, "system:masters") {
+		t.Error("the identity that creates workspaces is in system:masters, so kcp will record no " +
+			"owner on them and every one will hang in Initializing")
+	}
+	if !strings.Contains(work, AdminGroup) {
+		t.Errorf("the run's identity is not in %s: %s", AdminGroup, work)
+	}
+
+	// The privileged identity is allowed to exist, and is allowed to be exactly
+	// one thing: the profiler. It reads /debug/pprof, which is a non-resource
+	// URL no ClusterRole in :root was able to grant, and it creates nothing —
+	// which is what keeps it clear of the createdBy trap above.
+	if profiling == "" {
+		t.Fatal("no kcp-profiler line; the shard's profiles cannot be read")
+	}
+	if !strings.Contains(profiling, ProfilingGroup) {
+		t.Errorf("the profiling identity is not in %s, so /debug/pprof stays refused: %s",
+			ProfilingGroup, profiling)
+	}
+	if creds.ProfilingToken == creds.Token {
+		t.Error("the profiling identity shares the run's token, so the privileged one is not " +
+			"separable from the one every manager holds")
+	}
+	if creds.ProfilingToken == "" {
+		t.Error("the profiling token is empty")
 	}
 }
 

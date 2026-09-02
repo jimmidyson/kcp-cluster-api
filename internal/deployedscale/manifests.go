@@ -44,7 +44,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -657,52 +656,4 @@ func (o Options) Objects(creds *Credentials) ([]client.Object, error) {
 // MetricsURL is where the harness scrapes one manager's process metrics.
 func MetricsURL(podIP string) string {
 	return fmt.Sprintf("http://%s:%d/metrics", podIP, MetricsPort)
-}
-
-// ProfilingRoleName is the ClusterRole this run creates inside kcp's root
-// workspace to let itself read the shard's profiles.
-const ProfilingRoleName = "scale-harness:pprof-reader"
-
-// ProfilingRBAC grants the run's identity the shard's /debug/pprof endpoints.
-//
-// # Why this is needed and why it is safe
-//
-// cluster-admin in every workspace does not carry it. Shard-wide paths are not
-// workspace resources, and kcp authorises them by non-resource URL rules bound
-// in :root — which is why kcp ships system:kcp:metrics-reader as an ordinary
-// ClusterRole holding exactly one rule, get on /metrics. Without an equivalent
-// for profiling, a run gets
-//
-//	forbidden: User "kcp-admin" cannot get path "/debug/pprof/heap"
-//
-// even as the same identity reads /metrics without trouble.
-//
-// Narrow on purpose. It grants get on the profiling endpoints and nothing else,
-// to the group this run's identity is in, inside a kcp the run created and
-// tears down. A heap profile does carry object contents in its type names and
-// allocation sites, which is a reason to scope this to a measurement rig rather
-// than to hand it out on a shard holding anything real.
-func ProfilingRBAC() []client.Object {
-	return []client.Object{
-		&rbacv1.ClusterRole{
-			ObjectMeta: metav1.ObjectMeta{Name: ProfilingRoleName},
-			Rules: []rbacv1.PolicyRule{{
-				Verbs:           []string{"get"},
-				NonResourceURLs: []string{"/debug/pprof", "/debug/pprof/*"},
-			}},
-		},
-		&rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: ProfilingRoleName},
-			RoleRef: rbacv1.RoleRef{
-				APIGroup: rbacv1.GroupName,
-				Kind:     "ClusterRole",
-				Name:     ProfilingRoleName,
-			},
-			Subjects: []rbacv1.Subject{{
-				APIGroup: rbacv1.GroupName,
-				Kind:     "Group",
-				Name:     AdminGroup,
-			}},
-		},
-	}
 }

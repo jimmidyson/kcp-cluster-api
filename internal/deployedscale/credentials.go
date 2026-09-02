@@ -68,6 +68,9 @@ type Credentials struct {
 	ServingKeyPEM  []byte
 	// Token authenticates the managers and the driver.
 	Token string
+	// ProfilingToken authenticates reads of the shard's own /debug/pprof
+	// endpoints, and nothing else. See ProfilingGroup for why it is separate.
+	ProfilingToken string
 	// Names are the subject alternative names the serving certificate carries.
 	Names []string
 	// IPs are the IP SANs it carries.
@@ -107,15 +110,44 @@ type Credentials struct {
 // and an ordinary enough identity to be recorded as an owner.
 const AdminGroup = "system:kcp:admin"
 
+// ProfilingGroup is system:masters, and only the profiling identity is in it.
+//
+// # Why a second identity exists at all
+//
+// The shard's own /debug/pprof endpoints are not workspace resources. They are
+// non-resource URLs, and being cluster-admin in every workspace does not imply
+// them — kcp ships system:kcp:metrics-reader as a ClusterRole holding exactly
+// one such rule, get on /metrics, because that is the only way to grant one.
+// Creating the equivalent ClusterRole and binding for /debug/pprof inside :root
+// did not work either: the refusal came back unchanged.
+//
+// What does work is the bypass kcp inherits from Kubernetes. Its authorization
+// options set AlwaysAllowGroups to the privileged group, so system:masters is
+// allowed everything, non-resource URLs included.
+//
+// # Why not simply put the run's identity in it
+//
+// Because that was tried, and it broke every workspace. kcp's admission
+// deliberately records no owner for a system:masters creator, the LogicalCluster
+// it schedules therefore has no spec.createdBy, and the initializing virtual
+// workspace has nobody to impersonate — so every workspace hangs in Initializing
+// on system:apibindings. See AdminGroup.
+//
+// The two constraints are not in conflict once they are separated. The identity
+// that creates workspaces must not be privileged; the identity that reads a
+// profile creates nothing. So there are two, and the privileged one is used for
+// exactly one thing.
+const ProfilingGroup = "system:masters"
+
 // TokenAuthCSV is the file kcp is started with as --token-auth-file.
 //
-// One identity serves everything: the managers publish APIExports and read
-// every workspace, and the driver creates workspaces. A narrower split would be
-// a security improvement in a deployment and is not one here, where the
-// alternative is a measurement that fails on a permission nobody intended to
-// test. See AdminGroup for why that identity is not system:masters.
+// Two identities. kcp-admin does the run's work — publishing APIExports,
+// creating workspaces, reading every one of them — and is deliberately not
+// privileged, for the reason on AdminGroup. kcp-profiler exists to read
+// /debug/pprof and does nothing else, for the reason on ProfilingGroup.
 func (c Credentials) TokenAuthCSV() string {
-	return fmt.Sprintf("%s,kcp-admin,kcp-admin,%q\n", c.Token, AdminGroup)
+	return fmt.Sprintf("%s,kcp-admin,kcp-admin,%q\n%s,kcp-profiler,kcp-profiler,%q\n",
+		c.Token, AdminGroup, c.ProfilingToken, ProfilingGroup)
 }
 
 // Kubeconfig builds a kubeconfig addressing kcp at the given server URL.
@@ -153,6 +185,12 @@ func NewCredentials(names []string, ips []net.IP, validFor time.Duration) (*Cred
 	}
 
 	token, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
+	// A distinct secret, not a variant of the first: the profiling identity is
+	// privileged and the run's is not, and one leaking must not imply the other.
+	profilingToken, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +249,7 @@ func NewCredentials(names []string, ips []net.IP, validFor time.Duration) (*Cred
 		ServingCertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: servingDER}),
 		ServingKeyPEM:  pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: servingKeyDER}),
 		Token:          token,
+		ProfilingToken: profilingToken,
 		Names:          names,
 		IPs:            ips,
 	}, nil

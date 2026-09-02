@@ -318,24 +318,13 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		t.Fatalf("building a kcp client: %v", err)
 	}
 
-	// Let the run read the shard's own profiles. cluster-admin in every
-	// workspace does not carry this: shard-wide paths are non-resource URLs,
-	// authorised by rules bound in :root, which is why kcp ships a ClusterRole
-	// holding exactly one of them for /metrics. Without the equivalent for
-	// profiling the first attempt came back
-	//
-	//	forbidden: User "kcp-admin" cannot get path "/debug/pprof/heap"
-	//
-	// from the same identity that was reading /metrics successfully.
-	//
-	// Not fatal. It buys a diagnostic, not a measurement.
-	for _, obj := range deployedscale.ProfilingRBAC() {
-		if err := rootClient.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-			t.Logf("NOTE: could not grant this run access to kcp's profiles (%v), so a heap profile "+
-				"will not be captured", err)
-			break
-		}
-	}
+	// The shard's profiles are read as a second, privileged identity. Granting
+	// them to the run's own identity was tried twice — cluster-admin in every
+	// workspace, then a ClusterRole and binding for the non-resource URLs
+	// inside :root — and refused identically both times. See
+	// deployedscale.ProfilingGroup.
+	profilingCfg := restConfigFor(creds, "https://"+local)
+	profilingCfg.BearerToken = creds.ProfilingToken
 
 	// --- Publish the exports an installation publishes, not a synthesised
 	// one. These managers discover through the real APIExportEndpointSlices,
@@ -481,7 +470,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 			// Two explanations for this memory have been offered and both were
 			// wrong. A profile does not need one: it names what is holding the
 			// bytes.
-			captureKcpHeap(t, ctx, kcpCfg, report, checkpoint)
+			captureKcpHeap(t, ctx, profilingCfg, report, checkpoint)
 		} else if !kcpScrapeReported {
 			kcpScrapeReported = true
 			report.AddFact("kcpMetrics", "not scraped: "+err.Error())

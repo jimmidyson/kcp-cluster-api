@@ -1129,6 +1129,8 @@ func (e EtcdSample) Describe() string {
 // forwarded, with the credentials it minted. kube-apiserver serves these under
 // /debug/pprof when profiling is enabled, which is its default, and authorises
 // them as non-resource URLs.
+// The cfg passed here must carry the profiling identity, not the run's — see
+// Credentials.ProfilingToken.
 func FetchProfile(ctx context.Context, cfg *rest.Config, profile string) ([]byte, error) {
 	httpClient, err := rest.HTTPClientFor(cfg)
 	if err != nil {
