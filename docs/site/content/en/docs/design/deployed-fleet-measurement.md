@@ -343,6 +343,15 @@ Not measured, and so not stated:
   shard binds before the controllers do** — which is a finding, and is not a
   number. Where kcp's limit actually sits is unmeasured; `KCP_MEMORY` raises it
   so that it can be mapped rather than merely hit.
+
+  What that memory *is* has since been measured, and it is not what it looked
+  like. It is not the embedded etcd: resident memory tracks the Go runtime's
+  heapSys to within a few percent, and a mapped database would show above it.
+  It is not per workspace: 200 workspaces of one node fit in the same limit
+  that 25 workspaces of ten nodes exceeded. It is roughly 4–8 MiB of Go heap
+  per Machine, against objects that serialize to kilobytes — and it arrives
+  with kcp running 3.5 to 5 cores continuously while goroutine count stays flat
+  near 6,000. Cost that tracks work rather than storage.
 - **Anything multi-node.** Every component ran on one kind node, which each
   report says on its own face. What is measured is four deployments sharing a
   machine, not four machines.

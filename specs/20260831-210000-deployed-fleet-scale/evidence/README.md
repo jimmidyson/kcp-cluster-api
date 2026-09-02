@@ -123,6 +123,46 @@ specification opened with, answered.
 No OOM kill, no restart in either run, and the largest container peaked at a
 fifth of its 2 GiB limit.
 
+## What the shard's memory actually is, and what it is not
+
+The first runs to sample kcp itself, at ten nodes per cluster:
+
+| machines | heapSys | RSS | RSS/heapSys | goroutines | cores busy |
+|--:|--:|--:|--:|--:|--:|
+| 130 | 2.10 GiB | 2.22 GiB | 1.06 | 6,439 | |
+| 200 | 2.65 GiB | 2.64 GiB | 1.00 | 5,938 | |
+| 250 | 2.99 GiB | 2.82 GiB | 0.94 | 7,060 | 3.5 |
+| 300 | 3.43 GiB | 3.28 GiB | 0.96 | 5,935 | |
+| 500 | 3.75 GiB | 4.00 GiB | 1.07 | 6,112 | 5.0 |
+
+**It is not the embedded etcd.** kcp runs etcd in its own process and bbolt maps
+its database file, so a database large enough to matter would show as resident
+memory above what the Go runtime has taken from the OS. There is none: resident
+tracks heapSys to within a few percent at every point, in both directions.
+Whatever kcp is holding, it is holding it on the Go heap.
+
+**It is not per workspace either.** 200 clusters in 200 workspaces, one node
+each, completed inside the same 4 GiB limit. Twenty-five workspaces of ten
+nodes did not. Workspace count is close to free; machine count is not.
+
+**It is about 4 to 8 MiB of heap per Machine**, which is not a plausible cost
+for storing one. The shard holds roughly four API objects per Machine — the
+Machine, its infrastructure object, its bootstrap config and the Secret that
+config renders — so this is on the order of a megabyte of heap per stored
+object, against objects that serialize to a few kilobytes.
+
+Two measurements say the cost is not the storing. Goroutines stay flat near
+6,000 across a fourfold change in fleet size, and CPU does not: kcp runs 3.5 to
+5 cores continuously while a fleet provisions. A shard holding objects is
+cheap and quiet; this one is expensive and busy, which points at the traffic
+over those objects rather than the objects themselves.
+
+**That last step is a reading, not a measurement.** What is measured is that
+the memory is heap, that it scales with Machines and not workspaces, and that
+it comes with CPU saturation. Which requests produce it needs
+`apiserver_current_inflight_requests` and `apiserver_request_total`, which this
+harness does not yet read.
+
 ## The first limit found, and it is not the managers
 
 `NODES_PER_CLUSTER=50` at 200 clusters does not run:
