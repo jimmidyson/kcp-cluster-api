@@ -412,6 +412,20 @@ Not measured, and so not stated:
   figure a run carries. What survived contact with a second and third run are
   the two quantities that do not depend on when the collector last ran.
 
+  **That fix works.** [Retaking the one-node run][ev50x1c] with the collection
+  forced puts live heap at 47%, 46% and 47% of heapSys across its three samples,
+  where the uncollected run of the same shape wandered 63%, 49%, 55%. Its heap
+  fit goes from a refused 14.1% to 0.4% — the tightest memory fit this
+  instrument has taken — and the figure it produces, 9.5 MiB per one-node
+  cluster, is 26% higher than the uncollected one. Against 50.8 stored objects
+  per cluster that is 192 KiB of retained heap per object. Retaking the five-
+  and ten-node runs the same way is what turns the per-Machine term into a
+  measurement.
+
+  The managers are not collected before sampling, because they do not serve
+  pprof, so their heap figures still carry the artefact. The shard is what runs
+  out, so the shard is what got the fix.
+
   What can still be said about memory: a cluster costs the shard tens of MiB,
   and Machines are part of that rather than the bulk — a bare one-node cluster
   is 17.5 MiB resident against 37.7 MiB for a ten-node one, so nine Machines
@@ -455,6 +469,7 @@ Not measured, and so not stated:
 [ev50x10]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x10.json
 [ev50x1b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-with-baseline.json
 [ev50x5b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x5-with-baseline.json
+[ev50x1c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-collected.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md

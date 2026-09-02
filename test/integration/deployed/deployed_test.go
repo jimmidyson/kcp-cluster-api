@@ -1155,7 +1155,8 @@ func settleKcpHeap(t *testing.T, ctx context.Context, cfg *rest.Config, report *
 		return
 	}
 	report.AddFact("kcpHeapSample", "after a forced collection (/debug/pprof/heap?gc=1), so live heap "+
-		"is the retained set")
+		"is the retained set — and the shard's resident figure in the same sample is taken immediately "+
+		"after that collection")
 }
 
 // captureKcpHeap writes the shard's heap profile beside the report and

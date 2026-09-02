@@ -16,6 +16,7 @@ Every run with an evidence file, and what it measured:
 | `deployed-all-50x10.json` | 50 | 1, at **ten nodes each** — the first run to sample kcp idle |
 | `deployed-all-50x1-with-baseline.json` | 50 | 1, at one node each — the same run at a second node count |
 | `deployed-all-50x5-with-baseline.json` | 50 | 1, at five nodes each — and a third |
+| `deployed-all-50x1-collected.json` | 50 | 1, at one node each, **sampled after a forced collection** |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -236,13 +237,51 @@ Three runs and a third node count were spent to find this out, which is the
 result: **the two quantities that survive contact with a second run are the two
 that do not depend on when the collector last ran.**
 
+### The fix works, on its first run
+
+`deployed-all-50x1-collected.json` is the one-node run again, with the shard
+asked to collect before each sample. Against the same shape taken the hour
+before:
+
+| | as scraped | after a forced collection |
+|---|--:|--:|
+| live heap as a fraction of heapSys, at the three samples | 63%, 49%, 55% | 47%, 46%, 47% |
+| worst residual on the heap fit | 14.1% (refused) | **0.4%** |
+| heap per cluster | 7.6 MiB | 9.5 MiB |
+| the idle-to-loaded step | 229 MB | 82 MB |
+
+The collector is now in the same state at every sample, which is the whole
+point: the ratio is flat to one percentage point where before it wandered by
+fourteen. The heap fit goes from the loosest thing this harness has refused to
+the tightest it has accepted, and the figure it produces is 26% higher than the
+uncollected one — the earlier number was not merely noisy, it was low.
+
+Two things move the other way, and both are the forced collection showing up
+where it should. The resident fit gets slightly worse (4.4% to 6.2%, now
+refused), because resident is measured immediately after a collection this
+harness caused. And the idle-to-loaded step shrinks to 82 MB, because the idle
+sample is collected too.
+
+**The per-Machine term is one and two runs away.** The five- and ten-node runs
+need retaking this way; until they are, the only collected figure is 9.5 MiB per
+one-node cluster. Against 50.8 stored objects per cluster that is 192 KiB of
+retained heap per object — the first per-object figure here that is not an order
+of magnitude.
+
+**The managers are not collected before sampling**, because they do not serve
+pprof. Their heap fits show the same artefact — in this run core-manager's and
+the dev provider's were refused while the other two passed — and their resident
+figures are what the cost model uses. This is an asymmetry, not an oversight:
+the shard is what runs out, so the shard is what got the fix.
+
 ### What one Machine costs, as far as it is known
 
 - **0 goroutines.** Measured, at three node counts, agreeing to 1%.
 - **1.5 to 2.4 CPU-seconds** to provision, falling as clusters get larger.
   Measured, at three node counts.
-- **Memory: not measured.** Three node counts produced three incomparable heap
-  slopes. What can be said is that a cluster costs the shard tens of MiB and
+- **Memory: not measured yet, but no longer unmeasurable.** Three node counts
+  produced three incomparable heap slopes; the collection fix removes the reason
+  they disagreed, and one of the three has been retaken. What can be said is that a cluster costs the shard tens of MiB and
   that Machines are a part of it rather than the bulk: the one-node run prices a
   bare cluster at 17.5 MiB resident against 37.7 MiB for a ten-node one, so nine
   Machines roughly double a cluster and do not multiply it.
@@ -461,7 +500,8 @@ is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
 - **Not a per-Machine memory figure.** Three node counts produced three heap
   slopes that disagree by a factor of four in the wrong direction, because live
   heap read from `/metrics` carries the collector's timing. The instrument now
-  forces a collection before it samples; no run taken that way exists yet.
+  forces a collection before it samples and one run has been retaken that way;
+  the other two node counts have not.
 - **Not a per-cluster figure for kcp, strictly.** Every run that has sampled the
   shard put one cluster in each workspace, so its 52 goroutines and 13.0 MiB
   could as truthfully be called per workspace. The managers have been measured
