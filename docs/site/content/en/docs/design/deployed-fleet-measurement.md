@@ -393,9 +393,11 @@ Not measured, and so not stated:
   highest, so a Machine costs the shard no goroutines at all. Those goroutines
   are per logical cluster, not per object in it.
 
-  **A Machine costs 1.5 to 2.4 CPU-seconds** to provision, falling as clusters
+  **A Machine costs 1.5 to 3.0 CPU-seconds** to provision, falling as clusters
   get larger: 10.6, 20.2 and 27.7 CPU-seconds per cluster at the three node
-  counts, all three fitted to under 1%.
+  counts, all three fitted to under 1%. The wide end of that range is what the
+  collected runs give before subtracting the collections the harness itself
+  forces.
 
   **A Machine's memory cost is not measured**, and three runs were spent
   establishing why. The three heap slopes are 7.6, 33.7 and 13.0 MiB per
@@ -418,9 +420,23 @@ Not measured, and so not stated:
   fit goes from a refused 14.1% to 0.4% — the tightest memory fit this
   instrument has taken — and the figure it produces, 9.5 MiB per one-node
   cluster, is 26% higher than the uncollected one. Against 50.8 stored objects
-  per cluster that is 192 KiB of retained heap per object. Retaking the five-
-  and ten-node runs the same way is what turns the per-Machine term into a
-  measurement.
+  per cluster that is 192 KiB of retained heap per object.
+
+  **The five-node run, retaken the same way, agrees.** Its slope drops from 35.3
+  to 15.5 MB per cluster and fits to 0.4%, and its 81.7 stored objects per
+  cluster work out at 190 KB of retained heap each — within 3.4% of the one-node
+  run's 196 KB. Two runs at different node counts now say the shard's memory is
+  its object count times something close to 190 KB, for objects that serialize
+  to a few kilobytes. Arithmetically the two slopes split into 1.32 MiB per
+  Machine plus 8.20 MiB per cluster, which is still a two-point split and still
+  not a measurement; [the ten-node run retaken with collection][ev50x5c] is the
+  third point.
+
+  Forcing a collection costs the shard CPU, and it lands on whichever checkpoint
+  forced it: the five-node run's CPU per cluster went from 20.2 seconds
+  uncollected to 22.2 collected. Runs from here on scrape either side of each
+  collection and record `kcpForcedCollectionCPUSeconds`, so that inflation is a
+  number to subtract rather than a bias to guess at.
 
   The managers are not collected before sampling, because they do not serve
   pprof, so their heap figures still carry the artefact. The shard is what runs
@@ -470,6 +486,7 @@ Not measured, and so not stated:
 [ev50x1b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-with-baseline.json
 [ev50x5b]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x5-with-baseline.json
 [ev50x1c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x1-collected.json
+[ev50x5c]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260831-210000-deployed-fleet-scale/evidence/deployed-all-50x5-collected.json
 
 [capacity]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/specs/20260815-211812-workspace-wiring-scale/evidence/capacity.md
 [constitution]: https://github.com/jimmidyson/kcp-cluster-api/blob/main/.specify/memory/constitution.md
