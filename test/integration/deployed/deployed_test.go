@@ -411,6 +411,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 	// "baseline (manager not started)". This is the deployed equivalent: the
 	// managers are up and have engaged nothing.
 	if components, err := scraper.SampleComponents(ctx, cl, options.Namespace, options.Components); err == nil {
+		settleKcpHeap(t, ctx, profilingCfg, report)
 		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
 			components = append(components, kcpSample)
 		}
@@ -471,6 +472,7 @@ func runDeployed(t *testing.T, plan scaletarget.Plan, options deployedscale.Opti
 		// and it is still the newer half; a run that measures four managers and
 		// says why it could not measure kcp is worth more than one that throws
 		// the managers away too.
+		settleKcpHeap(t, ctx, profilingCfg, report)
 		if kcpSample, err := deployedscale.KcpSample(ctx, kcpCfg, cl, options.Namespace); err == nil {
 			components = append(components, kcpSample)
 			// What the shard is holding, not just how big it got. "kcp needed
@@ -1124,6 +1126,36 @@ func findRepoRoot() (string, error) {
 // line and the report do not disagree about the same number.
 func formatFloat(v float64) string {
 	return fmt.Sprintf("%.1f goroutines per workspace", v)
+}
+
+// settleKcpHeap asks the shard to collect before it is sampled, so that the
+// live heap in the sample means the same thing at every checkpoint and in every
+// run.
+//
+// Three runs at one, five and ten nodes per cluster each fitted their own heap
+// samples cleanly and then disagreed with each other: the five-node run priced
+// a cluster at 35.3 MB and the ten-node run, with twice the Machines, at 13.6.
+// What differed was where the collector happened to be — 73% of heapSys live at
+// one sample against 52% at the other — and no amount of care about the fits
+// could recover from it. See deployedscale.CollectGarbage.
+//
+// Best effort, and said out loud either way: a run whose heap figures are
+// post-collection and a run whose are not should not be compared, so the report
+// carries which it is.
+func settleKcpHeap(t *testing.T, ctx context.Context, cfg *rest.Config, report *deployedscale.Report) {
+	t.Helper()
+	if err := deployedscale.CollectGarbage(ctx, cfg); err != nil {
+		if _, already := report.Facts["kcpHeapSample"]; !already {
+			report.AddFact("kcpHeapSample", "as scraped, with no collection forced first: "+err.Error()+
+				" — heap figures include whatever had not been collected and are not comparable with "+
+				"other runs")
+			t.Logf("NOTE: the shard would not collect on request (%v), so this run's heap figures "+
+				"carry the collector's timing", err)
+		}
+		return
+	}
+	report.AddFact("kcpHeapSample", "after a forced collection (/debug/pprof/heap?gc=1), so live heap "+
+		"is the retained set")
 }
 
 // captureKcpHeap writes the shard's heap profile beside the report and

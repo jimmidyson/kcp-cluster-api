@@ -15,6 +15,7 @@ Every run with an evidence file, and what it measured:
 | `deployed-all-20x10.json` | 200 | 10 (the target, packed) |
 | `deployed-all-50x10.json` | 50 | 1, at **ten nodes each** — the first run to sample kcp idle |
 | `deployed-all-50x1-with-baseline.json` | 50 | 1, at one node each — the same run at a second node count |
+| `deployed-all-50x5-with-baseline.json` | 50 | 1, at five nodes each — and a third |
 
 `deployed-core-8x1.json` comes first because a second instrument nobody has
 checked is worth less than the one it was meant to corroborate.
@@ -150,9 +151,11 @@ Whatever kcp is holding, it is holding it on the Go heap.
 each, completed inside the same 4 GiB limit. Twenty-five workspaces of ten
 nodes did not. Workspace count is close to free; machine count is not.
 
-**The marginal cost is 13.0 MiB of live heap per cluster of ten nodes**, from
-`deployed-all-50x10.json` — the first run to sample the shard before it had
-anything to serve.
+**The first run to sample the shard before it had anything to serve** was
+`deployed-all-50x10.json`, at ten nodes per cluster. Read on its own it prices a
+cluster at 13.0 MiB of live heap; read against the two runs that followed it,
+that number is an artefact of when the collector last ran, which is the section
+after this one.
 
 | | goroutines | live heap | resident | CPU |
 |---|--:|--:|--:|--:|
@@ -162,104 +165,120 @@ anything to serve.
 | 50 workspaces, 500 Machines | 8,357 | 1.78 GiB | 3.60 GiB | 1,427s |
 
 The three loaded samples lie on their line to within 1.4% of the range they
-span, which is the tightest memory fit this harness has taken.
+span, which is the tightest memory fit this harness has taken — and it is a
+tight fit to the wrong quantity.
 
-### The same fifty clusters at one node each
+### The same fifty clusters at one, five and ten nodes each
 
-`deployed-all-50x1-with-baseline.json` repeats it with a single node per
-cluster, so the two runs differ in one variable — Machines per cluster, ten
-against one.
+`deployed-all-50x1-with-baseline.json` and `deployed-all-50x5-with-baseline.json`
+repeat the ten-node run at other node counts, so three runs differ in one
+variable — Machines per cluster.
 
-| per cluster | 1 node | 10 nodes | residual, 1 node | residual, 10 nodes |
-|---|--:|--:|--:|--:|
-| goroutines | 52.0 | 51.8 | 0.3% | 0.0% |
-| live heap | 7.6 MiB | 13.0 MiB | 14.1% | 1.4% |
-| resident | 17.5 MiB | 37.7 MiB | 4.4% | 7.0% |
-| CPU seconds | 10.6 | 27.7 | 0.3% | 0.8% |
+Per cluster, with each run's own worst residual beside it:
 
-**Machines cost the shard no goroutines at all.** Nine more of them per cluster
-moved the per-cluster figure by 0.2 goroutines out of 52 — 0.4%, the same order
-as the 21-goroutine difference between the two runs' idle shards, and in the
-direction of *fewer*. Whatever those ~52 goroutines
-are, they are per logical cluster and not per object in it. (Both runs put one
-cluster in each workspace, so for kcp this figure cannot yet be told from a
-per-*workspace* cost. The run that would separate them is fifty clusters packed
-ten to a workspace, with a baseline.)
+| per cluster | 1 node | 5 nodes | 10 nodes |
+|---|--:|--:|--:|
+| goroutines | 52.05 (0.3%) | 52.33 (0.1%) | 51.84 (0.0%) |
+| CPU seconds | 10.63 (0.3%) | 20.23 (0.5%) | 27.71 (0.8%) |
+| live heap | 7.6 MiB (14.1%) | 33.7 MiB (2.5%) | 13.0 MiB (1.4%) |
+| resident | 17.5 MiB (4.4%) | 34.9 MiB (2.1%) | 37.7 MiB (7.0%) |
 
-**Machines cost CPU, and that is where they mostly land.** 10.6 CPU-seconds per
-cluster at one node, 27.7 at ten, both fitted to under 1% — so about 1.9
-CPU-seconds of shard time per Machine over a five-minute provisioning window,
-against 8.7 for the cluster itself.
+**A Machine costs the shard no goroutines.** Three runs, spanning a tenfold
+change in Machines per cluster, agree on 52 per cluster to within 1% — and the
+middle one is the highest, so there is not even a trend to argue about. Whatever
+those goroutines are, they are per logical cluster and not per object in it.
+(This is stated as three figures agreeing rather than as a fitted slope on
+purpose: a flat series has almost no range, so the residual test that guards
+every other fit here is meaningless against it. The spread is 0.49 goroutines.)
 
-**Machines cost memory, but not most of it.** Nine extra Machines take a
-cluster from 7.6 to 13.0 MiB of live heap: 72% more, not 900% more. On resident
-it is 115% more. Either way a Machine is worth something like a tenth of a bare
-cluster, and the bulk of what a cluster costs the shard is the cluster.
+**A Machine costs 1.5 to 2.4 CPU-seconds** to provision. The three per-cluster
+figures are 10.6, 20.2 and 27.7, so the first four Machines cost 2.4 CPU-seconds
+each and the next five cost 1.5 — the shard gets cheaper per Machine as clusters
+get bigger, which is why this is a range and not a slope. A straight line
+through the three reads 1.88 per Machine plus 9.5 per cluster and misses by
+7.8%.
 
-What this does **not** do is give a per-Machine figure. Splitting `per cluster
-= a + b x nodes` from two node counts is a two-point fit, and a two-point fit is
-what this repository refuses everywhere else: it passes exactly through both
-points and has no residual to be judged by. The arithmetic gives 7.0 MiB per
-cluster plus 0.60 MiB per Machine on live heap, and 15.3 plus 2.24 on resident,
-and neither is quoted as a measurement here. A third node count — 50 clusters at
-three or five nodes, with a baseline — makes it one.
+**And a Machine's memory cost is still not measured — but the reason is now
+identified rather than suspected.**
 
-**It also does not give a memory series both runs agree on.** The gate added
-with these runs refused kcp's resident fit in the ten-node run (7.0%) and its
-heap fit in the one-node run (14.1%) — opposite series, opposite runs. So the
-split above rests on one refused slope whichever series it is drawn from. The
-two quantities that split cleanly, goroutines and CPU, are the two whose four
-slopes all passed.
+### Live heap sampled at a checkpoint is not comparable between runs
+
+The three heap slopes are 7.6, 33.7 and 13.0 MiB per cluster. The five-node run
+prices a cluster at more than twice what the ten-node run does, with half the
+Machines in it. That is not a fleet behaving strangely; it is the instrument.
+
+Each run fitted its own samples well — 14.1%, 2.5% and 1.4% — because within a
+run the collector's state is roughly consistent from checkpoint to checkpoint.
+Between runs it is not. At each run's last sample, live heap as a fraction of
+what the runtime had taken from the OS was:
+
+| | 1 node | 5 nodes | 10 nodes |
+|---|--:|--:|--:|
+| live heap / heapSys | 55% | 73% | 52% |
+
+The five-node run was scraped near the top of a collection cycle and the other
+two after one. `go_memstats_heap_alloc_bytes` is what has been allocated and not
+yet freed, so it carries that timing into every figure derived from it.
+
+Resident memory does not have that problem — 17.5, 34.9, 37.7 MiB per cluster is
+at least monotonic — but it has the opposite one: it carries the collector's
+headroom, and at ten nodes it carries the GOMEMLIMIT ceiling as well. A
+two-term model fitted to those three misses by 27.8%.
+
+**So the harness now spends a collection to get an answer.** Before each sample
+it asks the shard to collect, through net/http/pprof's own `?gc=1`, and every
+heap figure taken afterwards is the retained set rather than the retained set
+plus whatever had not been swept. See `deployedscale.CollectGarbage`. Runs taken
+before that change carry no `kcpHeapSample` fact and should not be compared with
+runs taken after it, which say so on their face.
+
+Three runs and a third node count were spent to find this out, which is the
+result: **the two quantities that survive contact with a second run are the two
+that do not depend on when the collector last ran.**
 
 ### What one Machine costs, as far as it is known
 
-- **0 goroutines.** Measured, at two node counts.
-- **~1.9 CPU-seconds** to provision. Measured, at two node counts.
-- **Somewhere between 0.6 and 2.2 MiB of memory**, depending on which series
-  is believed, from a two-point split that is not a measurement.
+- **0 goroutines.** Measured, at three node counts, agreeing to 1%.
+- **1.5 to 2.4 CPU-seconds** to provision, falling as clusters get larger.
+  Measured, at three node counts.
+- **Memory: not measured.** Three node counts produced three incomparable heap
+  slopes. What can be said is that a cluster costs the shard tens of MiB and
+  that Machines are a part of it rather than the bulk: the one-node run prices a
+  bare cluster at 17.5 MiB resident against 37.7 MiB for a ten-node one, so nine
+  Machines roughly double a cluster and do not multiply it.
 
-The figure quoted before this second run — 1.30 MiB per Machine, from
-attributing the whole of a ten-node cluster's 13.0 MiB to its Machines — is an
-overstatement, as the assumption behind it said it might be. A one-node cluster
-already costs 7.6 MiB before it has more than one Machine in it.
+Three earlier per-Machine figures have now been withdrawn: 4 to 8 MiB (fitted
+against heapSys, so tracking the collector), 1.6 MiB (a two-point delta on live
+heap), and 1.30 MiB (the whole of a ten-node cluster attributed to its
+Machines). Each was a plausible number derived from a series that could not
+support it.
 
-Two earlier figures were withdrawn before that, and both for the same reason:
-they were differences between large numbers with nothing measured at zero.
+### The idle sample is not a point on the loaded line, and the fits leave it out
 
-The first, 4 to 8 MiB, was fitted against heapSys — what the runtime has taken
-from the OS, which bundles the collector's headroom with the live set. That
-headroom grew from 1.44x to 1.85x of live during those runs, so the figure was
-tracking the collector rather than the objects.
+The rule these runs added is that a fit runs over the loaded samples only, with
+the idle sample reported beside it. An idle process has not built the caches,
+watches and decoded schemas the first bound workspace makes it build, so the
+step from nothing to something is not the first stride of the line that follows.
 
-The second, 1.6 MiB per Machine, was a two-point delta on live heap. It happens
-to sit inside the range above, which is luck rather than method: the same
-arithmetic on the first two points of the ten-node run gives 6.7 MiB.
+**For the managers the step is real and the rule is corroborated.**
+core-manager idles at 352 goroutines where its loaded line puts 399, and
+including the idle point drags the slope from 17.0 to 17.8 goroutines per
+cluster. 17.0 is what the 25x1 and 50x1 runs measured before a baseline sample
+existed, and 17.0 is what all three baselined runs now report. The other three
+managers behave the same way. A manager at rest has not started the controllers
+a workspace makes it start; that is a step, and fitting through it prices it as
+fleet.
 
-### The idle sample is not a fourth point on the line
+**For the shard's goroutines there is no step to speak of.** kcp's loaded fits
+put the intercept at 5,715, 5,750 and 5,765 against idle samples of 5,736, 5,802
+and 5,757 — within 1% every time. The 52 goroutines per cluster sit on top of a
+shard that already had all of them before the first workspace arrived.
 
-It sits 701 MiB below where the loaded samples put the intercept: the fit's own
-fixed cost is 1.19 GiB and the process idles at 478.8 MiB. So the shard does not
-grow smoothly out of nothing — binding the first workspaces costs it most of a
-gigabyte, and every cluster after that costs 13 MiB.
-
-That step is why the fits here are taken over the loaded samples only, with the
-idle sample reported beside them rather than inside them. Drawing one line
-across both regimes nearly doubles the slope (25.5 MiB per cluster) while
-missing the idle point it was fitted through by 290 MB.
-
-**The change is checked against figures that were already established.** Fitted
-across all four points, this run put core-manager at 17.8 goroutines per
-cluster; over the loaded three it reads 17.0 — which is exactly what the 25x1
-and 50x1 runs measured, twice, before a baseline sample existed. The other three
-managers move the same way, from 25.6/47.0/31.2 to 25.0/47.1/31.0. Excluding the
-idle point does not just tidy the memory fit; it restores the goroutine figures
-this file already had.
-
-What the run does **not** resolve is what that 701 MiB step is made of. A
-shard binding its first workspaces is building caches, discovery and decoded
-schemas, and it is also allocating hard: 4.4 cores were busy through the first
-checkpoint. Live heap counts both what is retained and what has not been
-collected yet.
+**And for the shard's heap the step is not a quantity at all.** Measured three
+ways it is 219, 50 and 701 MiB. An earlier version of this file reported the
+last of those as a finding — "binding the first workspaces costs most of a
+gigabyte" — on one run's evidence. Three runs say it is the same collector
+artefact as everything else in the heap column, and it is withdrawn.
 
 ### Two caveats on the numbers above
 
@@ -274,35 +293,33 @@ reason.** The same three samples miss their resident line by 7% of its range,
 against 1.4% for live heap, because resident carries the collector's headroom
 and, at the top point, the ceiling. A limit is still set against resident — it
 is in the table above — but it is not a cost per cluster and the harness no
-longer prints it as one. In the one-node run the two swap places: resident fits
-at 4.4% and heap misses at 14.1%. Neither series is dependably the good one,
-which is why the check is applied per series per run rather than settled once.
+longer prints it as one. In the one-node run the two swap places — resident fits
+at 4.4% and heap misses at 14.1% — and in the five-node run both fit, at 2.1%
+and 2.5%. Neither series is dependably the good one, which is why the check is
+applied per series per run rather than settled once.
 
-**The idle heap sample is noisier than the idle process.** The two runs
-measured the same idle shard at 478.8 MiB and 347.0 MiB of live heap — a 38%
-spread — while their idle resident agreed to 2.5%, 733.5 against 751.6 MiB.
+**The idle heap sample is noisier than the idle process.** The three runs
+measured the same idle shard at 478.8, 347.0 and 481.7 MiB of live heap — a 38%
+spread — while their idle resident agreed to within 3.7%: 733.5, 751.6 and 760.4 MiB.
 Live heap at any instant depends on where the collector is in its cycle, and
 with nothing running there is nothing to smooth it. The fitted fixed cost is
 the more stable statement about a loaded shard than the idle heap sample is.
 
-### Roughly 120 KiB per stored object
+### Of the order of 100 KiB of heap per stored object
 
-The shard held 5,677 objects at 50 workspaces of ten nodes — 500 Machines, 500
-DevMachines, 457 KubeadmConfigs, 759 Secrets, 1,867 Events and the rest — which
-is about 113 objects per cluster. Against 13.0 MiB per cluster that is roughly
-120 KiB of live heap per stored object, for objects that serialize to a few
-kilobytes.
+The shard held 2,276 objects at fifty one-node clusters, 4,204 at five nodes and
+5,677 at ten — 45.5, 84.1 and 113.5 per cluster, so between six and ten stored
+objects per Machine once the Events are counted.
 
-The one-node run is the same ratio from a different direction: 2,276 objects,
-45.5 per cluster, against 7.6 MiB — 170 KiB per object. And the difference
-between the runs is 7.6 more stored objects per extra Machine for 0.60 MiB of
-heap, which is 82 KiB each. Three arithmetics on two runs, all landing between
-80 and 170 KiB per stored object.
+Divided into each run's heap slope, that is 170, 410 and 117 KiB per stored
+object. The spread is the same collector artefact as everything else in this
+section, so the honest statement is an order of magnitude and not a figure:
+**something like 10^5 bytes of live heap per stored object**, for objects that
+serialize to a few kilobytes. The withdrawn 400 KiB figure was inside that band
+by accident, having counted only four objects per Machine and no Events at all.
 
-The withdrawn 400 KiB figure counted only four objects per Machine and ignored
-the events, so it overstated the ratio by more than three times. 120 KiB is
-still one to two orders of magnitude above the serialized size, and the profile
-below says where it goes.
+That ratio, not the fleet size, is what makes the shard the thing that binds.
+The profile says where it goes.
 
 ### The profile says what it is
 
@@ -441,9 +458,10 @@ is 2.00 x 90 — the per-workspace term, visible directly in the measurements.
   only at fifty clusters. The 200x50 target is 10,000 Machines; the largest
   fleet any run here has held is 500 Machines, and it did so against its
   ceiling.
-- **Not a per-Machine memory figure.** Two node counts split a per-cluster cost
-  from a per-Machine one only through a two-point fit, which this repository
-  does not publish. A third node count makes it a measurement.
+- **Not a per-Machine memory figure.** Three node counts produced three heap
+  slopes that disagree by a factor of four in the wrong direction, because live
+  heap read from `/metrics` carries the collector's timing. The instrument now
+  forces a collection before it samples; no run taken that way exists yet.
 - **Not a per-cluster figure for kcp, strictly.** Every run that has sampled the
   shard put one cluster in each workspace, so its 52 goroutines and 13.0 MiB
   could as truthfully be called per workspace. The managers have been measured

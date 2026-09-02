@@ -894,6 +894,54 @@ func ScrapeKcp(ctx context.Context, cfg *rest.Config) (ProcessSample, error) {
 	return ParseProcessSample(resp.Body)
 }
 
+// CollectGarbage asks the shard to run a garbage collection, so that the live
+// heap sampled straight afterwards is the retained set.
+//
+// # Why a measurement perturbs the thing it measures, on purpose
+//
+// go_memstats_heap_alloc_bytes is what has been allocated and not yet freed at
+// the instant of the scrape, which is the retained set plus whatever the
+// collector has not got to. Within a run that is stable enough to fit: three
+// runs at one, five and ten nodes per cluster fitted their own heap samples to
+// 14.1%, 2.5% and 1.4% of their range. Across runs it is not stable at all.
+// The five-node run's slope came out at 35.3 MB per cluster against the
+// ten-node run's 13.6, so half as many Machines appeared to cost two and a half
+// times as much — and the heap-to-heapSys ratio at those two samples was 73%
+// against 52%, which says plainly that one was scraped near the top of a cycle
+// and the other after one.
+//
+// Three runs could not answer what a Machine costs because of this. So the
+// harness now spends a collection to get an answer, and every heap figure taken
+// after this call means the same thing as every other.
+//
+// `gc=1` is net/http/pprof's own parameter: the heap handler calls runtime.GC()
+// before writing. The profile it then writes is discarded — it is the
+// collection that is wanted, and the run captures its profile separately.
+func CollectGarbage(ctx context.Context, cfg *rest.Config) error {
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		return fmt.Errorf("building a client for the shard: %w", err)
+	}
+	url := kcpconfig.BaseHost(cfg.Host) + "/debug/pprof/heap?gc=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("building the request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("asking %s to collect: %w", url, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a response body.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048)) //nolint:errcheck // best effort.
+		return fmt.Errorf("asking %s to collect: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	// The body is the profile, and it is not wanted. Draining it lets the
+	// connection be reused rather than torn down under a forwarded tunnel.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<20)) //nolint:errcheck // discarded by intent.
+	return nil
+}
+
 // KcpSample pairs the shard's process metrics with its pod's facts, so it can
 // be reported and fitted exactly like a manager.
 func KcpSample(ctx context.Context, cfg *rest.Config, cl client.Client, namespace string) (ComponentSample, error) {

@@ -746,3 +746,50 @@ func TestFetchProfileAddressesTheShardAndReportsRefusals(t *testing.T) {
 		t.Error("an empty body was accepted as a profile")
 	}
 }
+
+// TestCollectGarbageAsksTheShardToCollectBeforeItIsMeasured is the fix for the
+// thing that stopped three runs from answering what a Machine costs.
+//
+// Live heap read from /metrics is whatever had been allocated and not yet
+// collected at the instant of the scrape. Within one run that is stable enough
+// to fit — the three runs at one, five and ten nodes per cluster fitted their
+// own samples to 14.1%, 2.5% and 1.4%. Across runs it is not: the five-node
+// run's slope came out at 35.3 MB per cluster and the ten-node run's at 13.6,
+// so a fleet with half the Machines in it appeared to cost two and a half times
+// as much. The heap-to-heapSys ratio at those two samples was 73% and 52%,
+// which is the whole story: one was scraped near the top of a collection cycle
+// and the other after one.
+//
+// So the shard is asked to collect first. `?gc=1` is net/http/pprof's own
+// parameter for it — the handler calls runtime.GC() before writing the profile
+// — and after it, live heap is the retained set rather than the retained set
+// plus whatever has not been swept.
+func TestCollectGarbageAsksTheShardToCollectBeforeItIsMeasured(t *testing.T) {
+	var got []string
+	code := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte("a heap profile"))
+	}))
+	defer server.Close()
+
+	cfg := &rest.Config{Host: server.URL + "/clusters/root"}
+	if err := CollectGarbage(t.Context(), cfg); err != nil {
+		t.Fatalf("forcing a collection: %v", err)
+	}
+	if len(got) != 1 || got[0] != "/debug/pprof/heap?gc=1" {
+		t.Errorf("requested %v, want [/debug/pprof/heap?gc=1] — without gc=1 the handler "+
+			"writes a profile and collects nothing, and the sample that follows is unchanged", got)
+	}
+
+	// A refusal is an error rather than a silent no-op: a run that thinks it
+	// sampled a collected heap and did not would publish the same
+	// incomparable figures while claiming they were comparable.
+	code = http.StatusForbidden
+	if err := CollectGarbage(t.Context(), cfg); err == nil {
+		t.Error("a refused collection returned no error")
+	} else if !strings.Contains(err.Error(), "403") {
+		t.Errorf("the error does not name the status: %v", err)
+	}
+}
