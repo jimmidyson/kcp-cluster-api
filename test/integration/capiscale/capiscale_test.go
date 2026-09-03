@@ -117,7 +117,9 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	report.AddFact("nodesPerCluster", fmt.Sprint(*nodesPer))
 	report.AddFact("clustersPerNamespace", fmt.Sprint(*perNamespace))
 	report.AddFact("endState", "every control plane ready and every Machine Ready")
-	report.AddFact("heapSample", "after a forced collection, so live heap is the retained set")
+	report.AddFact("heapSample", "every controller's is read through pprof with gc=1, so live heap is "+
+		"the retained set; the API server's line says for itself, since the collection it needs is a "+
+		"separate best-effort request")
 
 	sampler, err := upstreamscale.NewSampler(cfg)
 	if err != nil {
@@ -178,6 +180,23 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 			Label: label, Workspaces: clusters, Clusters: clusters, Nodes: machines,
 			Components: components,
 		})
+	}
+
+	// Defragment before the baseline, not only between rungs.
+	//
+	// The quota counts the backend file rather than the live data in it, so a
+	// store carrying a previous run's free pages makes the baseline and the
+	// first rung incomparable with every rung after the first defrag. The
+	// second real run showed exactly that: etcd at 32.6 MiB holding two
+	// clusters and 14.1 MiB holding four, which reads as a store shrinking as
+	// the fleet grows. Before the baseline is not inside a rung, so R6a's rule
+	// holds — and a run whose etcd column is not comparable across its own
+	// rungs has no etcd column.
+	if results, err := defragmenter.All(ctx, cl, sampler); err == nil {
+		report.AddFact("defrag@baseline", upstreamscale.DescribeDefrag(results))
+		t.Logf("%s", upstreamscale.DescribeDefrag(results))
+	} else {
+		t.Logf("NOTE: could not defragment before the baseline: %v", err)
 	}
 
 	// The baseline, before any fleet exists. Every slope this run reports is a
