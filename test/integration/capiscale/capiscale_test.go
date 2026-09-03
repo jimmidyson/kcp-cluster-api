@@ -226,26 +226,41 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		}
 
 		t.Logf("=== rung: %d clusters, %d Machines", clusters, machines)
+
+		// Creation is timed apart from convergence, because the driver
+		// applying a rung's objects through one client is itself work and the
+		// spec names it as a candidate bottleneck. A total that cannot be
+		// split is not a measurement of Cluster API. See RungResult.
+		startedCreate := time.Now()
 		if err := create(ctx, cl, fleet, &created); err != nil {
 			rungs = append(rungs, upstreamscale.RungResult{
 				Clusters: clusters, Machines: machines,
-				Failure: "the fleet could not be created: " + err.Error(),
+				CreatedIn: time.Since(startedCreate),
+				Failure:   "the fleet could not be created: " + err.Error(),
 			})
 			break
 		}
+		createdIn := time.Since(startedCreate)
+		t.Logf("    created in %s", createdIn.Round(time.Second))
 
+		startedWait := time.Now()
 		converged, why := wait(ctx, t, cl, sampler, controllers, clusters, machines)
+		rung := upstreamscale.RungResult{
+			Clusters: clusters, Machines: machines, Converged: converged,
+			CreatedIn: createdIn, WaitedFor: time.Since(startedWait),
+		}
+		label := fmt.Sprintf("%d clusters", clusters)
 		if !converged {
-			sample(fmt.Sprintf("%d clusters (did not converge)", clusters), clusters, machines)
-			rungs = append(rungs, upstreamscale.RungResult{
-				Clusters: clusters, Machines: machines, Failure: why,
-			})
+			rung.Failure = why
+			label += " (did not converge)"
+		}
+		sample(label, clusters, machines)
+		report.AddFact(fmt.Sprintf("rung@%d", clusters), rung.Timing())
+		t.Logf("    %s", rung.Timing())
+		rungs = append(rungs, rung)
+		if !converged {
 			break
 		}
-		sample(fmt.Sprintf("%d clusters", clusters), clusters, machines)
-		rungs = append(rungs, upstreamscale.RungResult{
-			Clusters: clusters, Machines: machines, Converged: true,
-		})
 	}
 
 	ceiling := upstreamscale.Summarise(rungs)

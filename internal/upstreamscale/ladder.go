@@ -19,6 +19,7 @@ package upstreamscale
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
@@ -51,6 +52,53 @@ type RungResult struct {
 	Machines  int    `json:"machines"`
 	Converged bool   `json:"converged"`
 	Failure   string `json:"failure,omitempty"`
+
+	// CreatedIn is how long the driver took to apply this rung's objects, and
+	// WaitedFor is how long the fleet then took to reach the end state — or
+	// how long it ran before it was given up on.
+	//
+	// # Why the two are separate
+	//
+	// Time to converge is the headline answer to "can one management cluster
+	// hold this fleet": a rung that arrives in four minutes and one that
+	// arrives in forty are not the same result. But a single total cannot be
+	// read, because the spec's own risk list names the driver as a candidate
+	// bottleneck — creating a rung's worth of objects through one client is
+	// work — and a run that cannot separate its own object creation from
+	// Cluster API's reconciliation is not measuring Cluster API.
+	//
+	// WaitedFor is also worth having on a failure. "OOM killed" reads
+	// differently after four minutes than after forty: the first is a fleet
+	// the component could not hold at all, the second one it degraded under.
+	CreatedIn time.Duration `json:"createdIn"`
+	WaitedFor time.Duration `json:"waitedFor"`
+}
+
+// Total is the whole cost of the rung in wall time, the driver's share
+// included.
+func (r RungResult) Total() time.Duration { return r.CreatedIn + r.WaitedFor }
+
+// PerCluster is the pace that lets a reader extrapolate to the next rung.
+//
+// Zero for a rung that did not converge, whatever its clock says: dividing the
+// time a fleet failed to arrive in by the fleet it did not reach produces a
+// number that looks like a rate and is not one.
+func (r RungResult) PerCluster() time.Duration {
+	if !r.Converged || r.Clusters == 0 {
+		return 0
+	}
+	return r.WaitedFor / time.Duration(r.Clusters)
+}
+
+// Timing is what the report carries beside each rung.
+func (r RungResult) Timing() string {
+	created := r.CreatedIn.Round(time.Second)
+	waited := r.WaitedFor.Round(time.Second)
+	if !r.Converged {
+		return fmt.Sprintf("created in %s, then gave up after %s", created, waited)
+	}
+	return fmt.Sprintf("created in %s, converged in %s (%s per cluster)",
+		created, waited, r.PerCluster().Round(time.Millisecond))
 }
 
 // Classify says why a rung did not converge, in the terms an operator acts on.
@@ -130,14 +178,14 @@ func (c Ceiling) Describe() string {
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane ready and every Machine Ready.",
-		c.LastGood.Clusters, c.LastGood.Machines)
+	fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane ready and every Machine "+
+		"Ready, %s.", c.LastGood.Clusters, c.LastGood.Machines, c.LastGood.Timing())
 	if c.Failed == nil {
 		b.WriteString(" **That is a floor, not a ceiling**: no rung failed, so the largest fleet " +
 			"tried is the largest measured and not the largest possible.")
 		return b.String()
 	}
-	fmt.Fprintf(&b, " The next rung, %d clusters and %d Machines, did not: %s.",
-		c.Failed.Clusters, c.Failed.Machines, c.Failed.Failure)
+	fmt.Fprintf(&b, " The next rung, %d clusters and %d Machines, did not: %s (%s).",
+		c.Failed.Clusters, c.Failed.Machines, c.Failed.Failure, c.Failed.Timing())
 	return b.String()
 }

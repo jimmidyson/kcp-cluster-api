@@ -19,6 +19,7 @@ package upstreamscale
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
@@ -128,5 +129,77 @@ func TestTheCeilingIsTheLastRungThatConverged(t *testing.T) {
 	}
 	if !strings.Contains(none.Describe(), "nothing") {
 		t.Errorf("a climb that converged nowhere does not say so: %q", none.Describe())
+	}
+}
+
+// TestARungRecordsHowLongItTookAndSeparatesTheDriversShare.
+//
+// Time to converge is the headline number for "can one management cluster hold
+// this fleet" — a rung that arrives in four minutes and one that arrives in
+// forty are not the same result, and the ladder recorded neither. It is also
+// the number that has to be split: the spec's own risk list says the driver
+// creating a rung's objects through one client may be the bottleneck, and one
+// total cannot tell that apart from Cluster API being slow.
+func TestARungRecordsHowLongItTookAndSeparatesTheDriversShare(t *testing.T) {
+	rung := RungResult{
+		Clusters: 100, Machines: 1000, Converged: true,
+		CreatedIn: 30 * time.Second, WaitedFor: 5 * time.Minute,
+	}
+	if got := rung.Total(); got != 5*time.Minute+30*time.Second {
+		t.Errorf("total = %s, want 5m30s", got)
+	}
+	// The pace that lets a reader extrapolate to the next rung.
+	if got := rung.PerCluster(); got != 3*time.Second {
+		t.Errorf("per cluster = %s, want 3s", got)
+	}
+	timing := rung.Timing()
+	for _, want := range []string{"30s", "5m0s", "3s per cluster"} {
+		if !strings.Contains(timing, want) {
+			t.Errorf("timing does not carry %q: %q", want, timing)
+		}
+	}
+}
+
+// TestAFailedRungSaysHowLongItRanBeforeGivingUp. "OOM killed" reads differently
+// after four minutes than after forty: the first is a fleet the component could
+// not hold at all, the second is one it degraded under.
+func TestAFailedRungSaysHowLongItRanBeforeGivingUp(t *testing.T) {
+	rung := RungResult{
+		Clusters: 200, Machines: 2000,
+		CreatedIn: time.Minute, WaitedFor: 45 * time.Minute,
+		Failure: "capd-controller-manager was OOM killed",
+	}
+	timing := rung.Timing()
+	if !strings.Contains(timing, "45m0s") {
+		t.Errorf("timing does not say how long it ran: %q", timing)
+	}
+	// Not "converged in": it did not.
+	if strings.Contains(timing, "converged in") {
+		t.Errorf("a failed rung reported a convergence time: %q", timing)
+	}
+	if strings.Contains(timing, "per cluster") {
+		t.Errorf("a pace was quoted for a fleet that never arrived: %q", timing)
+	}
+}
+
+// TestTheCeilingSentenceCarriesTheTiming, because the sentence a report leads
+// with is where a fleet size that took forty minutes has to say so.
+func TestTheCeilingSentenceCarriesTheTiming(t *testing.T) {
+	ceiling := Summarise([]RungResult{{
+		Clusters: 50, Machines: 500, Converged: true,
+		CreatedIn: 20 * time.Second, WaitedFor: 8 * time.Minute,
+	}})
+	if got := ceiling.Describe(); !strings.Contains(got, "8m0s") {
+		t.Errorf("the ceiling sentence has no timing in it: %q", got)
+	}
+}
+
+func TestPerClusterIsZeroWhenThereIsNothingToDivide(t *testing.T) {
+	if got := (RungResult{Converged: true, WaitedFor: time.Minute}).PerCluster(); got != 0 {
+		t.Errorf("per cluster = %s with no clusters", got)
+	}
+	// And a rung that never converged has no pace, whatever its clock says.
+	if got := (RungResult{Clusters: 10, WaitedFor: time.Minute}).PerCluster(); got != 0 {
+		t.Errorf("per cluster = %s for a fleet that did not arrive", got)
 	}
 }
