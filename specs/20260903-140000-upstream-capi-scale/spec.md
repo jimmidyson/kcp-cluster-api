@@ -107,12 +107,15 @@ Cluster API:
   the forced-collection discipline the kcp runs ended up needing, for free.
 - **Resident memory from the cluster**, since pprof cannot give it:
   `metrics.k8s.io` working-set bytes per pod.
-- **Patched provider manifests.** The released `DevCluster` provider deployment
-  mounts `/var/run/docker.sock` from the host and runs `privileged: true`,
-  because it is the Docker provider and the in-memory backend is a mode of it.
-  On an ordinary containerd node there is no such socket. The harness removes
-  the mount, the volume and the privilege, and asserts they are gone — a test
-  that fails loudly beats a provider that cannot schedule.
+- **Patched controller manifests — all four of them, in two different ways.**
+  Every controller gets Guaranteed resources, a GOMEMLIMIT below its limit and a
+  pprof endpoint; those three are how the run is measured at all and how its
+  rungs stay comparable. One of them additionally loses the Docker socket: the
+  released `DevCluster` provider mounts `/var/run/docker.sock` from the host and
+  runs `privileged: true`, because it is the Docker provider and the in-memory
+  backend is a mode of it, and there is no such socket on a containerd node.
+  `cmd/capiscale-prepare` does both, idempotently, from the same functions the
+  unit tests cover.
 - **The management cluster's API server and etcd as measured components.** The
   kcp runs found the shard, not the controllers, was what ran out, and that its
   memory was the unstructured representation of CRD-backed objects at roughly
@@ -126,6 +129,17 @@ Cluster API:
   the namespaces it owns and the Cluster API namespaces `clusterctl` creates.
 - **R2** Provider versions are pinned and recorded in the report. A figure
   without the version it was measured on is not a figure.
+- **R2a** The cluster under test runs the scale test's providers only — core,
+  both kubeadm providers, and docker for `DevCluster`. The providers that built
+  it (CAPX, CAREN) stay on the kind bootstrap cluster, and nothing is pivoted:
+  a self-managed cluster would have them reconciling against the API server the
+  measurement is reading. No CSI is installed; nothing here asks for a
+  PersistentVolume.
+- **R2b** etcd's backend quota is raised through a copy of CAREN's ClusterClass
+  rather than an edit of it. CAREN has no variable for the quota, and the
+  ClusterClass it supplies is managed by whatever installed it — so an edit is
+  liable to be reverted underneath a running experiment, which would present as
+  a cluster that got slower halfway up the ladder.
 - **R3** The `DevCluster` provider runs with one replica, on a node the run may
   be told to require by label, and its in-memory mux advertises its pod IP. The
   mux allocates one port per workload cluster from 20000-30000, so **10,000
