@@ -107,3 +107,67 @@ func TestASoakNeedsMoreThanOneSample(t *testing.T) {
 		t.Errorf("a soak with one sample does not say it measured nothing: %q", drift.Describe())
 	}
 }
+
+// TestASoakSeesAnExcursionThatCameBack.
+//
+// The 1600-cluster soak reported "nothing drifted" while core's retained heap
+// went 1.65 GB, 3.19, 3.46, 1.61, 1.60, 1.61 — it more than doubled in the
+// middle and came home. First against last is blind to that, and a component
+// that doubles under a held fleet is the most interesting thing a soak can
+// find: it is the shape of a leak that gets collected, or of work arriving in
+// bursts nobody asked for.
+//
+// So the peak is carried too, and a peak excursion counts as drift even when
+// the endpoints agree.
+func TestASoakSeesAnExcursionThatCameBack(t *testing.T) {
+	samples := []deployedscale.Sample{
+		held(0, 25138, 1_772_000_000),
+		held(5, 25064, 1_793_000_000),
+		held(10, 25060, 3_425_000_000),
+		held(15, 25061, 3_715_000_000),
+		held(20, 25061, 1_729_000_000),
+		held(30, 25061, 1_729_000_000),
+	}
+	got := Drift(samples, 1600, 1600)
+	if len(got.Components) != 1 {
+		t.Fatalf("%d components, want 1", len(got.Components))
+	}
+	c := got.Components[0]
+
+	// Endpoints agree, which is what made this invisible.
+	if c.HeapGrowth > 0.05 || c.HeapGrowth < -0.05 {
+		t.Fatalf("end-to-end heap growth = %.2f, the fixture is meant to come home", c.HeapGrowth)
+	}
+	if c.PeakHeapBytes != 3_715_000_000 {
+		t.Errorf("peak heap = %d, want the 3.7 GB sample", c.PeakHeapBytes)
+	}
+	if c.PeakHeapGrowth < 1.0 || c.PeakHeapGrowth > 1.2 {
+		t.Errorf("peak growth = %.2f, want about 1.1 (it more than doubled)", c.PeakHeapGrowth)
+	}
+	if !c.Drifted() {
+		t.Error("a component whose heap doubled mid-soak was reported as not having drifted")
+	}
+	if d := got.Describe(); !strings.Contains(d, "peak") {
+		t.Errorf("the soak's paragraph does not mention the excursion: %q", d)
+	}
+	if d := got.Describe(); strings.Contains(d, "Nothing drifted") {
+		t.Errorf("the soak still says nothing drifted: %q", d)
+	}
+}
+
+// TestASoakThatIsGenuinelyFlatStillSaysSo, so the peak does not turn ordinary
+// sawtooth into a finding.
+func TestASoakThatIsGenuinelyFlatStillSaysSo(t *testing.T) {
+	samples := []deployedscale.Sample{
+		held(0, 7065, 1_772_000_000),
+		held(15, 7061, 1_815_000_000),
+		held(30, 7059, 1_783_000_000),
+	}
+	got := Drift(samples, 400, 400)
+	if got.Components[0].Drifted() {
+		t.Errorf("a flat soak was reported as drifting: %+v", got.Components[0])
+	}
+	if d := got.Describe(); !strings.Contains(d, "Nothing drifted") {
+		t.Errorf("a flat soak does not read as flat: %q", d)
+	}
+}

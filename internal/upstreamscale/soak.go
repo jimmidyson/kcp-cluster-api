@@ -44,12 +44,39 @@ type ComponentDrift struct {
 	LastHeapBytes   uint64  `json:"lastHeapBytes"`
 	HeapGrowth      float64 `json:"heapGrowth"`
 	GoroutineGrowth float64 `json:"goroutineGrowth"`
+
+	// Peak* are the largest values seen at any point in the soak, and the
+	// growth from the first sample to them.
+	//
+	// # Why the endpoints are not enough
+	//
+	// The 1600-cluster soak reported "nothing drifted" while core's retained
+	// heap went 1.65 GB, 3.19, 3.46, 1.61, 1.61 — it more than doubled in the
+	// middle and came home, and a first-against-last comparison cannot see
+	// that. A component that doubles under a fleet nobody is touching is the
+	// most interesting thing a soak can find: it is the shape of a leak that
+	// is eventually collected, or of work arriving in bursts nothing asked
+	// for. Either way it sizes the memory the component actually needs, which
+	// its endpoints do not.
+	PeakGoroutines      int     `json:"peakGoroutines"`
+	PeakHeapBytes       uint64  `json:"peakHeapBytes"`
+	PeakHeapGrowth      float64 `json:"peakHeapGrowth"`
+	PeakGoroutineGrowth float64 `json:"peakGoroutineGrowth"`
 }
 
 // Drifted reports whether either quantity moved enough to be worth a reader's
 // attention.
 func (d ComponentDrift) Drifted() bool {
-	return d.HeapGrowth > driftThreshold || d.GoroutineGrowth > driftThreshold
+	return d.HeapGrowth > driftThreshold || d.GoroutineGrowth > driftThreshold ||
+		d.PeakHeapGrowth > driftThreshold || d.PeakGoroutineGrowth > driftThreshold
+}
+
+// Excursed reports whether the peak is the only reason this drifted — the
+// component went somewhere and came back, which reads differently from one that
+// went and stayed.
+func (d ComponentDrift) Excursed() bool {
+	ended := d.HeapGrowth > driftThreshold || d.GoroutineGrowth > driftThreshold
+	return !ended && d.Drifted()
 }
 
 // SoakResult is the held rung, measured over time.
@@ -113,6 +140,17 @@ func Drift(samples []deployedscale.Sample, clusters, readyAtEnd int) SoakResult 
 			// warning is where it is said.
 			continue
 		}
+		// The peak over every sample, not just the two ends.
+		peakHeap, peakGoroutines := a.Process.HeapAllocBytes, a.Process.Goroutines
+		for _, sample := range samples {
+			c, ok := sample.Component(name)
+			if !ok || !c.Pod.Comparable() {
+				continue
+			}
+			peakHeap = max(peakHeap, c.Process.HeapAllocBytes)
+			peakGoroutines = max(peakGoroutines, c.Process.Goroutines)
+		}
+
 		out.Components = append(out.Components, ComponentDrift{
 			Component:       name,
 			FirstGoroutines: a.Process.Goroutines,
@@ -121,6 +159,11 @@ func Drift(samples []deployedscale.Sample, clusters, readyAtEnd int) SoakResult 
 			LastHeapBytes:   b.Process.HeapAllocBytes,
 			HeapGrowth:      growth(float64(a.Process.HeapAllocBytes), float64(b.Process.HeapAllocBytes)),
 			GoroutineGrowth: growth(float64(a.Process.Goroutines), float64(b.Process.Goroutines)),
+
+			PeakGoroutines:      peakGoroutines,
+			PeakHeapBytes:       peakHeap,
+			PeakHeapGrowth:      growth(float64(a.Process.HeapAllocBytes), float64(peakHeap)),
+			PeakGoroutineGrowth: growth(float64(a.Process.Goroutines), float64(peakGoroutines)),
 		})
 	}
 	return out
@@ -149,14 +192,22 @@ func (s SoakResult) Describe() string {
 
 	var drifted []string
 	for _, c := range s.Components {
-		if c.Drifted() {
-			drifted = append(drifted, fmt.Sprintf("%s (heap %+.0f%%, goroutines %+.0f%%)",
-				c.Component, 100*c.HeapGrowth, 100*c.GoroutineGrowth))
+		switch {
+		case c.Excursed():
+			// Went and came back: the endpoints agree and the middle does not,
+			// which is the case a first-against-last comparison used to miss.
+			drifted = append(drifted, fmt.Sprintf(
+				"%s came back but peaked %+.0f%% above where it started (heap), ending %+.0f%%",
+				c.Component, 100*c.PeakHeapGrowth, 100*c.HeapGrowth))
+		case c.Drifted():
+			drifted = append(drifted, fmt.Sprintf("%s (heap %+.0f%%, goroutines %+.0f%%, peak heap %+.0f%%)",
+				c.Component, 100*c.HeapGrowth, 100*c.GoroutineGrowth, 100*c.PeakHeapGrowth))
 		}
 	}
 	if len(drifted) == 0 {
 		b.WriteString(" Nothing drifted: every component's retained heap and goroutine count " +
-			"ended within 10% of where it started, with the fleet unchanged.")
+			"stayed within 10% of where it started throughout, peaks included, with the " +
+			"fleet unchanged.")
 		return b.String()
 	}
 	fmt.Fprintf(&b, " Drifted: %s. The fleet did not change during this, so what grew grew on its own.",
