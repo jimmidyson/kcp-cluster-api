@@ -59,6 +59,16 @@ ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 # Names differ between CAREN versions, so they are inputs rather than
 # assumptions; `clusterclass` prints what it found if the name is wrong.
 CAREN_VERSION="${CAREN_VERSION:-v0.50.0}"
+
+# CAPX, pinned rather than left to clusterctl's latest.
+#
+# Not a tidiness pin: a later CAPX was found incompatible in this combination,
+# so the version is part of what makes the bootstrap cluster work rather than a
+# detail. CAREN's own documented install pins it too. If this is raised, the
+# thing to check first is whether the ClusterClass CAREN ships still resolves
+# against CAPX's types — the chart gates it on
+# infrastructure.cluster.x-k8s.io/v1beta1/NutanixClusterTemplate being present.
+CAPX_VERSION="${CAPX_VERSION:-v1.10.3}"
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
 CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
 
@@ -91,6 +101,7 @@ cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
   control plane nodes    ${CONTROL_PLANE_COUNT}
   worker nodes           ${WORKER_COUNT}
   kubeconfig             ${WORKLOAD_KUBECONFIG}
+CAPX                     ${CAPX_VERSION}
 CAREN                    ${CAREN_VERSION}
   ClusterClass           ${CAREN_CLUSTERCLASS} in ${CAREN_CLUSTERCLASS_NAMESPACE}
   ClusterClass from      ${CAREN_CLUSTERCLASS_URL}
@@ -149,7 +160,7 @@ YAML
     clusterctl init \
       --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
       --config "${config}" \
-      --infrastructure "nutanix${CAPX_VERSION:+:${CAPX_VERSION}}" \
+      --infrastructure "nutanix:${CAPX_VERSION}" \
       --addon helm \
       --runtime-extension "caren:${CAREN_VERSION}" \
       --wait-providers
