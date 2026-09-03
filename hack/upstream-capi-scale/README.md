@@ -128,13 +128,18 @@ itself:
   nothing here needs.
 - the Nutanix credentials, which clusterctl reads at init time.
 
-CAPX is pinned to **v1.10.3**, not left to clusterctl's latest: a later CAPX was
-found incompatible in this combination, so the version is part of what makes the
-bootstrap cluster work. If you raise it, the first thing to check is whether
-CAREN's ClusterClass still resolves against CAPX's types — the chart gates that
-class on `infrastructure.cluster.x-k8s.io/v1beta1/NutanixClusterTemplate` being
-present, so a CAPX that moves that API leaves you with the empty ClusterClass
-list again.
+CAPX is unpinned — clusterctl takes its latest. To pin one:
+
+```sh
+CAPX_VERSION=v1.10.3 ./scale-cluster.sh bootstrap
+```
+
+Either way `config` records which version a run used. If a CAPX turns out not to
+work here, the first thing to check is whether CAREN's ClusterClass still
+resolves against its types: the chart gates that class on
+`infrastructure.cluster.x-k8s.io/v1beta1/NutanixClusterTemplate` being present,
+so a CAPX that moves that API leaves you with the empty ClusterClass list
+again.
 
 It then applies CAREN's default Nutanix ClusterClass, **which clusterctl does
 not install**. CAREN's providers artifact carries the runtime extension and

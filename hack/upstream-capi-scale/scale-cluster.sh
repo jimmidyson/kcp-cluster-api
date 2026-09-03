@@ -60,15 +60,16 @@ ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 # assumptions; `clusterclass` prints what it found if the name is wrong.
 CAREN_VERSION="${CAREN_VERSION:-v0.50.0}"
 
-# CAPX, pinned rather than left to clusterctl's latest.
+# CAPX, unpinned: clusterctl takes its latest unless CAPX_VERSION says
+# otherwise. Set it to pin — `CAPX_VERSION=v1.10.3 ./scale-cluster.sh bootstrap`
+# — and the run records which version it used either way.
 #
-# Not a tidiness pin: a later CAPX was found incompatible in this combination,
-# so the version is part of what makes the bootstrap cluster work rather than a
-# detail. CAREN's own documented install pins it too. If this is raised, the
-# thing to check first is whether the ClusterClass CAREN ships still resolves
-# against CAPX's types — the chart gates it on
-# infrastructure.cluster.x-k8s.io/v1beta1/NutanixClusterTemplate being present.
-CAPX_VERSION="${CAPX_VERSION:-v1.10.3}"
+# If a CAPX version does turn out not to work here, the thing to check first is
+# whether CAREN's ClusterClass still resolves against its types: the chart gates
+# that class on infrastructure.cluster.x-k8s.io/v1beta1/NutanixClusterTemplate
+# being present, so a CAPX that moves that API produces the empty ClusterClass
+# list this run has already seen once.
+CAPX_VERSION="${CAPX_VERSION:-}"
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
 CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
 
@@ -94,6 +95,11 @@ WORKER_COUNT="${WORKER_COUNT:-4}"
 # an error three steps into a provisioning run. Running this touches nothing and
 # fails immediately if that ordering is wrong again.
 config() {
+  # Worked out before the heredoc rather than inside it: a ${var:-default}
+  # carrying punctuation is parsed by bash, not printed, and this one broke on
+  # its own apostrophe.
+  local capx="${CAPX_VERSION}"
+  [[ -n "${capx}" ]] || capx="unpinned, clusterctl takes its latest (set CAPX_VERSION to pin)"
   cat <<CONFIG
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
   kubeconfig             ${BOOTSTRAP_KUBECONFIG}
@@ -101,7 +107,7 @@ cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
   control plane nodes    ${CONTROL_PLANE_COUNT}
   worker nodes           ${WORKER_COUNT}
   kubeconfig             ${WORKLOAD_KUBECONFIG}
-CAPX                     ${CAPX_VERSION}
+CAPX                     ${capx}
 CAREN                    ${CAREN_VERSION}
   ClusterClass           ${CAREN_CLUSTERCLASS} in ${CAREN_CLUSTERCLASS_NAMESPACE}
   ClusterClass from      ${CAREN_CLUSTERCLASS_URL}
@@ -160,7 +166,7 @@ YAML
     clusterctl init \
       --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
       --config "${config}" \
-      --infrastructure "nutanix:${CAPX_VERSION}" \
+      --infrastructure "nutanix${CAPX_VERSION:+:${CAPX_VERSION}}" \
       --addon helm \
       --runtime-extension "caren:${CAREN_VERSION}" \
       --wait-providers
