@@ -21,11 +21,17 @@ Built and unit tested, without a cluster:
 - the CFS throttling reader that keeps a "did not keep up" verdict honest
 - the soak's drift summary
 - `hack/upstream-capi-scale/scale-cluster.sh`, which provisions the cluster
+- the fleet planner: a shape resolved into namespaces and cluster names, with
+  the ClusterClass and templates this repository already builds its kcp fleets
+  from, re-namespaced per namespace
+- the preflight that checks the cluster serves what the run is about to create,
+  which is the one risk here that no test of this code can find
+- the convergence count, against both halves of the end state
 
-Not built: the driver that creates the fleet a rung asks for, waits for every
-control plane ready and every Machine Ready, and drives the ladder and the soak
-through those pieces. It is the part that cannot be written blind — it is where
-the fork's object types meet upstream's CRDs — and it is next.
+Not built: the loop that stitches them together — create a rung, wait, sample,
+climb, then soak — and the integration test that drives it. Every piece it
+needs now exists and is tested; what is left is the sequencing and the cluster
+it has to run against.
 
 **Input**: "i would like to create a scale test against a standard kubernetes
 cluster. i can provide a CAPX cluster with whatever resources this scale test
