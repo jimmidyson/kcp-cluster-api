@@ -19,16 +19,17 @@ The ladder climbs 25 → 50 → 100 → 200 → 400 clusters, and the run is the
 
 ## Nodes
 
-| Role | What runs on it | Ask for |
-|---|---|--:|
-| Control plane | kube-apiserver, etcd | **32 GiB RAM, 16 vCPU**, fast SSD |
-| Dedicated worker | the DevCluster provider, alone | **32 GiB RAM, 8 vCPU** |
-| Worker | core, kubeadm bootstrap, kubeadm control plane managers | 16 GiB RAM, 8 vCPU |
-| Worker | cert-manager and anything else | 8 GiB RAM, 4 vCPU |
+| Role | Count | What runs on it | Ask for |
+|---|--:|---|--:|
+| Control plane | **3** | kube-apiserver, etcd | **32 GiB, 16 vCPU** each, fast SSD |
+| Dedicated, **tainted** | 1 | the DevCluster provider, alone | **32 GiB, 8 vCPU** |
+| Generic worker | 1-2 | core, kubeadm bootstrap, kubeadm control plane | **32 GiB, 16 vCPU** |
+| Generic worker | 1 | cert-manager, metrics-server | 8 GiB, 4 vCPU |
 
-A single-node control plane is fine and makes the API server easier to measure.
-Three nodes if you want the etcd quorum behaviour too; the run measures one
-apiserver either way.
+Three control plane nodes, so the run measures Cluster API against an API server
+behind a real etcd quorum rather than a single member. It is one apiserver's
+cost that gets fitted either way; what HA changes is that write latency includes
+raft, which is the thing a scale test on a single member quietly leaves out.
 
 ### Why the control plane is the big one
 
@@ -41,7 +42,7 @@ leaves room to find the ceiling somewhere other than at the box.
 Whether an ordinary kube-apiserver costs the same as the kcp shard is
 **precisely what this run is for**. If it costs much less, the earlier finding
 was about kcp; if it costs the same, it is about serving Cluster API's CRDs as
-unstructured objects and applies to every management cluster anyone runs.
+unstructured objects, and it applies to every management cluster anyone runs.
 
 ### etcd
 
@@ -55,16 +56,63 @@ cliff, and revisions between compactions are what fill it during a climb.
 - Fast local SSD. etcd's fsync latency is the quietest way for a scale test to
   turn into a latency test.
 
-### The dedicated node
+### The dedicated node, and its taint
 
-Take the offer. Every in-memory workload cluster in the fleet is served from
-**one process**: each gets its own listener on a port from 20000-30000, so
-10,000 clusters is a hard ceiling for one pod, and every fake Node, Pod and
-lease in the fleet lives in that process's heap. It is the component most likely
-to be the ceiling, and the one whose measurement is most easily spoiled by a
-noisy neighbour.
+Every in-memory workload cluster in the fleet is served from **one process**:
+each gets a listener on a port from 20000-30000, so 10,000 clusters is a hard
+ceiling for one pod, and every fake Node, Pod and lease in the fleet lives in
+that process's heap. It is the component most likely to be the ceiling and the
+one most easily spoiled by a neighbour.
 
-Label it and the run will pin the provider to it.
+```sh
+kubectl label  node <node> scale-role=devcluster
+kubectl taint  node <node> scale-role=devcluster:NoSchedule
+```
+
+The run selects that label and tolerates that taint together, because doing one
+without the other leaves the provider Pending beside an idle machine.
+
+## Guaranteed resources on everything
+
+Requests equal limits on every container, so every component is in the
+**Guaranteed** QoS class and none of them can borrow from a neighbour. A
+Burstable component that finished its work measured a node that happened to have
+room; worse, its numbers move between rungs of the same climb as the fleet grows
+around it, so a cost model fitted across those rungs is fitted partly to how
+contended each rung was.
+
+Starting values. Each is a **prediction** from the kcp runs' per-cluster figures
+carried to 200 clusters of fifty nodes, and the loop is meant to be run: if
+something is OOM killed, raise it and say so in the report.
+
+| Component | CPU | Memory | Where the memory comes from |
+|---|--:|--:|---|
+| DevCluster provider | 6 | **24 Gi** | Holds every fake cluster in the fleet in one process. The least predictable of the four and the one given the most room. |
+| core manager | 4 | 8 Gi | 3.94 MiB per cluster measured at ten nodes; ~4x that at fifty, times 200 clusters, doubled for headroom. |
+| kubeadm control plane | 4 | 6 Gi | 1.79 MiB per cluster measured, and the highest goroutine count of the four at 47 per cluster. |
+| kubeadm bootstrap | 2 | 4 Gi | 1.39 MiB per cluster measured, and the cheapest of the four in every run so far. |
+
+Each container also gets **GOMEMLIMIT** at its limit less 10% (capped at 512
+MiB of headroom). This is not optional and it is the lesson the kcp runs paid
+for: a Go process cannot see its cgroup limit, and kcp was OOM killed against
+4 GiB while holding 1.63 GiB of live heap because the collector had grown the
+heap to 3 GiB with nothing telling it a ceiling existed. The identical fleet
+reached its target once GOMEMLIMIT was set. Without it an OOM kill means "the
+collector was uninformed", and the raise-and-retry loop would be buying headroom
+for garbage.
+
+### The cost of CPU limits, stated
+
+Guaranteed QoS means a CPU limit, and a CPU limit means CFS throttling. A
+throttled reconciler is slow for a reason that has nothing to do with Cluster
+API, and the ladder's most interesting failure — "the fleet did not arrive and
+nothing died" — is exactly the one throttling can counterfeit.
+
+So the run records `container_cpu_cfs_throttled_seconds_total` per component at
+every rung, and a rung that fails that way is reported with its throttling
+figure beside it. If a ceiling turns out to be a throttling ceiling, that is a
+finding about the limits chosen and the fix is to raise them and re-run, not to
+argue about it.
 
 ## Cluster prerequisites
 

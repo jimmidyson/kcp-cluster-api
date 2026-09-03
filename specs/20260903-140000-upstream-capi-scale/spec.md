@@ -140,6 +140,19 @@ Cluster API:
   the held rung, and whether every cluster was still Ready at the end.
 - **R7** Teardown removes what the run created, and is safe to run against a
   cluster where a previous run died.
+- **R8** Every component runs Guaranteed — requests equal to limits on every
+  container — with GOMEMLIMIT set below its memory limit, and the report states
+  the QoS class it worked out from the manifests rather than assuming the
+  setting took. A component that is not Guaranteed is a component whose numbers
+  carry its neighbours.
+- **R9** CPU throttling is sampled per component at every rung. A Guaranteed
+  component has a CPU limit, a CPU limit means CFS throttling, and throttling
+  counterfeits the one failure mode this run most wants to believe: a fleet that
+  did not arrive with nothing dead. A rung that fails that way is reported with
+  its throttling beside it.
+- **R10** The DevCluster provider is placed by node selector **and** tolerates
+  the taint that keeps everything else off that node. Doing one without the
+  other leaves it Pending next to an idle machine.
 
 ## Success Criteria
 
