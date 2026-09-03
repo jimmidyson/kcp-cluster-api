@@ -5,8 +5,6 @@ several steps rather than one: the middle one wants reading before it is applied
 and the last one is the one you will re-run.
 
 ```sh
-export CLUSTER_TEMPLATE=/path/to/your/caren-cluster-template.yaml
-
 ./scale-cluster.sh bootstrap      # a local kind cluster, with CAPX and CAREN on it
 ./scale-cluster.sh clusterclass   # copy CAREN's ClusterClass, add the etcd quota
 ./scale-cluster.sh create         # create the cluster, wait for it
@@ -27,6 +25,43 @@ Cluster API, off the v1.15 line, and the CRDs come from the stock release
 clusterctl installed. It says whether those agree — by kind and by version, and
 naming the provider to install for anything missing — before there is a fleet
 to be confused by it.
+
+The cluster template defaults to CAREN's own published quick start —
+`examples/capi-quick-start/nutanix-cluster-cilium-helm-addon.yaml` from the
+release named by `CAREN_VERSION` — so there is nothing to author. Set
+`CLUSTER_TEMPLATE` to use a different one. You will need the usual Nutanix
+substitutions in your environment (`NUTANIX_ENDPOINT`, `NUTANIX_USER`,
+`NUTANIX_PASSWORD`, `NUTANIX_SUBNET_NAME`, `NUTANIX_PRISM_ELEMENT_CLUSTER_NAME`,
+`NUTANIX_MACHINE_TEMPLATE_BASE_OS`, `CONTROL_PLANE_ENDPOINT_IP`,
+`KUBERNETES_VERSION`, and a `KUBERNETES_SERVICE_LOAD_BALANCER_IP`), which is
+what `clusterctl generate cluster` reads.
+
+## The generated manifest is trimmed before it is applied
+
+CAREN's example is a fine cluster and a poor scale-test cluster, in two ways
+that are easy to miss:
+
+**Its worker pool has no replica count.** The size is a pair of
+cluster-autoscaler annotations, so the pool is whatever the autoscaler decides.
+A scale test cannot have its own management cluster resizing underneath it —
+and with the autoscaler addon removed, nothing would size the pool at all. So
+the annotations come off and an explicit count goes on. Both: Cluster API
+refuses a topology that sets replicas while the annotations are still there.
+
+**It turns on addons this measurement does not use** — CSI, COSI, the
+autoscaler, a MetalLB service load balancer and node feature discovery. Nothing
+here asks for a PersistentVolume, and every addon left on is another controller
+reconciling against the API server whose cost is the subject of the run.
+
+The CNI and the cloud provider stay. Without the CNI nothing networks; without
+the cloud provider new nodes keep the `uninitialized` taint and never become
+schedulable, which would present as a scale test that cannot place its own
+controllers.
+
+`cmd/capiscale-template` does this, on the manifest clusterctl generated rather
+than on the template — the template's `${VARIABLE}` placeholders sit in fields
+that are numbers once substituted, and a round trip through a YAML parser would
+quote them.
 
 ## What goes where, and why
 

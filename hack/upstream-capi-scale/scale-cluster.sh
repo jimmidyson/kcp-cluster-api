@@ -38,7 +38,11 @@ ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 # assumptions; `clusterclass` prints what it found if the name is wrong.
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
 CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
-CLUSTER_TEMPLATE="${CLUSTER_TEMPLATE:-}"
+# CAREN publishes complete clusterctl templates in its releases. The default is
+# the Nutanix quick start from the release named below; override CLUSTER_TEMPLATE
+# to use your own.
+CAREN_VERSION="${CAREN_VERSION:-v0.50.0}"
+CLUSTER_TEMPLATE="${CLUSTER_TEMPLATE:-https://raw.githubusercontent.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/${CAREN_VERSION}/examples/capi-quick-start/nutanix-cluster-cilium-helm-addon.yaml}"
 
 # The fleet the sizing document asks for.
 CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-3}"
@@ -142,8 +146,20 @@ create() {
     --control-plane-machine-count "${CONTROL_PLANE_COUNT}" \
     --worker-machine-count "${WORKER_COUNT}" \
     --from "${CLUSTER_TEMPLATE}" \
+    | go run "${REPO_ROOT}/cmd/capiscale-template" --workers "${WORKER_COUNT}" \
     > "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
+  # Two changes the generated manifest needs, both made above:
+  #
+  #   * a fixed worker count. CAREN's example sets no replicas at all — the
+  #     pool is sized by cluster-autoscaler annotations — and a scale test
+  #     cannot have its own management cluster resizing underneath it.
+  #   * without CSI, COSI, the autoscaler, the service load balancer or node
+  #     feature discovery. Nothing here asks for a PersistentVolume, and every
+  #     addon left on is another controller reconciling against the API server
+  #     whose cost is the subject of the run. The CNI and the cloud provider
+  #     stay: without the CNI nothing networks, and without the cloud provider
+  #     nodes keep the uninitialized taint and never become schedulable.
   log "Review ${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml, then apply it"
   kubectl --context "kind-${BOOTSTRAP_CLUSTER}" apply -f "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
