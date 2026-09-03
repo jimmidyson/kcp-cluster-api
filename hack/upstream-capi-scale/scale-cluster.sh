@@ -47,9 +47,27 @@ WORKLOAD_KUBECONFIG="${WORKLOAD_KUBECONFIG:-${REPO_ROOT}/bin/${CLUSTER_NAME}.kub
 # names that file, and nothing outside bin/ changes.
 BOOTSTRAP_KUBECONFIG="${BOOTSTRAP_KUBECONFIG:-${REPO_ROOT}/bin/${BOOTSTRAP_CLUSTER}.kubeconfig}"
 
-# The Cluster API this test measures. Stock upstream, pinned: a figure without
-# the version it was measured on is not a figure.
-CAPI_VERSION="${CAPI_VERSION:-v1.14.1}"
+# The Cluster API this test measures, on the cluster under test. Stock upstream,
+# pinned: a figure without the version it was measured on is not a figure.
+CAPI_VERSION="${CAPI_VERSION:-v1.12.5}"
+
+# The Cluster API on the bootstrap cluster, which is a different question from
+# the one above and is pinned for a different reason.
+#
+# CAREN v0.50.0's runtime extension strict-decodes CAPX's NutanixClusterTemplate
+# against the types it was compiled with, and a newer topology controller writes
+# a spec.template.metadata that those types do not have. The cluster then never
+# gets built:
+#
+#   failed to generate patches for patch "cluster-config": ... failed to convert
+#   unstructured object (infrastructure.cluster.x-k8s.io/v1beta1,
+#   Kind=NutanixClusterTemplate) to typed object: strict decoding error: unknown
+#   field "spec.template.metadata"
+#
+# So the bootstrap cluster runs the Cluster API CAREN was built against. This is
+# not a constraint on what the test measures — that is CAPI_VERSION, on another
+# cluster entirely — and the two can differ.
+BOOTSTRAP_CAPI_VERSION="${BOOTSTRAP_CAPI_VERSION:-v1.12.5}"
 
 # etcd's default 2 GiB backend quota is a cliff a climbing fleet walks off, and
 # CAREN has no variable for it — hence the ClusterClass copy below.
@@ -112,6 +130,7 @@ CAREN                    ${CAREN_VERSION}
   ClusterClass           ${CAREN_CLUSTERCLASS} in ${CAREN_CLUSTERCLASS_NAMESPACE}
   ClusterClass from      ${CAREN_CLUSTERCLASS_URL}
   cluster template       ${CLUSTER_TEMPLATE}
+Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
 Cluster API under test   ${CAPI_VERSION}
 etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
 CONFIG
@@ -166,6 +185,9 @@ YAML
     clusterctl init \
       --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
       --config "${config}" \
+      --core "cluster-api:${BOOTSTRAP_CAPI_VERSION}" \
+      --bootstrap "kubeadm:${BOOTSTRAP_CAPI_VERSION}" \
+      --control-plane "kubeadm:${BOOTSTRAP_CAPI_VERSION}" \
       --infrastructure "nutanix${CAPX_VERSION:+:${CAPX_VERSION}}" \
       --addon helm \
       --runtime-extension "caren:${CAREN_VERSION}" \

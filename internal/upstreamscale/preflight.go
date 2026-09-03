@@ -69,8 +69,8 @@ func IndexResources(lists []*metav1.APIResourceList) map[string][]string {
 // # The one risk this harness carries that its own tests cannot find
 //
 // The objects come from this repository, whose Cluster API is a fork off the
-// v1.15 line. The CRDs come from whatever clusterctl installed, which is stock
-// v1.14. Those two agreeing is an assumption, not a fact, and the ways it fails
+// v1.15 line. The CRDs come from whatever clusterctl installed, which is an
+// older stock release. Those two agreeing is an assumption, not a fact, and the ways it fails
 // are unpleasant in proportion to how quiet they are: a group version the
 // cluster does not serve fails every create loudly, which is fine, but a
 // version it does serve with a schema that prunes a field the objects rely on

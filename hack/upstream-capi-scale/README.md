@@ -7,13 +7,40 @@ and the last one is the one you will re-run.
 First, the pinned tools:
 
 ```sh
-task tools:capi     # kind and clusterctl v1.14.1, into bin/
+task tools:capi     # kind and clusterctl v1.12.5, into bin/
 ```
 
 The script puts `bin/` first on its PATH. clusterctl's version is not
 incidental: it warns or refuses when it is older than the providers it is asked
-to install, and the Cluster API it installs is the thing being measured — so
-the tool and what it installs are pinned to the same version.
+to install, so the tool and what it installs are pinned together.
+
+## Why v1.12.5 and not the newest release
+
+CAREN v0.50.0's runtime extension strict-decodes CAPX's `NutanixClusterTemplate`
+against the types it was compiled with, and a newer Cluster API topology
+controller writes a `spec.template.metadata` those types do not have. The
+cluster then never gets built:
+
+```
+failed to generate patches for patch "cluster-config": failed to call extension
+handler "nutanixclusterv6configpatch-gp...": failed to convert unstructured
+object (infrastructure.cluster.x-k8s.io/v1beta1, Kind=NutanixClusterTemplate) to
+typed object: strict decoding error: unknown field "spec.template.metadata"
+```
+
+So the **bootstrap** cluster runs the Cluster API CAREN was built against
+(`BOOTSTRAP_CAPI_VERSION`). That is a constraint on the machinery that builds
+the test cluster, not on what the test measures — the version under test is
+`CAPI_VERSION`, installed on a different cluster entirely, and the two can
+differ:
+
+```sh
+CAPI_VERSION=v1.14.1 ./scale-cluster.sh install   # measure a newer one
+```
+
+Both default to v1.12.5 so that a run with nothing overridden is coherent, and
+`config` prints both. v1.12.5 serves `v1beta2` for every kind this harness
+creates, including `DevCluster`, so the preflight's expectations are unchanged.
 
 Nutanix credentials must be in the environment before the first step —
 `clusterctl init` reads them, and so does `clusterctl generate cluster` later:

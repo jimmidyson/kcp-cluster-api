@@ -64,9 +64,13 @@ It answers one question and it answers it by climbing until something breaks:
 
 ## What this is not
 
-- **Not a comparison with the kcp figures.** Stock upstream's latest release is
-  v1.14.1; the fork those runs used is v1.15.0-kcp.12, off the v1.15 development
-  line. Different code, different instrument, and the number that comes out is
+- **Not a comparison with the kcp figures.** The version measured here is stock
+  v1.12.5; the fork those runs used is v1.15.0-kcp.12, off the v1.15 development
+  line. v1.12.5 rather than the newest release because CAREN's runtime extension
+  strict-decodes CAPX's NutanixClusterTemplate and rejects the
+  spec.template.metadata a newer topology controller writes into it — a
+  constraint on the machinery that builds the cluster, recorded in
+  hack/upstream-capi-scale/README.md. Different code, different instrument, and the number that comes out is
   its own. Where the two are put side by side it will be labelled as an
   indication, not a subtraction.
 - **Not a test of an infrastructure provider.** The in-memory backend creates no
@@ -224,4 +228,4 @@ Cluster API:
   `DevCluster` provider defaults to 50 concurrent DevMachine reconciles and 100
   ClusterCache workers. Those defaults are part of what is being measured and
   are recorded; a ceiling found with them is a ceiling for them.
-- **v1.14.1 is not the forked code.** See "What this is not".
+- **v1.12.5 is not the forked code.** See "What this is not".

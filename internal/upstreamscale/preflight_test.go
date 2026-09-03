@@ -37,8 +37,8 @@ func resources(gvs ...string) map[string][]string {
 // harness carries that no unit test of its own code can find.
 //
 // The objects come from this repository, whose Cluster API is a fork off the
-// v1.15 line. The CRDs come from whatever clusterctl installed, which is stock
-// v1.14. If the group version the objects are built against is not one the
+// v1.15 line. The CRDs come from whatever clusterctl installed, which is a
+// stock release. If the group version the objects are built against is not one the
 // cluster serves, every create fails — or worse, succeeds with fields pruned
 // and a fleet that never converges for a reason nothing reports.
 //
