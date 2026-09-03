@@ -30,11 +30,10 @@ vars:
   # clusterctl warns or refuses when it is older than the providers it is asked
   # to install, so the tool and what it installs move together.
   #
-  # v1.12.5 rather than the newest release, because CAREN v0.50.0's runtime
-  # extension strict-decodes CAPX's NutanixClusterTemplate and rejects the
-  # spec.template.metadata that a newer topology controller writes into it. See
-  # hack/upstream-capi-scale/README.md.
-  CLUSTERCTL_VERSION: v1.12.5
+  # A convenience copy at bin/clusterctl. The provisioning script does not use
+  # it: the two clusters it builds run different Cluster APIs, so it fetches a
+  # clusterctl matching each rather than asking one tool to install both.
+  CLUSTERCTL_VERSION: v1.14.1
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.

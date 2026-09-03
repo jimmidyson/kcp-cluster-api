@@ -49,7 +49,7 @@ BOOTSTRAP_KUBECONFIG="${BOOTSTRAP_KUBECONFIG:-${REPO_ROOT}/bin/${BOOTSTRAP_CLUST
 
 # The Cluster API this test measures, on the cluster under test. Stock upstream,
 # pinned: a figure without the version it was measured on is not a figure.
-CAPI_VERSION="${CAPI_VERSION:-v1.12.5}"
+CAPI_VERSION="${CAPI_VERSION:-v1.14.1}"
 
 # The Cluster API on the bootstrap cluster, which is a different question from
 # the one above and is pinned for a different reason.
@@ -66,7 +66,8 @@ CAPI_VERSION="${CAPI_VERSION:-v1.12.5}"
 #
 # So the bootstrap cluster runs the Cluster API CAREN was built against. This is
 # not a constraint on what the test measures — that is CAPI_VERSION, on another
-# cluster entirely — and the two can differ.
+# cluster entirely — and the two differ by default: the cluster under test gets
+# the latest release, which is the point of measuring stock Cluster API.
 BOOTSTRAP_CAPI_VERSION="${BOOTSTRAP_CAPI_VERSION:-v1.12.5}"
 
 # etcd's default 2 GiB backend quota is a cliff a climbing fleet walks off, and
@@ -147,12 +148,34 @@ etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
 CONFIG
 }
 
+# clusterctl_for prints the path to a clusterctl of the given version, fetching
+# it into bin/ if it is not already there.
+#
+# One per version, because the two clusters run different Cluster APIs and
+# clusterctl checks the contract version of what it is asked to install against
+# the one it was built for. Whether a given pair is accepted is a question with
+# a real answer and no reason to depend on it: a tool that matches what it
+# installs cannot be the thing that fails.
+clusterctl_for() {
+  local version="$1" path="${REPO_ROOT}/bin/clusterctl-${1}"
+  if [[ ! -x "${path}" ]]; then
+    local os arch
+    os="$(go env GOOS)"
+    arch="$(go env GOARCH)"
+    mkdir -p "${REPO_ROOT}/bin"
+    curl -sSfLo "${path}" \
+      "https://github.com/kubernetes-sigs/cluster-api/releases/download/${version}/clusterctl-${os}-${arch}" >&2
+    chmod +x "${path}"
+  fi
+  printf '%s' "${path}"
+}
+
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required and is not on PATH"; }
 
 bootstrap() {
-  need kind; need kubectl; need clusterctl
+  need kind; need kubectl; need curl; need go
   if kind get clusters 2>/dev/null | grep -qx "${BOOTSTRAP_CLUSTER}"; then
     log "kind cluster ${BOOTSTRAP_CLUSTER} already exists"
   else
@@ -193,7 +216,7 @@ YAML
   #   * the Nutanix credentials, which clusterctl reads at init time.
   log "Installing Cluster API, CAPX, the Helm addon provider and CAREN ${CAREN_VERSION}"
   env CLUSTER_TOPOLOGY=true EXP_RUNTIME_SDK=true \
-    clusterctl init \
+    "$(clusterctl_for "${BOOTSTRAP_CAPI_VERSION}")" init \
       --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
       --config "${config}" \
       --core "cluster-api:${BOOTSTRAP_CAPI_VERSION}" \
@@ -289,7 +312,7 @@ NOTE
 }
 
 create() {
-  need kubectl; need clusterctl
+  need kubectl; need curl; need go
   [[ -n "${CLUSTER_TEMPLATE}" ]] || die "set CLUSTER_TEMPLATE to the CAREN cluster template to generate from"
 
   log "Generating ${CLUSTER_NAME}: ${CONTROL_PLANE_COUNT} control plane, ${WORKER_COUNT} workers"
@@ -298,7 +321,7 @@ create() {
   # is prefixed node-role.kubernetes.io, or is in the
   # node-restriction.kubernetes.io or node.cluster.x-k8s.io domains. Anything
   # else stops at the Machine, and a node selector against it never matches.
-  clusterctl generate cluster "${CLUSTER_NAME}" \
+  "$(clusterctl_for "${BOOTSTRAP_CAPI_VERSION}")" generate cluster "${CLUSTER_NAME}" \
     --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
     --target-namespace "${CLUSTER_NAMESPACE}" \
     --control-plane-machine-count "${CONTROL_PLANE_COUNT}" \
@@ -336,9 +359,9 @@ create() {
 }
 
 kubeconfig() {
-  need clusterctl
+  need curl; need go
   mkdir -p "$(dirname "${WORKLOAD_KUBECONFIG}")"
-  clusterctl get kubeconfig "${CLUSTER_NAME}" \
+  "$(clusterctl_for "${BOOTSTRAP_CAPI_VERSION}")" get kubeconfig "${CLUSTER_NAME}" \
     --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
     --namespace "${CLUSTER_NAMESPACE}" > "${WORKLOAD_KUBECONFIG}"
   log "Wrote ${WORKLOAD_KUBECONFIG}"
@@ -351,14 +374,14 @@ kubeconfig() {
 # measures; adding them would put two more controller sets and their CRDs on
 # the API server under test.
 install() {
-  need clusterctl; need kubectl
+  need kubectl; need curl; need go
   [[ -f "${WORKLOAD_KUBECONFIG}" ]] || die "no kubeconfig at ${WORKLOAD_KUBECONFIG}: run '$0 kubeconfig' first"
 
   log "Installing stock Cluster API ${CAPI_VERSION} on ${CLUSTER_NAME}"
   # The docker provider is what serves DevCluster; the in-memory backend is a
   # mode of it, which is also why its deployment arrives wanting a Docker
   # socket that the prepare step below takes away.
-  KUBECONFIG="${WORKLOAD_KUBECONFIG}" clusterctl init \
+  KUBECONFIG="${WORKLOAD_KUBECONFIG}" "$(clusterctl_for "${CAPI_VERSION}")" init \
     --core "cluster-api:${CAPI_VERSION}" \
     --bootstrap "kubeadm:${CAPI_VERSION}" \
     --control-plane "kubeadm:${CAPI_VERSION}" \

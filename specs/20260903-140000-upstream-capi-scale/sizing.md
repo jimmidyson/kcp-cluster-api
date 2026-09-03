@@ -1,7 +1,7 @@
 # What to provision, and where the numbers come from
 
 Every figure here is an **extrapolation from the kcp runs onto different code**
-(stock v1.12.5 against the v1.15.0-kcp.12 fork) unless it says otherwise. It is
+(stock v1.14.1 against the v1.15.0-kcp.12 fork) unless it says otherwise. It is
 sizing guidance so a run is not starved, not a prediction the run is meant to
 confirm. Provision generously: a rung that dies because the box was small
 measures the box.
