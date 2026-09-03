@@ -375,10 +375,15 @@ A namespace stuck this way stays stuck: nothing in stock Cluster API will ever
 release those DevMachines. Their in-memory state went with the DevCluster's
 resource group, so releasing them by hand loses nothing:
 
+`kubectl patch` takes no `--all` — that flag is `delete`, `label` and
+`annotate` only — so the objects are named one at a time:
+
 ```sh
 export KUBECONFIG=../../bin/capi-scale.kubeconfig
 for ns in $(kubectl get namespaces -o name | grep '^namespace/capi-scale-' | cut -d/ -f2); do
-  kubectl -n "$ns" patch devmachines --all --type=merge -p '{"metadata":{"finalizers":null}}'
+  for dm in $(kubectl -n "$ns" get devmachines -o name); do
+    kubectl -n "$ns" patch "$dm" --type=merge -p '{"metadata":{"finalizers":null}}'
+  done
 done
 kubectl get namespaces | grep capi-scale    # until none remain
 ```
