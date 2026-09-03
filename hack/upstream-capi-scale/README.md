@@ -30,6 +30,7 @@ export DOCKER_HUB_USERNAME=... DOCKER_HUB_PASSWORD=...
 ```
 
 ```sh
+./scale-cluster.sh config         # resolve and print every input, touching nothing
 ./scale-cluster.sh bootstrap      # a local kind cluster, with CAPX and CAREN on it
 ./scale-cluster.sh clusterclass   # copy CAREN's ClusterClass, add the etcd quota
 ./scale-cluster.sh create         # create the cluster, wait for it

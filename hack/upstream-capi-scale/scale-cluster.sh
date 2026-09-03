@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Provisions the management cluster the stock Cluster API scale test runs on.
 #
+#   config       resolve and print every input, touching nothing
 #   bootstrap    a local kind cluster, with CAPX and CAREN on it
 #   clusterclass copy CAREN's ClusterClass and add the etcd backend quota
 #   create       create the workload cluster and wait for it
@@ -43,22 +44,46 @@ ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 # The CAREN ClusterClass to copy, and the template to generate the Cluster from.
 # Names differ between CAREN versions, so they are inputs rather than
 # assumptions; `clusterclass` prints what it found if the name is wrong.
+CAREN_VERSION="${CAREN_VERSION:-v0.50.0}"
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
+CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
+
 # CAREN's default ClusterClasses ship in its Helm chart rather than in the
 # runtime-extensions components clusterctl installs, so bootstrap applies this
-# one directly. The file is included verbatim by the chart (.Files.Get, no
+# one directly. The chart includes the file verbatim (.Files.Get, no
 # templating), so applying it is exactly what a Helm install would have done.
 CAREN_CLUSTERCLASS_URL="${CAREN_CLUSTERCLASS_URL:-https://raw.githubusercontent.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/${CAREN_VERSION}/charts/cluster-api-runtime-extensions-nutanix/defaultclusterclasses/nutanix-cluster-class.yaml}"
-CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
+
 # CAREN publishes complete clusterctl templates in its releases. The default is
-# the Nutanix quick start from the release named below; override CLUSTER_TEMPLATE
+# the Nutanix quick start from the release named above; override CLUSTER_TEMPLATE
 # to use your own.
-CAREN_VERSION="${CAREN_VERSION:-v0.50.0}"
 CLUSTER_TEMPLATE="${CLUSTER_TEMPLATE:-https://raw.githubusercontent.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/${CAREN_VERSION}/examples/capi-quick-start/nutanix-cluster-cilium-helm-addon.yaml}"
 
 # The fleet the sizing document asks for.
 CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-3}"
 WORKER_COUNT="${WORKER_COUNT:-4}"
+
+# config resolves and prints every input.
+#
+# It exists because the block above is ordered: one variable's default is built
+# from another's, and `set -u` turns a reference to a not-yet-assigned name into
+# an error three steps into a provisioning run. Running this touches nothing and
+# fails immediately if that ordering is wrong again.
+config() {
+  cat <<CONFIG
+bootstrap cluster        ${BOOTSTRAP_CLUSTER}
+cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
+  control plane nodes    ${CONTROL_PLANE_COUNT}
+  worker nodes           ${WORKER_COUNT}
+  kubeconfig             ${WORKLOAD_KUBECONFIG}
+CAREN                    ${CAREN_VERSION}
+  ClusterClass           ${CAREN_CLUSTERCLASS} in ${CAREN_CLUSTERCLASS_NAMESPACE}
+  ClusterClass from      ${CAREN_CLUSTERCLASS_URL}
+  cluster template       ${CLUSTER_TEMPLATE}
+Cluster API under test   ${CAPI_VERSION}
+etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
+CONFIG
+}
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
@@ -284,6 +309,6 @@ down() {
 }
 
 case "${1:-}" in
-  bootstrap|clusterclass|create|kubeconfig|install|down) cmd="$1"; shift; "${cmd}" "$@" ;;
+  config|bootstrap|clusterclass|create|kubeconfig|install|down) cmd="$1"; shift; "${cmd}" "$@" ;;
   *) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
