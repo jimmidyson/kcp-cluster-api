@@ -75,6 +75,15 @@ type Sizing struct {
 	// Workers is the replica count for every worker pool.
 	Workers int
 
+	// ClusterClass is the class the Cluster should name.
+	//
+	// CAREN's template names CAREN's own class, and the provisioning script
+	// works on a copy of it — the copy is where the etcd backend quota and the
+	// metrics port are patched in. Without this the copy sits unused and the
+	// cluster comes up with the stock quota and etcd bound to 127.0.0.1, which
+	// is invisible until something needs either.
+	ClusterClass string
+
 	// The rest are the node sizes. CAREN's example builds every node at 2 vCPU
 	// and 4 GiB — a sensible quick start, and a sixth of the memory the sizing
 	// document asks the control plane for.
@@ -123,6 +132,13 @@ func TrimForScale(manifest string, sizing Sizing) (string, error) {
 }
 
 func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
+	if sizing.ClusterClass != "" {
+		if err := unstructured.SetNestedField(doc.Object, sizing.ClusterClass,
+			"spec", "topology", "classRef", "name"); err != nil {
+			return fmt.Errorf("naming the cluster class: %w", err)
+		}
+	}
+
 	// Every machine deployment: annotations off, replicas on.
 	pools, found, err := unstructured.NestedSlice(doc.Object, "spec", "topology", "workers", "machineDeployments")
 	if err != nil {

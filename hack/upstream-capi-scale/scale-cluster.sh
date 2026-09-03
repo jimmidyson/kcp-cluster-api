@@ -92,6 +92,12 @@ CAPX_VERSION="${CAPX_VERSION:-}"
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
 CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
 
+# The copy `clusterclass` makes and `create` points the Cluster at. The copy is
+# where etcd's backend quota and metrics port are patched in, so a Cluster
+# naming CAREN's own class instead gets neither — invisibly, until something
+# needs them.
+SCALE_CLUSTERCLASS="${SCALE_CLUSTERCLASS:-${CLUSTER_NAME}-scale}"
+
 # CAREN's default ClusterClasses ship in its Helm chart rather than in the
 # runtime-extensions components clusterctl installs, so bootstrap applies this
 # one directly. The chart includes the file verbatim (.Files.Get, no
@@ -140,6 +146,7 @@ cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
 CAPX                     ${capx}
 CAREN                    ${CAREN_VERSION}
   ClusterClass           ${CAREN_CLUSTERCLASS} in ${CAREN_CLUSTERCLASS_NAMESPACE}
+  patched copy           ${SCALE_CLUSTERCLASS} (what the Cluster names)
   ClusterClass from      ${CAREN_CLUSTERCLASS_URL}
   cluster template       ${CLUSTER_TEMPLATE}
 Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
@@ -252,7 +259,7 @@ YAML
 # up the ladder would look like a cluster that got slower.
 clusterclass() {
   need kubectl; need jq
-  local src="${CAREN_CLUSTERCLASS}" dst="${CLUSTER_NAME}-scale"
+  local src="${CAREN_CLUSTERCLASS}" dst="${SCALE_CLUSTERCLASS}"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" >/dev/null 2>&1 || {
       echo "ClusterClasses available in ${CAREN_CLUSTERCLASS_NAMESPACE}:" >&2
@@ -345,6 +352,7 @@ create() {
         --worker-vcpus "${WORKER_VCPUS}" \
         --worker-memory "${WORKER_MEMORY}" \
         --worker-disk "${WORKER_DISK}" \
+        --cluster-class "${SCALE_CLUSTERCLASS}" \
     > "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
   # Two changes the generated manifest needs, both made above:

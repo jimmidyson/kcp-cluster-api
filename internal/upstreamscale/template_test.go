@@ -218,3 +218,38 @@ func TestSizingIsOptional(t *testing.T) {
 		t.Error("an unset size changed the template's own value")
 	}
 }
+
+// TestTheClusterIsPointedAtThePatchedClass is the bug this test exists because
+// of.
+//
+// The provisioning script copies CAREN's ClusterClass and adds patches to the
+// copy — the etcd backend quota, and the metrics port without which the store
+// cannot be measured. Nothing pointed the generated Cluster at that copy:
+// CAREN's template names nutanix-quick-start, so the copy sat unused and every
+// cluster came up with the stock 2 GiB quota and etcd's metrics bound to
+// 127.0.0.1.
+//
+// Silent, entirely: the cluster builds, the run starts, and the two things the
+// copy existed to change are both invisible until something needs them.
+func TestTheClusterIsPointedAtThePatchedClass(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4, ClusterClass: "capi-scale-scale"})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if !strings.Contains(out, "name: capi-scale-scale") {
+		t.Errorf("the Cluster does not name the patched class:\n%s", out)
+	}
+	if strings.Contains(out, "name: nutanix-quick-start") {
+		t.Error("the Cluster still names CAREN's own class, so its patches are the stock ones")
+	}
+
+	// Unset leaves the template's own class alone, so the trimmer stays usable
+	// against a class nobody copied.
+	same, err := TrimForScale(generated, Sizing{Workers: 4})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if !strings.Contains(same, "name: nutanix-quick-start") {
+		t.Error("an unset class name changed the template's own")
+	}
+}

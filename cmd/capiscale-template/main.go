@@ -55,6 +55,11 @@ func main() {
 	fs.IntVar(&sizing.WorkerVCPUs, "worker-vcpus", 16, "vCPUs per worker node.")
 	fs.StringVar(&sizing.WorkerMemory, "worker-memory", "32Gi", "Memory per worker node.")
 	fs.StringVar(&sizing.WorkerDisk, "worker-disk", "100Gi", "System disk per worker node.")
+	// Without this the Cluster names CAREN's own class and the copy the script
+	// patched — etcd's backend quota, and the metrics port without which the
+	// store cannot be measured — sits unused.
+	fs.StringVar(&sizing.ClusterClass, "cluster-class", "", "ClusterClass the Cluster should name. "+
+		"Empty leaves the template's own, which is CAREN's unpatched one.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

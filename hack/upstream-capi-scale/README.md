@@ -258,6 +258,31 @@ The default 2 GiB quota is a cliff. The database itself is not large at these
 object counts; the revisions between compactions during a climb are what fill
 it.
 
+## Changing the ClusterClass on a cluster that already exists
+
+The etcd patches live in the ClusterClass copy, and the Cluster names that copy.
+So changing either patch is a ClusterClass change, and Cluster API rolls the
+control plane to apply it — the kubeadm config of every control plane machine
+changes, so every control plane machine is replaced, one at a time.
+
+To do it in place:
+
+```sh
+./scale-cluster.sh clusterclass          # rewrite the copy with the new patches
+kubectl --kubeconfig ../../bin/capi-scale-bootstrap.kubeconfig \
+  -n default get kcp -o yaml | grep -A5 listen-metrics   # watch it propagate
+```
+
+The rollout takes as long as three control plane machines take to build. Nothing
+needs to be told to start it: the topology controller notices the class changed.
+
+**When to recreate instead.** If the machine *sizes* are also wrong — anything
+built before the sizing fix came up at CAREN's 2 vCPU and 4 GiB — then every
+machine is being replaced either way, and `down` followed by `create` is fewer
+moving parts than two rolling updates and a hand-patched topology. It is also
+the only path that is known to work end to end, because it is the one the script
+does.
+
 ## etcd is defragmented between rungs
 
 Compaction frees pages inside etcd's backend file and returns none of them, and
