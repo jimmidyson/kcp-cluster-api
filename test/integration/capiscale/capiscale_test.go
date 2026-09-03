@@ -69,6 +69,11 @@ var (
 
 	teardownTimeout = flag.Duration("capi-teardown-timeout", 30*time.Minute,
 		"How long teardown may wait for the fleet's Clusters to go before it stops and says what remains.")
+
+	settleTimeout = flag.Duration("capi-settle-timeout", 5*time.Minute,
+		"How long to wait for the controllers' goroutine counts to stop moving before taking the baseline.")
+	settleTolerance = flag.Float64("capi-settle-tolerance", 0.02,
+		"How much a controller's goroutine count may move between samples and still count as settled.")
 )
 
 // TestStockClusterApiClimbsUntilSomethingGives is the whole run: a baseline, a
@@ -182,6 +187,25 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		})
 	}
 
+	// Wait for the controllers to finish starting before the baseline.
+	//
+	// A manager does not reach its resting size when its pod goes Running: the
+	// 25x1 run caught the kubeadm control plane manager at 35 goroutines with
+	// no fleet, and three minutes later, still with no fleet, it reported 375.
+	// The baseline is the zero point of every figure in the report, so a
+	// baseline of a starting manager inflates every slope measured from it —
+	// that run reported half again the per-rung cost the settled runs did.
+	//
+	// Reported either way rather than fatal: a moving baseline is a caveat on
+	// the numbers, and is worth more than no run.
+	if settle, err := upstreamscale.WaitForSettled(ctx, sampler, cl, controllers,
+		*settleTolerance, *settleTimeout, *pollInterval); err != nil {
+		t.Logf("NOTE: could not wait for the controllers to settle: %v", err)
+	} else {
+		report.AddFact("baseline", settle.Describe())
+		t.Logf("%s", settle.Describe())
+	}
+
 	// Defragment before the baseline, not only between rungs.
 	//
 	// The quota counts the backend file rather than the live data in it, so a
@@ -205,6 +229,7 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	sample("baseline (no clusters)", 0, 0)
 
 	var rungs []upstreamscale.RungResult
+	held := 0
 	for i, clusters := range upstreamscale.Ladder(*startClusters, *maxClusters) {
 		shape.Clusters = clusters
 		if err := shape.Validate(); err != nil {
@@ -234,7 +259,7 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		startedCreate := time.Now()
 		if err := create(ctx, cl, fleet, &created); err != nil {
 			rungs = append(rungs, upstreamscale.RungResult{
-				Clusters: clusters, Machines: machines,
+				Clusters: clusters, Machines: machines, Added: clusters - held,
 				CreatedIn: time.Since(startedCreate),
 				Failure:   "the fleet could not be created: " + err.Error(),
 			})
@@ -245,10 +270,14 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 
 		startedWait := time.Now()
 		converged, why := wait(ctx, t, cl, sampler, controllers, clusters, machines)
+		// Added, not held: this rung kept whatever the one below it left
+		// converged, so its wait is the increment's and so is its pace.
 		rung := upstreamscale.RungResult{
-			Clusters: clusters, Machines: machines, Converged: converged,
+			Clusters: clusters, Machines: machines, Added: clusters - held,
+			Converged: converged,
 			CreatedIn: createdIn, WaitedFor: time.Since(startedWait),
 		}
+		held = clusters
 		label := fmt.Sprintf("%d clusters", clusters)
 		if !converged {
 			rung.Failure = why

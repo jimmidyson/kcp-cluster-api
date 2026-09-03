@@ -142,18 +142,18 @@ func TestTheCeilingIsTheLastRungThatConverged(t *testing.T) {
 // total cannot tell that apart from Cluster API being slow.
 func TestARungRecordsHowLongItTookAndSeparatesTheDriversShare(t *testing.T) {
 	rung := RungResult{
-		Clusters: 100, Machines: 1000, Converged: true,
+		Clusters: 100, Added: 100, Machines: 1000, Converged: true,
 		CreatedIn: 30 * time.Second, WaitedFor: 5 * time.Minute,
 	}
 	if got := rung.Total(); got != 5*time.Minute+30*time.Second {
 		t.Errorf("total = %s, want 5m30s", got)
 	}
 	// The pace that lets a reader extrapolate to the next rung.
-	if got := rung.PerCluster(); got != 3*time.Second {
+	if got := rung.PerAddedCluster(); got != 3*time.Second {
 		t.Errorf("per cluster = %s, want 3s", got)
 	}
 	timing := rung.Timing()
-	for _, want := range []string{"30s", "5m0s", "3s per cluster"} {
+	for _, want := range []string{"30s", "5m0s", "3s each"} {
 		if !strings.Contains(timing, want) {
 			t.Errorf("timing does not carry %q: %q", want, timing)
 		}
@@ -165,7 +165,7 @@ func TestARungRecordsHowLongItTookAndSeparatesTheDriversShare(t *testing.T) {
 // not hold at all, the second is one it degraded under.
 func TestAFailedRungSaysHowLongItRanBeforeGivingUp(t *testing.T) {
 	rung := RungResult{
-		Clusters: 200, Machines: 2000,
+		Clusters: 200, Added: 100, Machines: 2000,
 		CreatedIn: time.Minute, WaitedFor: 45 * time.Minute,
 		Failure: "capd-controller-manager was OOM killed",
 	}
@@ -177,7 +177,7 @@ func TestAFailedRungSaysHowLongItRanBeforeGivingUp(t *testing.T) {
 	if strings.Contains(timing, "converged in") {
 		t.Errorf("a failed rung reported a convergence time: %q", timing)
 	}
-	if strings.Contains(timing, "per cluster") {
+	if strings.Contains(timing, "each") {
 		t.Errorf("a pace was quoted for a fleet that never arrived: %q", timing)
 	}
 }
@@ -186,7 +186,7 @@ func TestAFailedRungSaysHowLongItRanBeforeGivingUp(t *testing.T) {
 // with is where a fleet size that took forty minutes has to say so.
 func TestTheCeilingSentenceCarriesTheTiming(t *testing.T) {
 	ceiling := Summarise([]RungResult{{
-		Clusters: 50, Machines: 500, Converged: true,
+		Clusters: 50, Added: 50, Machines: 500, Converged: true,
 		CreatedIn: 20 * time.Second, WaitedFor: 8 * time.Minute,
 	}})
 	if got := ceiling.Describe(); !strings.Contains(got, "8m0s") {
@@ -195,11 +195,51 @@ func TestTheCeilingSentenceCarriesTheTiming(t *testing.T) {
 }
 
 func TestPerClusterIsZeroWhenThereIsNothingToDivide(t *testing.T) {
-	if got := (RungResult{Converged: true, WaitedFor: time.Minute}).PerCluster(); got != 0 {
+	if got := (RungResult{Converged: true, WaitedFor: time.Minute}).PerAddedCluster(); got != 0 {
 		t.Errorf("per cluster = %s with no clusters", got)
 	}
 	// And a rung that never converged has no pace, whatever its clock says.
-	if got := (RungResult{Clusters: 10, WaitedFor: time.Minute}).PerCluster(); got != 0 {
+	if got := (RungResult{Clusters: 10, Added: 10, WaitedFor: time.Minute}).PerAddedCluster(); got != 0 {
 		t.Errorf("per cluster = %s for a fleet that did not arrive", got)
+	}
+}
+
+// TestThePaceIsPerClusterAdded, because the ladder is incremental.
+//
+// A rung does not build its fleet from nothing: rung 4 of a 2,4 climb keeps
+// the two clusters rung 2 left converged and adds two more, so its WaitedFor
+// is the time the *increment* took. The third real run divided it by the whole
+// fleet and reported "17.4s per cluster" for a rung in which two of the four
+// were already Ready before it started — a figure that flatters every rung
+// above the first, and worst at the top: rung 400 of a doubling ladder adds
+// 200 and would divide by 400.
+func TestThePaceIsPerClusterAdded(t *testing.T) {
+	rung := RungResult{
+		Clusters: 100, Added: 40, Machines: 1000, Converged: true,
+		CreatedIn: 30 * time.Second, WaitedFor: 4 * time.Minute,
+	}
+	if got := rung.PerAddedCluster(); got != 6*time.Second {
+		t.Errorf("pace = %s, want 6s (4m over the 40 added, not the 100 held)", got)
+	}
+	timing := rung.Timing()
+	for _, want := range []string{"40 clusters added", "6s each", "4m0s"} {
+		if !strings.Contains(timing, want) {
+			t.Errorf("timing does not carry %q: %q", want, timing)
+		}
+	}
+
+	// The first rung adds its whole fleet, so nothing changes there.
+	first := RungResult{Clusters: 25, Added: 25, Converged: true, WaitedFor: 50 * time.Second}
+	if got := first.PerAddedCluster(); got != 2*time.Second {
+		t.Errorf("first rung pace = %s, want 2s", got)
+	}
+}
+
+// TestNoPaceWithoutAnIncrement. A rung that added nothing — a re-run of a fleet
+// that is already up — has no pace, and dividing by zero clusters to say so is
+// worse than saying nothing.
+func TestNoPaceWithoutAnIncrement(t *testing.T) {
+	if got := (RungResult{Clusters: 10, Added: 0, Converged: true, WaitedFor: time.Minute}).PerAddedCluster(); got != 0 {
+		t.Errorf("pace = %s for a rung that added no clusters", got)
 	}
 }

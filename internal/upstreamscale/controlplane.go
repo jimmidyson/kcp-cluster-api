@@ -231,7 +231,15 @@ func (a APIServer) Describe() string {
 // isClusterAPIResource matches every Cluster API group rather than the core
 // one: a fleet's objects are spread over controlplane., bootstrap. and
 // infrastructure. as well, and those are most of what it creates.
+//
+// clusterctl's own group is excluded. It writes one Provider object per
+// installed provider, so a bare suffix match counts four objects on a cluster
+// with no fleet at all — a constant added to the denominator of every
+// per-object figure, and about a tenth of it at the small end.
 func isClusterAPIResource(resource string) bool {
+	if strings.HasSuffix(resource, ".clusterctl.cluster.x-k8s.io") {
+		return false
+	}
 	return strings.HasSuffix(resource, ".cluster.x-k8s.io")
 }
 

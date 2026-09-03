@@ -53,6 +53,17 @@ type RungResult struct {
 	Converged bool   `json:"converged"`
 	Failure   string `json:"failure,omitempty"`
 
+	// Added is how many clusters this rung created, which is not how many it
+	// holds. The ladder is incremental: a rung keeps the fleet the rung below
+	// it left converged and adds to it, so its WaitedFor is the time the
+	// increment took and the pace is per added cluster.
+	//
+	// The distinction is not cosmetic. Rung 4 of a 2,4 climb waited for two
+	// new clusters with two already Ready, and dividing by four reported a
+	// pace twice as good as the truth. The error grows with the ladder: rung
+	// 400 adds 200.
+	Added int `json:"added"`
+
 	// CreatedIn is how long the driver took to apply this rung's objects, and
 	// WaitedFor is how long the fleet then took to reach the end state — or
 	// how long it ran before it was given up on.
@@ -78,16 +89,18 @@ type RungResult struct {
 // included.
 func (r RungResult) Total() time.Duration { return r.CreatedIn + r.WaitedFor }
 
-// PerCluster is the pace that lets a reader extrapolate to the next rung.
+// PerAddedCluster is the pace that lets a reader extrapolate to the next rung:
+// the wait divided by the clusters this rung actually brought up.
 //
-// Zero for a rung that did not converge, whatever its clock says: dividing the
+// Zero for a rung that did not converge, whatever its clock says — dividing the
 // time a fleet failed to arrive in by the fleet it did not reach produces a
-// number that looks like a rate and is not one.
-func (r RungResult) PerCluster() time.Duration {
-	if !r.Converged || r.Clusters == 0 {
+// number that looks like a rate and is not one — and zero for a rung that added
+// nothing, since there is no increment to have taken any time.
+func (r RungResult) PerAddedCluster() time.Duration {
+	if !r.Converged || r.Added == 0 {
 		return 0
 	}
-	return r.WaitedFor / time.Duration(r.Clusters)
+	return r.WaitedFor / time.Duration(r.Added)
 }
 
 // Timing is what the report carries beside each rung.
@@ -97,8 +110,8 @@ func (r RungResult) Timing() string {
 	if !r.Converged {
 		return fmt.Sprintf("created in %s, then gave up after %s", created, waited)
 	}
-	return fmt.Sprintf("created in %s, converged in %s (%s per cluster)",
-		created, waited, r.PerCluster().Round(time.Millisecond))
+	return fmt.Sprintf("created in %s, converged in %s (%d clusters added, %s each)",
+		created, waited, r.Added, r.PerAddedCluster().Round(time.Millisecond))
 }
 
 // Classify says why a rung did not converge, in the terms an operator acts on.

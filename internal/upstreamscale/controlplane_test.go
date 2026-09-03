@@ -272,3 +272,30 @@ func TestTheHeapFigureSaysWhetherItIsPostCollection(t *testing.T) {
 			"the retained set: %q", d)
 	}
 }
+
+// TestClusterctlsOwnRecordsAreNotTheFleet. clusterctl writes one Provider
+// object per installed provider, in clusterctl.cluster.x-k8s.io — so a suffix
+// match on the Cluster API groups counts four objects on a cluster with no
+// fleet at all. The first runs with the split showed exactly that: "4 Cluster
+// API objects" at a baseline where nothing had been created. Left in, it is a
+// constant added to the denominator of every per-object figure, and it is
+// ~10% of it at the small end.
+func TestClusterctlsOwnRecordsAreNotTheFleet(t *testing.T) {
+	body := `go_goroutines 1
+go_memstats_heap_alloc_bytes 1
+apiserver_storage_objects{resource="providers.clusterctl.cluster.x-k8s.io"} 4
+apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 25
+`
+	got, err := ParseAPIServer(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.ClusterAPIObjects != 25 {
+		t.Errorf("Cluster API objects = %d, want 25 — clusterctl's own four were counted as fleet",
+			got.ClusterAPIObjects)
+	}
+	// Still in the total, which is everything the store holds.
+	if got.StorageObjects != 29 {
+		t.Errorf("total = %d, want 29", got.StorageObjects)
+	}
+}
