@@ -107,5 +107,11 @@ A prediction, stated as one: nothing in these runs suggests storage is the
 limit. At three nodes a cluster costs ~38 etcd keys, so 400 clusters is ~16k
 keys against a store that held 412k in the kcp runs. The candidates are watch
 and goroutine growth in core and capd, the API server's watch caches, and
-time-to-converge — which the harness records only as a pair of timestamps and
-should probably report per rung.
+time-to-converge.
+
+Time-to-converge is now recorded per rung — `rung@N` in the facts, and in the
+ceiling sentence — split into how long the driver took to create the rung's
+objects and how long the fleet then took to reach the end state, with the pace
+per cluster. Neither of these two runs has it: the only timing in them is the
+`taken` stamp on each sample, which puts the whole of run 2's climb, both rungs
+and a defragmentation, inside three minutes.

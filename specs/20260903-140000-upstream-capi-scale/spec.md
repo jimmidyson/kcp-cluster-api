@@ -84,7 +84,17 @@ means what it says. Nothing in the two runs separates them. Until a third run
 does, no slope from this harness should be quoted — see `evidence/README.md`
 for the probe and the run order after it.
 
-Three instrument defects the two runs exposed, all fixed:
+Four instrument defects the two runs exposed, all fixed:
+
+- Neither run recorded **how long a rung took**, which is the headline answer to
+  whether one management cluster can hold a fleet — a rung that arrives in four
+  minutes and one that arrives in forty are not the same result. A rung now
+  carries the driver's creation time and the fleet's convergence time
+  separately, with the pace per cluster, because the spec's own risk list names
+  the driver as a candidate bottleneck and one total cannot tell the two apart.
+  A failed rung carries how long it ran before it was given up on: "OOM killed"
+  after four minutes is a fleet the component could not hold at all, after forty
+  one it degraded under.
 
 - The etcd column was not comparable across a run's own rungs: 32.6 MiB holding
   two clusters and 14.1 MiB holding four, because the defrag ran between rungs
