@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-03
 
-**Status**: Draft — built, and run once against a cluster. See "Where this stands".
+**Status**: Draft — measured. 400 clusters and 4000 Machines on one stock management cluster. See "Where this stands".
 
 ## Where this stands
 
@@ -136,6 +136,30 @@ high-water mark carries into the next run and made a 250-Machine fleet look
 like it cost 31 MiB, and etcd's backend bytes, because uncompacted revisions
 from the previous teardown survive a defragmentation. etcd's *key* count is
 unaffected and was identical to within one key across three runs.
+
+**The ladder, and the answer.** Five rungs at ten nodes each — 25, 50, 100, 200,
+400 — then a thirty-minute soak of the largest. **One stock Cluster API
+management cluster took 400 clusters and 4000 Machines to every control plane
+ready and every Machine Ready in 15.8 minutes, and held them for half an hour
+without drifting.** Nothing failed, so it remains a floor: 400 was the last rung
+the ladder was given.
+
+The cost model fits five points at R² ≥ 0.9999: **58.75 goroutines and 2.84 MB
+of live heap per cluster** across the four controllers, and 82.7 etcd keys per
+cluster at ten nodes. The kubeadm control plane manager added exactly 28
+goroutines per cluster at every rung, R² = 1.00000.
+
+What is large is not Cluster API. The four controllers hold 1.19 GB of live heap
+between them at 400 clusters, against 42 GiB of limits. The API server holds
+**12.6 GB resident**, its goroutine count flat across a sixteenfold change in
+fleet size, and its etcd call latency doubled while etcd's own disk numbers did
+not move. On 32 GiB control plane nodes that is what decides where this stops —
+a prediction of 800 to 900 clusters, and the next run tests it.
+
+S1 is answered as a floor with a cost model behind it, S2 and S4 are answered,
+and S3 is measured but loose — a factor of two, because `--profiling=false`
+leaves only resident memory usable and resident carries allocator slack. All of
+it is in `evidence/README.md`.
 
 Still to be met by a real run: whether the in-memory provider holds a few
 hundred fake API servers in one process, and how the topology controller paces

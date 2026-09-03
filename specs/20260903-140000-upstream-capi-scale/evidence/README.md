@@ -9,10 +9,110 @@
 | `stock-25x1.json` | 25 | 1 | Node sweep, cold controllers. **Its baseline is unusable — see below.** |
 | `stock-25x5.json` | 25 | 5 | Node sweep. |
 | `stock-25x10.json` | 25 | 10 | Node sweep. |
+| `stock-ladder-400x10.json` | 25→400 | 10 | **The ladder.** Five rungs, a 30-minute soak of the largest. The result. |
 
 None is a measurement of Cluster API's ceiling: every one stopped where
 `MAX_CLUSTERS` told it to, so each "ceiling" line reads as a floor, correctly.
-The sweep does answer **S2**, which is what it was for.
+The sweep answers **S2** and the ladder answers **S1** and **S4**.
+
+## The result
+
+**One stock Cluster API management cluster took 400 clusters and 4000 Machines
+to every control plane ready and every Machine Ready, and held them for 30
+minutes without drifting.** Nothing failed, nothing was OOM killed, nothing
+restarted. It is a floor and not a ceiling: 400 was the last rung the ladder
+was given.
+
+Getting there from nothing took **15.8 minutes** of wall clock, five rungs
+included.
+
+### The cost model (S2), five points, R² ≥ 0.9999
+
+Per cluster, at ten nodes each, fitted across 25 / 50 / 100 / 200 / 400:
+
+| Component | goroutines per cluster | live heap per cluster |
+|---|--:|--:|
+| core | 14.84 | 0.99 MB |
+| capd (DevCluster) | 13.95 | 0.93 MB |
+| kubeadm control plane | 27.99 | 0.65 MB |
+| kubeadm bootstrap | 1.97 | 0.28 MB |
+| **total** | **58.75** | **2.84 MB** |
+
+The kubeadm control plane manager's fit is R² = 1.00000 at 27.99 — it added
+exactly 28 goroutines per cluster at every rung. The heap figure is 284 KB per
+Machine at this node count, which agrees with the node sweep's independent
+~283 KB.
+
+etcd holds **82.7 keys per cluster** at ten nodes (R² = 0.9997, with a 289-key
+offset). The sweep's two-point fit predicted 86.9 — exact at the small rungs
+and 5% high at 400, so the sublinearity is real but small.
+
+For scale, and labelled as an **indication rather than a comparison**, since
+this is a different version and a different instrument from the kcp runs: those
+measured 51.7 goroutines per workspace, against 58.75 per cluster here.
+
+### What is actually large
+
+The four controllers hold **1.19 GB of live heap between them at 400 clusters**,
+against the 42 GiB of limits `sizing.md` gives them. They are not the
+constraint and are not close to being it.
+
+The API server is, by an order of magnitude:
+
+| | baseline | 25 | 50 | 100 | 200 | 400 |
+|---|--:|--:|--:|--:|--:|--:|
+| resident | 3.06 GB | 2.66 | 3.01 | 4.54 | 8.39 | **12.61 GB** |
+| goroutines | 4198 | 4305 | 4329 | 4232 | 4251 | 4193 |
+| etcd call latency | 5.1 ms | 5.7 | 6.0 | 6.9 | 9.4 | **12.1 ms** |
+
+Two things worth separating. The API server's **goroutine count is flat** across
+a sixteenfold change in fleet size — its cost is memory, not concurrency. And
+its **etcd call latency more than doubled** while etcd's own disk numbers did
+not move at all (wal fsync 1.5→1.6 ms, backend commit 2.7→2.8 ms), so that is
+not a disk running out; it is the API server doing more work per call.
+
+On 32 GiB control plane nodes, 12.6 GB resident at 400 clusters is the number
+that decides where this stops.
+
+### Convergence, paced per added cluster
+
+The ladder is incremental, so these are the corrected figures — the report's own
+`rung@N` facts divide by the fleet held and read better than the truth, because
+that run predates the fix:
+
+| rung | added | created | converged | per added cluster | driver's share |
+|---|--:|--:|--:|--:|--:|
+| 25 | 25 | 7s | 1m51s | 4.44s | 6% |
+| 50 | 25 | 9s | 1m17s | 3.08s | 11% |
+| 100 | 50 | 19s | 2m13s | 2.66s | 13% |
+| 200 | 100 | 42s | 2m49s | 1.69s | 20% |
+| 400 | 200 | 1m29s | 4m50s | 1.45s | 24% |
+
+Per-cluster convergence **improves** with fleet size, three-fold from the first
+rung to the last: the work batches. The column that should worry a reader is the
+last one — the driver creating the rung's objects through one client is now 24%
+of the rung's wall time, up from 6%. The spec named that as a risk and it is now
+measurable and growing.
+
+### The soak (S4)
+
+Thirty minutes holding 400 clusters. Every component's goroutine count and
+retained heap ended within 10% of where it started, the stored object count did
+not move (33883 throughout), and no control plane fell out of Ready. The one
+thing that did move: etcd accumulated **1.1 GiB of reclaimable pages in 30
+minutes** with the fleet completely unchanged, so a held fleet of this size
+still turns the store over at roughly a gigabyte an hour.
+
+### S3, and why it is loose
+
+Resident growth from baseline to 400 clusters is 9.55 GB over 32,767 stored
+objects — **~285 KiB per stored object**, against the ~200 KB the kcp shard
+cost. But taking the rungs pairwise gives 511 KiB (100→200) and 240 KiB
+(200→400), so this is a figure with a factor of two in it, not a measurement.
+
+The reason is exactly the one already recorded: `--profiling=false` means the
+heap figure is not post-collection, so only *resident* is usable, and resident
+carries allocator slack the fleet did not ask for. S3 needs the clean-room run.
 
 ```sh
 task test:capi:scale START_CLUSTERS=2 MAX_CLUSTERS=4 NODES_PER_CLUSTER=3 SOAK=0
@@ -136,17 +236,27 @@ which are monotonic and reproducible within a run, and not its heap.
 
 ## What to run next
 
-1. ~~Smoke, retention probe, cold restart, node sweep~~ — done, above.
-2. **The ladder** (S1, S3): 25 → 50 → 100 → 200 → 400 at 10 nodes with the
-   soak. Note its baseline inherits the sweep's high-water API server and
-   uncompacted etcd, so read its *within-run* slopes and not its absolutes.
-3. **A third node count** — 3 nodes at 25 clusters — to put the etcd fit on
-   three points and off the 1-node structural cliff.
-4. **A clean-room ladder**: `./scale-cluster.sh clusterclass` to roll the
-   control plane with profiling on — which restarts the API server and clears
-   its high-water mark — then restart the four controllers, let the settle wait
-   do its job, and climb. That is the run whose absolute numbers can be quoted,
-   and the first one whose API server heap means anything.
+1. ~~Smoke, retention probe, cold restart, node sweep, the ladder~~ — done.
+2. **Find the actual ceiling.** Everything so far is a floor. The cost model
+   says the controllers have room for thousands and the API server does not:
+   at 12.6 GB for 400 clusters on a 32 GiB node, and with etcd beside it,
+   somewhere around **800 to 900 clusters** should exhaust the control plane.
+   That is a prediction, stated as one, and the run that tests it is
+
+   ```sh
+   task test:capi:scale START_CLUSTERS=400 MAX_CLUSTERS=1600 NODES_PER_CLUSTER=10 \
+     OUT_NAME=ceiling
+   ```
+
+   A rung that fails there is the first real ceiling this exercise has, and
+   `Classify` will name which of the three ways it went.
+3. **The clean-room run**, for the numbers that get quoted: roll the control
+   plane with profiling on (`./scale-cluster.sh clusterclass`), which also
+   clears the API server's allocator high-water mark, restart the four
+   controllers, and climb. It is the only run whose API server heap and
+   therefore whose per-object figure (S3) will mean anything.
+4. **A third node count** — 3 nodes at 25 clusters — to put the per-Machine
+   half of the etcd fit on three points and off the 1-node structural cliff.
 
 A prediction, stated as one: the controllers will not be the ceiling. At 25
 clusters and 250 Machines the largest is capd at 42 MB of live heap against a
