@@ -44,6 +44,11 @@ ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 # Names differ between CAREN versions, so they are inputs rather than
 # assumptions; `clusterclass` prints what it found if the name is wrong.
 CAREN_CLUSTERCLASS="${CAREN_CLUSTERCLASS:-nutanix-quick-start}"
+# CAREN's default ClusterClasses ship in its Helm chart rather than in the
+# runtime-extensions components clusterctl installs, so bootstrap applies this
+# one directly. The file is included verbatim by the chart (.Files.Get, no
+# templating), so applying it is exactly what a Helm install would have done.
+CAREN_CLUSTERCLASS_URL="${CAREN_CLUSTERCLASS_URL:-https://raw.githubusercontent.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/${CAREN_VERSION}/charts/cluster-api-runtime-extensions-nutanix/defaultclusterclasses/nutanix-cluster-class.yaml}"
 CAREN_CLUSTERCLASS_NAMESPACE="${CAREN_CLUSTERCLASS_NAMESPACE:-default}"
 # CAREN publishes complete clusterctl templates in its releases. The default is
 # the Nutanix quick start from the release named below; override CLUSTER_TEMPLATE
@@ -106,6 +111,21 @@ YAML
       --addon helm \
       --runtime-extension "caren:${CAREN_VERSION}" \
       --wait-providers
+
+  # The ClusterClass, which clusterctl does not install.
+  #
+  # CAREN's providers artifact carries the runtime extension and nothing else;
+  # its default ClusterClasses live in the Helm chart, gated on
+  # .Values.deployDefaultClusterClasses and on CAPX being present. Installing
+  # CAREN through clusterctl therefore leaves a cluster with the extension
+  # running and no class for a Cluster to name — which presents as an empty
+  # ClusterClass list and nothing to say why.
+  #
+  # Applied after clusterctl init because the class refers to CAPX's types, and
+  # applied from the chart's own file because the chart includes it verbatim.
+  log "Applying CAREN's default Nutanix ClusterClass, which its clusterctl components do not carry"
+  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+    apply -f "${CAREN_CLUSTERCLASS_URL}"
 }
 
 # clusterclass copies CAREN's ClusterClass under a new name and adds one patch
@@ -123,7 +143,21 @@ clusterclass() {
       echo "ClusterClasses available in ${CAREN_CLUSTERCLASS_NAMESPACE}:" >&2
       kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
         get clusterclass -o name >&2 || true
-      die "no ClusterClass ${src}: set CAREN_CLUSTERCLASS to one of the above"
+      cat >&2 <<NOTE
+
+no ClusterClass ${src} in ${CAREN_CLUSTERCLASS_NAMESPACE}.
+
+If that list was empty, nothing installed one. CAREN's default ClusterClasses
+ship in its Helm chart, not in the runtime-extensions components clusterctl
+installs, so a clusterctl-only install leaves the extension running and no class
+for a Cluster to name. Re-run '$0 bootstrap', which applies it, or apply it by
+hand:
+
+  kubectl apply -f ${CAREN_CLUSTERCLASS_URL}
+
+If the list had entries, set CAREN_CLUSTERCLASS to one of them.
+NOTE
+      exit 1
     }
 
   log "Copying ClusterClass ${src} to ${dst} with an etcd backend quota of ${ETCD_QUOTA_BYTES} bytes"

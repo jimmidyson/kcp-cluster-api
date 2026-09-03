@@ -108,6 +108,17 @@ itself:
   nothing here needs.
 - the Nutanix credentials, which clusterctl reads at init time.
 
+It then applies CAREN's default Nutanix ClusterClass, **which clusterctl does
+not install**. CAREN's providers artifact carries the runtime extension and
+nothing else; the default ClusterClasses live in its Helm chart, gated on
+`deployDefaultClusterClasses` and on CAPX being present. So a clusterctl-only
+install leaves the extension running and no class for a `Cluster` to name, which
+presents as an empty ClusterClass list and nothing to say why.
+
+The chart includes that file verbatim — `.Files.Get`, no Helm templating — so
+applying it directly is exactly what a Helm install would have done. The `{{ }}`
+inside it are cloud-init and kube-vip templating, not Helm's.
+
 **CAPX and CAREN go on the kind cluster only.** They build the workload cluster
 and have no part in what it measures. Installing them on the cluster under test
 would put two more controller sets and their CRDs on the API server whose cost
