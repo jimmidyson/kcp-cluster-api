@@ -16,7 +16,12 @@ limitations under the License.
 
 package upstreamscale
 
-import "k8s.io/apimachinery/pkg/api/resource"
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
+)
 
 // Controller is one clusterctl-installed deployment: where it lives, and what
 // a scale run gives it.
@@ -27,9 +32,18 @@ import "k8s.io/apimachinery/pkg/api/resource"
 type Controller struct {
 	// Name is what the report attributes cost to.
 	Name string
-	// Namespace and Deployment are where clusterctl put it.
+	// Namespace and Deployment are where clusterctl put it, and Container is
+	// what it named the process inside: "manager", for every provider.
+	//
+	// Named because the sampler reads readiness, restarts and the memory
+	// limit from one container by name, and a name that is not there reads
+	// as zero of everything. The first run looked for a container named
+	// after the deployment and reported every controller not ready, with no
+	// limit and no restarts, at every rung — which is what an OOM kill would
+	// have looked like too, so Classify could never have seen one.
 	Namespace  string
 	Deployment string
+	Container  string
 	// CPU and Memory are what it is guaranteed. See sizing.md for where each
 	// number comes from; raise one and re-run when a rung is OOM killed.
 	CPU    string
@@ -42,6 +56,12 @@ type Controller struct {
 	// provider, whose template webhooks refuse the objects without it. The two
 	// kubeadm providers accept the flag and nothing reads it.
 	TopologyGate bool
+}
+
+// PodFacts reads this controller's facts out of its pod: the manager
+// container's, not whichever container happens to be first.
+func (c Controller) PodFacts(pod *corev1.Pod) deployedscale.PodFacts {
+	return deployedscale.PodFactsFrom(pod, c.Container)
 }
 
 // Quantities parses the resources, so a bad flag fails before the cluster is
@@ -62,14 +82,16 @@ func (c Controller) Quantities() (cpu, memory resource.Quantity, err error) {
 // than anything named for in-memory, and why it is the one that arrives wanting
 // a Docker socket.
 func Controllers() []Controller {
+	// clusterctl's manifests name the container "manager" in every provider.
+	const manager = "manager"
 	return []Controller{
 		{Name: "core", Namespace: "capi-system", Deployment: "capi-controller-manager",
-			CPU: "4", Memory: "8Gi", TopologyGate: true},
+			Container: manager, CPU: "4", Memory: "8Gi", TopologyGate: true},
 		{Name: "kubeadm-bootstrap", Namespace: "capi-kubeadm-bootstrap-system",
-			Deployment: "capi-kubeadm-bootstrap-controller-manager", CPU: "2", Memory: "4Gi"},
+			Deployment: "capi-kubeadm-bootstrap-controller-manager", Container: manager, CPU: "2", Memory: "4Gi"},
 		{Name: "kubeadm-control-plane", Namespace: "capi-kubeadm-control-plane-system",
-			Deployment: "capi-kubeadm-control-plane-controller-manager", CPU: "4", Memory: "6Gi"},
+			Deployment: "capi-kubeadm-control-plane-controller-manager", Container: manager, CPU: "4", Memory: "6Gi"},
 		{Name: "devcluster", Namespace: "capd-system", Deployment: "capd-controller-manager",
-			CPU: "6", Memory: "24Gi", DevCluster: true, TopologyGate: true},
+			Container: manager, CPU: "6", Memory: "24Gi", DevCluster: true, TopologyGate: true},
 	}
 }

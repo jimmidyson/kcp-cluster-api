@@ -16,7 +16,12 @@ limitations under the License.
 
 package upstreamscale
 
-import "testing"
+import (
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+)
 
 // TestEveryControllerIsSizedAndReachable. The list is the single place the
 // prepare tool and the sampler both read: a controller missing a size would be
@@ -29,7 +34,7 @@ func TestEveryControllerIsSizedAndReachable(t *testing.T) {
 	}
 	devClusters := 0
 	for _, c := range controllers {
-		if c.Name == "" || c.Namespace == "" || c.Deployment == "" {
+		if c.Name == "" || c.Namespace == "" || c.Deployment == "" || c.Container == "" {
 			t.Errorf("%+v is not addressable", c)
 		}
 		if _, _, err := c.Quantities(); err != nil {
@@ -43,5 +48,38 @@ func TestEveryControllerIsSizedAndReachable(t *testing.T) {
 	// and marking a second would strip a volume some other provider needs.
 	if devClusters != 1 {
 		t.Errorf("%d controllers marked DevCluster, want 1", devClusters)
+	}
+}
+
+// TestPodFactsComeFromTheManagerContainer. The first run reported every
+// controller not ready, with no memory limit and no restarts, at every rung
+// — because the sampler looked for a container named after the deployment,
+// and clusterctl names every provider's container "manager". Facts read from
+// a container that is not there are all zero, and zero restarts and no OOM
+// kill is exactly what Classify reads as "nothing died", so a controller the
+// kernel killed would have been reported as a fleet that did not keep up.
+func TestPodFactsComeFromTheManagerContainer(t *testing.T) {
+	for _, c := range Controllers() {
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name: "manager",
+				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse(c.Memory),
+				}},
+			}}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "manager", Ready: true, RestartCount: 2,
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason: "OOMKilled", ExitCode: 137,
+				}},
+			}}},
+		}
+		facts := c.PodFacts(pod)
+		if !facts.Ready || facts.MemoryLimitBytes == 0 {
+			t.Errorf("%s: facts were not read from the manager container: %+v", c.Name, facts)
+		}
+		if facts.RestartCount != 2 || !facts.OOMKilled {
+			t.Errorf("%s: the kill was not seen: %+v", c.Name, facts)
+		}
 	}
 }

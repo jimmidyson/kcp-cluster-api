@@ -180,7 +180,7 @@ func (s *Sampler) Sample(ctx context.Context, cl client.Client, controllers []Co
 		samples = append(samples, deployedscale.ComponentSample{
 			Component: c.Deployment,
 			Process:   process,
-			Pod:       deployedscale.PodFactsFrom(pod, c.Deployment),
+			Pod:       c.PodFacts(pod),
 		})
 		if t, err := s.Throttled(ctx, pod.Spec.NodeName, c.Namespace, pod.Name); err == nil {
 			throttling[c.Deployment] = t
