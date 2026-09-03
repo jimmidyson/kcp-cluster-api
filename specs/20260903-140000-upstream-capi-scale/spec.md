@@ -67,6 +67,42 @@ no metrics-server it could reach — so it is reported as zero; and their CPU
 seconds, which the pprof scraper does not read. Both are honest zeros in the
 evidence file and neither is a measurement.
 
+**Second run, same shape, an hour later.** Both fixes held: every controller
+sampled ready with its real limit, and the ordered teardown left nothing
+behind. It found the thing that now gates everything else — **the baseline was
+not cold.** Same pods, never restarted: run 1's baseline had 79 goroutines in
+core and 45 in capd, and run 2's baseline, with the first fleet deleted and its
+namespaces gone, had 1069 and 905 — within a few percent of run 1's *two
+cluster* sample. About a thousand goroutines per controller arrived with the
+first fleet and did not leave with it.
+
+That is either a one-time warm-up, in which case the marginal cost is the ~15
+goroutines per cluster both runs agree on, or retention proportional to
+clusters ever created, in which case a climbing ladder reports every rung as
+the sum of the ones below it and no per-cluster figure from a multi-rung run
+means what it says. Nothing in the two runs separates them. Until a third run
+does, no slope from this harness should be quoted — see `evidence/README.md`
+for the probe and the run order after it.
+
+Three instrument defects the two runs exposed, all fixed:
+
+- The etcd column was not comparable across a run's own rungs: 32.6 MiB holding
+  two clusters and 14.1 MiB holding four, because the defrag ran between rungs
+  but not before the baseline. It now runs before the baseline too, which R6a
+  permits — before a run is not inside a rung.
+- The controllers' resident memory and CPU time were zero, resident having been
+  read from a metrics-server this cluster does not have and CPU not at all.
+  Both now come from the kubelet's cAdvisor exposition, which the harness was
+  already scraping for throttling — so no addon joins the cluster being
+  measured. Resident is the one that changes a conclusion: a container limit is
+  enforced against it, so it is how the next rung's OOM kill is seen coming.
+- The stored object total moved 2x between the two runs for the same fleet size,
+  because Events expire on their own TTL and are most of the store at these
+  sizes. S3 divides by that total, so it is now split into Cluster API groups,
+  events, and the whole. The API server's heap figure also now says whether the
+  forced collection behind it actually landed, which the code claimed and did
+  not do.
+
 Still to be met by a real run: whether the in-memory provider holds a few
 hundred fake API servers in one process, and how the topology controller paces
 itself creating a rung's worth of Clusters at once.
