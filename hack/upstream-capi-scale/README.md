@@ -4,6 +4,17 @@
 several steps rather than one: the middle one wants reading before it is applied,
 and the last one is the one you will re-run.
 
+First, the pinned tools:
+
+```sh
+task tools:capi     # kind, clusterctl v1.14.1, helm, into bin/
+```
+
+The script puts `bin/` first on its PATH. clusterctl's version is not
+incidental: it warns or refuses when it is older than the providers it is asked
+to install, and the Cluster API it installs is the thing being measured — so
+the tool and what it installs are pinned to the same version.
+
 Nutanix credentials must be in the environment before the first step —
 `clusterctl init` reads them, and so does `clusterctl generate cluster` later:
 

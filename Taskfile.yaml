@@ -24,6 +24,13 @@ vars:
   # A local cluster for `task test:scale:kind`. A Go module like the rest,
   # so it installs with the toolchain alone.
   KIND_VERSION: v0.32.0
+  # The Cluster API this repository's stock-upstream scale test installs and
+  # measures. Pinned rather than "latest" for the reason every version here is:
+  # a figure without the version it was measured on is not a figure — and
+  # clusterctl warns or refuses when it is older than the providers it is asked
+  # to install, so the tool and what it installs move together.
+  CLUSTERCTL_VERSION: v1.14.1
+  HELM_VERSION: v3.21.4
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -548,6 +555,40 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:clusterctl:
+    desc: Download the pinned Cluster API CLI into bin/
+    status:
+      - test -x {{.BIN}}/clusterctl
+    cmds:
+      - mkdir -p {{.BIN}}
+      # A plain binary rather than an archive, which is how Cluster API
+      # publishes it. `go install sigs.k8s.io/cluster-api/cmd/clusterctl` would
+      # build it from source instead — and this repository replaces
+      # sigs.k8s.io/cluster-api with a fork, so the tool that installs stock
+      # providers would be built from the code the test is trying not to
+      # measure.
+      - >-
+        curl -sSfLo {{.BIN}}/clusterctl
+        "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{.CLUSTERCTL_VERSION}}/clusterctl-{{.GOOS_}}-{{.GOARCH_}}"
+      - chmod +x {{.BIN}}/clusterctl
+
+  tools:helm:
+    desc: Download the pinned Helm CLI into bin/
+    status:
+      - test -x {{.BIN}}/helm
+    cmds:
+      # CAREN installs from a Helm repository rather than through clusterctl,
+      # so the provisioning script needs this as much as it needs clusterctl.
+      - mkdir -p {{.BIN}}
+      - >-
+        curl -sSfL
+        "https://get.helm.sh/helm-{{.HELM_VERSION}}-{{.GOOS_}}-{{.GOARCH_}}.tar.gz"
+        | tar -xzf - -C {{.BIN}} --strip-components=1 {{.GOOS_}}-{{.GOARCH_}}/helm
+
+  tools:capi:
+    desc: Install everything the stock Cluster API scale test's provisioning script needs
+    deps: [tools:kind, tools:clusterctl, tools:helm]
 
   tools:kind:
     desc: Install the pinned local-cluster tool into bin/

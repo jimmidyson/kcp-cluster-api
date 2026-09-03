@@ -19,6 +19,13 @@ set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# The pinned tools first. `task tools:capi` puts kind, clusterctl and helm in
+# bin/, and clusterctl's version is not incidental: it warns or refuses when it
+# is older than the providers it is asked to install, and the Cluster API this
+# test installs is the thing being measured. A clusterctl from somewhere else
+# is a different tool installing possibly different defaults.
+export PATH="${REPO_ROOT}/bin:${PATH}"
+
 # --- Inputs. Everything here is meant to be overridden from the environment.
 BOOTSTRAP_CLUSTER="${BOOTSTRAP_CLUSTER:-capi-scale-bootstrap}"
 CLUSTER_NAME="${CLUSTER_NAME:-capi-scale}"
