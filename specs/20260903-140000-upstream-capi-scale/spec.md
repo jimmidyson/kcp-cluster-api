@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-03
 
-**Status**: Draft — measured. 400 clusters and 4000 Machines on one stock management cluster. See "Where this stands".
+**Status**: Draft — measured. 1600 clusters and 16,000 Machines on one stock management cluster, and still no failing rung. See "Where this stands".
 
 ## Where this stands
 
@@ -160,6 +160,38 @@ S1 is answered as a floor with a cost model behind it, S2 and S4 are answered,
 and S3 is measured but loose — a factor of two, because `--profiling=false`
 leaves only resident memory usable and resident carries allocator slack. All of
 it is in `evidence/README.md`.
+
+**The ceiling attempt, and it did not find one.** 400 → 800 → 1600 clusters at
+ten nodes each. **1600 clusters and 16,000 Machines reached every control plane
+ready and every Machine Ready, and held for 32 minutes.** Nothing failed,
+nothing was killed, nothing restarted, so this too is a floor.
+
+The cost model earns its keep here: fitted on 25-400 clusters, it predicted the
+400-1600 range to **within 2%** — 58.75 goroutines per cluster against 59.27
+measured, 2.84 MB of live heap against 2.89 MB.
+
+**A prediction in the last version of this file was wrong and is corrected.** It
+said 800 to 900 clusters would exhaust the control plane. That extrapolated a
+resident figure from a contaminated baseline and assumed linear growth; the API
+server's own share is 6.7 MB per cluster, which puts a 32 GiB node near 3500.
+What is actually closest is two controllers against the limits `sizing.md` chose
+for them: the kubeadm control plane manager at 63% of its 6 GiB and core at 60%
+of its 8 GiB, both reaching their limits around 2500-2700 clusters. The next
+rung, 3200, should kill them — a prediction, and the first one this exercise has
+that is about a configured limit rather than about Cluster API.
+
+Two defects the run exposed in the harness, both fixed:
+
+- **The soak's drift check compared endpoints only**, so core's retained heap
+  going 1.65 GB → 3.46 → 1.61 during the 1600-cluster soak was reported as
+  "nothing drifted". The peak is carried now and an excursion counts, which
+  matters because a component that transiently needs twice its resting heap has
+  to be sized for the peak.
+- **`apiserver_storage_objects` lags**, so the 1600-cluster rung sample
+  under-reported Cluster API objects by 26% against the soak samples taken
+  minutes later with the fleet unchanged. Recorded rather than fixed: the soak's
+  figures are the ones to use, and they give 37.6-38.6 Cluster API objects per
+  cluster, the most reproducible quantity in the exercise.
 
 Still to be met by a real run: whether the in-memory provider holds a few
 hundred fake API servers in one process, and how the topology controller paces

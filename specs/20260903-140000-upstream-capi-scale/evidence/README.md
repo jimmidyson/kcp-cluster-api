@@ -9,7 +9,8 @@
 | `stock-25x1.json` | 25 | 1 | Node sweep, cold controllers. **Its baseline is unusable — see below.** |
 | `stock-25x5.json` | 25 | 5 | Node sweep. |
 | `stock-25x10.json` | 25 | 10 | Node sweep. |
-| `stock-ladder-400x10.json` | 25→400 | 10 | **The ladder.** Five rungs, a 30-minute soak of the largest. The result. |
+| `stock-ladder-400x10.json` | 25→400 | 10 | The ladder. Five rungs, a 30-minute soak of the largest. |
+| `stock-ceiling-1600x10.json` | 400→1600 | 10 | **The ceiling attempt.** Three rungs, a 32-minute soak. Still did not fail. |
 
 None is a measurement of Cluster API's ceiling: every one stopped where
 `MAX_CLUSTERS` told it to, so each "ceiling" line reads as a floor, correctly.
@@ -17,14 +18,54 @@ The sweep answers **S2** and the ladder answers **S1** and **S4**.
 
 ## The result
 
-**One stock Cluster API management cluster took 400 clusters and 4000 Machines
-to every control plane ready and every Machine Ready, and held them for 30
-minutes without drifting.** Nothing failed, nothing was OOM killed, nothing
-restarted. It is a floor and not a ceiling: 400 was the last rung the ladder
-was given.
+**One stock Cluster API management cluster took 1600 clusters and 16,000
+Machines to every control plane ready and every Machine Ready, and held them for
+32 minutes.** Nothing failed, nothing was OOM killed, nothing restarted. It is
+still a floor and not a ceiling: 1600 was the last rung it was given.
 
-Getting there from nothing took **15.8 minutes** of wall clock, five rungs
-included.
+The 400-cluster ladder below came first and is where the cost model was fitted.
+The ceiling run then climbed 400 → 800 → 1600 to find where it breaks, and did
+not find it.
+
+### The cost model predicted four times beyond its own range, and held
+
+The per-cluster figures fitted on 25-400 clusters, checked against the
+400-1600 run:
+
+| | fitted 25→400 | measured 400→1600 | error |
+|---|--:|--:|--:|
+| core, goroutines | 14.84 | 15.11 | +1.8% |
+| capd, goroutines | 13.95 | 14.07 | +0.9% |
+| kubeadm control plane, goroutines | 27.99 | 28.07 | +0.3% |
+| kubeadm bootstrap, goroutines | 1.97 | 2.02 | +2.7% |
+| **all four, goroutines** | **58.75** | **59.27** | **+0.9%** |
+| **all four, live heap** | **2.84 MB** | **2.89 MB** | **+1.9%** |
+
+A model fitted to 400 clusters, extrapolated to 1600, wrong by under 2%.
+
+### What breaks next, and it is not the API server
+
+The prediction in the previous version of this file — that 800 to 900 clusters
+would exhaust the control plane — **was wrong**, and 1600 ran comfortably. It
+came from extrapolating a resident figure whose baseline was a high-water mark
+from an earlier run, and from assuming resident grows linearly. It does not: the
+API server's own share is 10.8 GB across 1600 clusters, **6.7 MB per cluster**,
+which puts a 32 GiB node at roughly 3500 clusters rather than 900.
+
+The real constraint is two controllers' limits, and it arrives sooner:
+
+| at 1600 clusters | heapSys | limit | used | limit reached at |
+|---|--:|--:|--:|--:|
+| kubeadm control plane | 4.08 GB | 6.44 GB | 63% | **~2500 clusters** |
+| core | 5.12 GB | 8.59 GB | 60% | **~2700 clusters** |
+| capd | 4.51 GB | 25.8 GB | 18% | ~9100 clusters |
+| kubeadm bootstrap | 1.05 GB | 4.29 GB | 24% | ~6600 clusters |
+| API server (node) | 21.3 GB | 34.4 GB | 62% | ~3500 clusters |
+
+So the next rung, 3200, should kill the kubeadm control plane manager first and
+core immediately after — both by the limits `sizing.md` chose, not by anything
+intrinsic. Stated as a prediction. Raising those two limits moves the wall to
+the API server's node at around 3500.
 
 ### The cost model (S2), five points, R² ≥ 0.9999
 
@@ -108,14 +149,36 @@ bound on the harness's overhead rather than a property of Cluster API. The
 convergence column beside it is unaffected — it is timed after creation
 finishes.
 
-### The soak (S4)
+### The soak (S4), and a hole in how it was checked
 
-Thirty minutes holding 400 clusters. Every component's goroutine count and
-retained heap ended within 10% of where it started, the stored object count did
-not move (33883 throughout), and no control plane fell out of Ready. The one
-thing that did move: etcd accumulated **1.1 GiB of reclaimable pages in 30
-minutes** with the fleet completely unchanged, so a held fleet of this size
-still turns the store over at roughly a gigabyte an hour.
+Thirty minutes holding 400 clusters, then 32 minutes holding 1600. Both reported
+no drift; no control plane fell out of Ready; etcd accumulated **1.1 GiB of
+reclaimable pages in 30 minutes** at 400 clusters and 1.7 GiB at 1600, with the
+fleet completely unchanged — a held fleet turns the store over at roughly a
+gigabyte an hour either way.
+
+**The 1600-cluster soak's "nothing drifted" was not true.** core's retained heap
+across that soak went 1.65 GB, 1.67, 3.19, 3.46, 1.61, 1.60, 1.61: it more than
+doubled in the middle and came home. `Drift` compared the first sample with the
+last, so the excursion was invisible.
+
+Fixed — the peak is carried now and a peak excursion counts as drift, reported
+as "came back but peaked +109% above where it started". This matters beyond
+tidiness: a component that transiently needs twice its resting heap has to be
+sized for the peak, and that peak is what the limits table above should really
+be measured against.
+
+### The stored-object gauge lags behind the fleet
+
+`apiserver_storage_objects` is refreshed on a timer, not on write, and at 1600
+clusters the rung sample caught it mid-catch-up: 45,760 Cluster API objects at
+the rung, **61,761** ten minutes into the soak, with the fleet unchanged
+throughout. A 26% under-report.
+
+The soak's figures are the trustworthy ones, and they are consistent: 37.6
+Cluster API objects per cluster at 400 and 800, 38.6 at 1600. That count is also
+the most reproducible number in the whole exercise — 15,043 at 400 clusters in
+the ladder run and 15,039 in the ceiling run, four apart in fifteen thousand.
 
 ### S3, and why it is loose
 
@@ -263,7 +326,20 @@ which are monotonic and reproducible within a run, and not its heap.
 ## What to run next
 
 1. ~~Smoke, retention probe, cold restart, node sweep, the ladder~~ — done.
-2. **Find the actual ceiling.** Everything so far is a floor. The cost model
+2. ~~**Find the actual ceiling.**~~ Attempted, and 1600 clusters held. The
+   remaining rung is 3200, which the limits table above predicts will kill the
+   kubeadm control plane manager and core. Either raise those two limits first,
+   to find out what Cluster API does rather than what `sizing.md` chose, or run
+   it as it stands to confirm the prediction:
+
+   ```sh
+   task test:capi:scale START_CLUSTERS=1600 MAX_CLUSTERS=3200 NODES_PER_CLUSTER=10 \
+     OUT_NAME=ceiling-3200
+   ```
+
+   Superseded, kept for the reasoning:
+
+   **Find the actual ceiling.** Everything so far is a floor. The cost model
    says the controllers have room for thousands and the API server does not:
    at 12.6 GB for 400 clusters on a 32 GiB node, and with etcd beside it,
    somewhere around **800 to 900 clusters** should exhaust the control plane.
