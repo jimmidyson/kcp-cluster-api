@@ -4,9 +4,7 @@
 
 **Created**: 2026-09-03
 
-**Status**: Cluster provisioning and every offline-testable part of the
-instrument built and tested. The driver that creates the fleet and waits for it
-is not built yet — see "Where this stands".
+**Status**: Built, never run. See "Where this stands".
 
 ## Where this stands
 
@@ -28,10 +26,20 @@ Built and unit tested, without a cluster:
   which is the one risk here that no test of this code can find
 - the convergence count, against both halves of the end state
 
-Not built: the loop that stitches them together — create a rung, wait, sample,
-climb, then soak — and the integration test that drives it. Every piece it
-needs now exists and is tested; what is left is the sequencing and the cluster
-it has to run against.
+And the loop that stitches them together:
+`test/integration/capiscale`, run as `task test:capi:scale`. It preflights, takes
+a baseline, climbs the ladder — defragmenting between rungs and never inside one
+— classifies whatever stops it, holds the largest fleet that converged for a
+soak, and writes one report describing all of it.
+
+**Nothing here has run against a cluster.** `task check` passes and the run
+skips cleanly when there is no kubeconfig; that is the whole of what is
+verified. The first real run is expected to find things, and the parts most
+likely to move are the ones that meet a real API server: whether this
+repository's forked object types apply against stock CRDs (which is why the
+preflight runs first and fails loudly), whether the in-memory provider holds a
+few hundred fake API servers in one process, and how the topology controller
+paces itself creating a rung's worth of Clusters at once.
 
 **Input**: "i would like to create a scale test against a standard kubernetes
 cluster. i can provide a CAPX cluster with whatever resources this scale test
