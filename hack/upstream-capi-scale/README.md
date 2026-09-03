@@ -7,7 +7,7 @@ and the last one is the one you will re-run.
 First, the pinned tools:
 
 ```sh
-task tools:capi     # kind, clusterctl v1.14.1, helm, into bin/
+task tools:capi     # kind and clusterctl v1.14.1, into bin/
 ```
 
 The script puts `bin/` first on its PATH. clusterctl's version is not
@@ -90,15 +90,23 @@ quote them.
 
 ## What goes where, and why
 
-`bootstrap` follows CAREN's own documented install, which needs four things
-that are easy to leave out and each fail in a way that does not name itself:
-`CLUSTER_TOPOLOGY=true` (the templates are ClusterClass based, and without the
-gate the topology controller does not run), `EXP_RUNTIME_SDK=true` (CAREN is a
-runtime extension; without the gate its hooks are never called and the cluster
-comes up unpatched), `--addon helm` (the CNI and cloud provider deploy with
-`strategy: HelmAddon`, so without the Helm addon provider there is no CNI and no
-node ever becomes Ready), and the Nutanix credentials at init time. CAREN itself
-then installs from its Helm repo into `caren-system`.
+`bootstrap` is one `clusterctl init`. CAREN is a clusterctl provider given
+somewhere to find it, so the script writes a clusterctl config into `bin/`
+naming CAREN's release and passes it with `--config` — rather than editing
+`~/.config/cluster-api/clusterctl.yaml`, which the rest of your work depends on.
+
+Four things that line needs, each of which fails in a way that does not name
+itself:
+
+- `CLUSTER_TOPOLOGY=true` — the templates are ClusterClass based, and without
+  the gate the topology controller does not run at all.
+- `EXP_RUNTIME_SDK=true` — CAREN is a runtime extension; without the gate its
+  hooks are never called and the cluster comes up unpatched.
+- `--addon helm` — CAREN's templates deploy the CNI and the cloud provider with
+  `strategy: HelmAddon`, so without the Helm addon *provider* there is no CNI
+  and no node ever becomes Ready. This is a provider, not the `helm` CLI, which
+  nothing here needs.
+- the Nutanix credentials, which clusterctl reads at init time.
 
 **CAPX and CAREN go on the kind cluster only.** They build the workload cluster
 and have no part in what it measures. Installing them on the cluster under test

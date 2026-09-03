@@ -60,7 +60,7 @@ die() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required and is not on PATH"; }
 
 bootstrap() {
-  need kind; need kubectl; need clusterctl; need helm
+  need kind; need kubectl; need clusterctl
   if kind get clusters 2>/dev/null | grep -qx "${BOOTSTRAP_CLUSTER}"; then
     log "kind cluster ${BOOTSTRAP_CLUSTER} already exists"
   else
@@ -68,6 +68,19 @@ bootstrap() {
     kind create cluster --name "${BOOTSTRAP_CLUSTER}"
   fi
   kubectl config use-context "kind-${BOOTSTRAP_CLUSTER}" >/dev/null
+
+  # CAREN is a clusterctl provider, given somewhere to find it. Written here
+  # rather than into the operator's own ~/.config/cluster-api/clusterctl.yaml:
+  # a scale run should not edit a file the rest of someone's work depends on,
+  # and a config it wrote itself is one the next run can rely on.
+  mkdir -p "${REPO_ROOT}/bin"
+  local config="${REPO_ROOT}/bin/clusterctl-${BOOTSTRAP_CLUSTER}.yaml"
+  cat > "${config}" <<YAML
+providers:
+  - name: "caren"
+    url: "https://github.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/releases/${CAREN_VERSION}/runtime-extensions-components.yaml"
+    type: "RuntimeExtensionProvider"
+YAML
 
   # CAPX and CAREN go here and only here. They build the cluster; they are not
   # part of what is measured, and installing them on the workload cluster would
@@ -82,23 +95,17 @@ bootstrap() {
   #     its hooks are never called and the cluster comes up unpatched.
   #   * --addon helm — CAREN's templates deploy the CNI and the cloud provider
   #     with strategy: HelmAddon, which is the Helm addon provider's job. Leave
-  #     it out and the cluster has no CNI, so no node ever becomes Ready.
+  #     it out and the cluster has no CNI, so no node ever becomes Ready. This
+  #     is the provider, not the helm CLI, which nothing here needs.
   #   * the Nutanix credentials, which clusterctl reads at init time.
-  log "Installing Cluster API, CAPX and the Helm addon provider on the bootstrap cluster"
+  log "Installing Cluster API, CAPX, the Helm addon provider and CAREN ${CAREN_VERSION}"
   env CLUSTER_TOPOLOGY=true EXP_RUNTIME_SDK=true \
     clusterctl init \
+      --config "${config}" \
       --infrastructure "nutanix${CAPX_VERSION:+:${CAPX_VERSION}}" \
       --addon helm \
+      --runtime-extension "caren:${CAREN_VERSION}" \
       --wait-providers
-
-  log "Installing CAREN ${CAREN_VERSION} via Helm"
-  helm repo add caren https://nutanix-cloud-native.github.io/cluster-api-runtime-extensions-nutanix/helm
-  helm repo update caren
-  helm upgrade --install caren caren/cluster-api-runtime-extensions-nutanix \
-    --version "${CAREN_VERSION}" \
-    --namespace caren-system \
-    --create-namespace \
-    --wait --wait-for-jobs
 }
 
 # clusterclass copies CAREN's ClusterClass under a new name and adds one patch

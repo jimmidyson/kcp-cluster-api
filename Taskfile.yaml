@@ -30,7 +30,6 @@ vars:
   # clusterctl warns or refuses when it is older than the providers it is asked
   # to install, so the tool and what it installs move together.
   CLUSTERCTL_VERSION: v1.14.1
-  HELM_VERSION: v3.21.4
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -573,22 +572,9 @@ tasks:
         "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{.CLUSTERCTL_VERSION}}/clusterctl-{{.GOOS_}}-{{.GOARCH_}}"
       - chmod +x {{.BIN}}/clusterctl
 
-  tools:helm:
-    desc: Download the pinned Helm CLI into bin/
-    status:
-      - test -x {{.BIN}}/helm
-    cmds:
-      # CAREN installs from a Helm repository rather than through clusterctl,
-      # so the provisioning script needs this as much as it needs clusterctl.
-      - mkdir -p {{.BIN}}
-      - >-
-        curl -sSfL
-        "https://get.helm.sh/helm-{{.HELM_VERSION}}-{{.GOOS_}}-{{.GOARCH_}}.tar.gz"
-        | tar -xzf - -C {{.BIN}} --strip-components=1 {{.GOOS_}}-{{.GOARCH_}}/helm
-
   tools:capi:
     desc: Install everything the stock Cluster API scale test's provisioning script needs
-    deps: [tools:kind, tools:clusterctl, tools:helm]
+    deps: [tools:kind, tools:clusterctl]
 
   tools:kind:
     desc: Install the pinned local-cluster tool into bin/
