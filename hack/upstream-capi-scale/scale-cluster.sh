@@ -74,6 +74,22 @@ BOOTSTRAP_CAPI_VERSION="${BOOTSTRAP_CAPI_VERSION:-v1.12.5}"
 # CAREN has no variable for it — hence the ClusterClass copy below.
 ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
 
+# The API server's pprof endpoints, which CAREN's ClusterClass turns off.
+#
+# The scale run forces a collection before reading the API server's heap, so
+# that the figure is the retained set and comparable with the controllers',
+# which are read the same way. Without profiling that request never lands and
+# the heap figure is a point on an allocator sawtooth — the first five runs
+# reported the API server's heap moving by 150 MiB between rungs in both
+# directions, which is noise and not a fleet.
+#
+# Off by default in CAREN because CIS benchmark 1.2.18 asks for it. This is a
+# throwaway scale cluster and the same trade is already made for etcd's
+# unauthenticated metrics port, so it is on here and stated rather than
+# assumed. Set APISERVER_PROFILING=false to keep the hardened default and lose
+# the API server's heap figure.
+APISERVER_PROFILING="${APISERVER_PROFILING:-true}"
+
 # The CAREN ClusterClass to copy, and the template to generate the Cluster from.
 # Names differ between CAREN versions, so they are inputs rather than
 # assumptions; `clusterclass` prints what it found if the name is wrong.
@@ -152,6 +168,7 @@ CAREN                    ${CAREN_VERSION}
 Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
 Cluster API under test   ${CAPI_VERSION}
 etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
+API server profiling     ${APISERVER_PROFILING} (off in CAREN; on here so the heap figure is post-collection)
 CONFIG
 }
 
@@ -259,6 +276,12 @@ YAML
 # up the ladder would look like a cluster that got slower.
 clusterclass() {
   need kubectl; need jq
+  # --argjson parses this as JSON, so anything but true or false fails inside
+  # jq with a message about the wrong thing.
+  case "${APISERVER_PROFILING}" in
+    true|false) ;;
+    *) die "APISERVER_PROFILING must be true or false, not '${APISERVER_PROFILING}'" ;;
+  esac
   local src="${CAREN_CLUSTERCLASS}" dst="${SCALE_CLUSTERCLASS}"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" >/dev/null 2>&1 || {
@@ -289,10 +312,11 @@ NOTE
   # The metrics port carries no data and no authentication — it is etcd's
   # /metrics, not its client API — which is a fair trade on a throwaway scale
   # cluster and would not be on anything else.
-  log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
+  log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381, profiling ${APISERVER_PROFILING}"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" -o json \
-    | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" '
+    | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
+         --argjson profiling "${APISERVER_PROFILING}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
         | .spec.patches = ((.spec.patches // []) + [{
@@ -313,7 +337,23 @@ NOTE
                 ]}}
               }]
             }]
-          }])' \
+          }])
+        | if $profiling then .spec.patches += [{
+            name: "apiServerProfiling",
+            description: "Turn the API server pprof endpoints back on. The scale run forces a collection before reading its heap, so that the figure is the retained set rather than a point on an allocator sawtooth; CAREN disables profiling for CIS 1.2.18, which is right for a real cluster and leaves this one unable to measure the component most likely to be its ceiling.",
+            definitions: [{
+              selector: {
+                apiVersion: .spec.controlPlane.templateRef.apiVersion,
+                kind: .spec.controlPlane.templateRef.kind,
+                matchResources: {controlPlane: true}
+              },
+              jsonPatches: [{
+                op: "add",
+                path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs/-",
+                value: {name: "profiling", value: "true"}
+              }]
+            }]
+          }] else . end' \
     | kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f -
 
   cat <<NOTE
@@ -325,6 +365,23 @@ Applied as ClusterClass ${dst}. Two things to check against your CAREN version:
     extraArgs is a map, the patch above needs the map form instead.
   * the patch replaces .etcd wholesale. If your ClusterClass already patches
     etcd, merge the two rather than stacking them.
+  * the profiling patch *appends* to apiServer.extraArgs rather than replacing
+    it, because that list is where CAREN's own --profiling=false lives and
+    replacing it would take the rest of its API server configuration with it.
+    It therefore needs apiServer.extraArgs to exist, which it does on any
+    ClusterClass that sets the flag at all. Appended last so it wins: a
+    repeated flag takes the last value on the command line.
+
+Once the control plane has rolled, check the flag actually turned over rather
+than trusting the patch:
+
+  kubectl --kubeconfig ${WORKLOAD_KUBECONFIG} -n kube-system \
+    get pod -l component=kube-apiserver \
+    -o jsonpath='{.items[0].spec.containers[0].command}' | tr ',' '\n' | grep -i profil
+
+Expect profiling=true to be the last profiling entry. If it is still only
+false, the flag comes from somewhere this patch does not reach — check whether
+CAREN sets it through a ClusterClass patch of its own that runs after this one.
 NOTE
 }
 

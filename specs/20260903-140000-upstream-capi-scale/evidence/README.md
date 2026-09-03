@@ -120,18 +120,19 @@ causes:
   and 0.09 MiB in the third, which is the tell. **Keys are trustworthy; bytes
   are not, without a compaction first.**
 
-The API server's heap figure is separately unusable on this cluster: every run
-says `heap not post-collection`, meaning the forced-collection request never
-lands. Most likely `--profiling=false` — check with
+The API server's heap figure is separately unusable on this cluster, and now
+confirmed why: `--profiling=false`, which is CIS benchmark 1.2.18 and comes
+from CAREN's ClusterClass. Every run says `heap not post-collection` because
+the forced-collection request cannot land, and the numbers show it — the heap
+moved by 150 MiB between rungs, in both directions, while the fleet only grew.
 
-```sh
-kubectl -n kube-system get pod -l component=kube-apiserver \
-  -o jsonpath='{.items[0].spec.containers[0].command}' | tr ',' '\n' | grep -i profil
-```
+`scale-cluster.sh clusterclass` now adds a patch turning it back on, off by
+`APISERVER_PROFILING=false`. It rolls the control plane, which is also the only
+thing that resets the API server's allocator high-water mark, so it is worth
+doing immediately before the run whose absolutes are meant to be quoted.
 
-If it is off, the same ClusterClass copy that opens etcd's metrics port can turn
-it on. Until then use the API server's **goroutines and resident**, which are
-monotonic and reproducible, and not its heap.
+Until that patch has rolled, use the API server's **goroutines and resident**,
+which are monotonic and reproducible within a run, and not its heap.
 
 ## What to run next
 
@@ -141,9 +142,11 @@ monotonic and reproducible, and not its heap.
    uncompacted etcd, so read its *within-run* slopes and not its absolutes.
 3. **A third node count** — 3 nodes at 25 clusters — to put the etcd fit on
    three points and off the 1-node structural cliff.
-4. **A clean-room ladder**: restart the four controllers *and* the API server,
-   wait for the settle, then climb. That is the run whose absolute numbers can
-   be quoted.
+4. **A clean-room ladder**: `./scale-cluster.sh clusterclass` to roll the
+   control plane with profiling on — which restarts the API server and clears
+   its high-water mark — then restart the four controllers, let the settle wait
+   do its job, and climb. That is the run whose absolute numbers can be quoted,
+   and the first one whose API server heap means anything.
 
 A prediction, stated as one: the controllers will not be the ceiling. At 25
 clusters and 250 Machines the largest is capd at 42 MB of live heap against a

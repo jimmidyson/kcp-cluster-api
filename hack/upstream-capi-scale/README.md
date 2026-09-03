@@ -392,6 +392,52 @@ Once the DevMachines go, every Machine finishes, then every Cluster, then the
 namespace. Check that the list is empty before the next run: a run that starts
 over a terminating fleet measures both.
 
+## The API server's profiling, and why this cluster turns it back on
+
+CAREN's ClusterClass sets `--profiling=false` on the API server, which is CIS
+benchmark 1.2.18 and right for a cluster anyone depends on. It also makes the
+API server the one component of this run whose memory cannot be measured.
+
+The harness forces a collection before reading a heap figure — every controller
+through pprof with `gc=1`, so the number is the retained set rather than
+wherever the allocator happened to be. With profiling off that request never
+lands, and the report says so on every line:
+
+```
+apiserver@4 clusters: ... 475.1 MiB heap ... (heap not post-collection: the
+forced collection did not land, so this is a point on a sawtooth and not the
+retained set)
+```
+
+The first five runs bear that out: the API server's heap moved by 150 MiB
+between rungs, in both directions, while the fleet only grew. That is an
+allocator, not a fleet.
+
+So `clusterclass` adds a second patch turning it on, and `config` prints
+whether it will. Set `APISERVER_PROFILING=false` to keep CAREN's hardened
+default and give up the figure. The trade is the same one already made for
+etcd's metrics port: unauthenticated debug endpoints on a throwaway scale
+cluster, and never on anything else.
+
+Two things worth knowing:
+
+- **It rolls the control plane**, like any ClusterClass change — see the
+  section above. That is a cost and also a benefit: the API server's allocator
+  high-water mark never falls, so its memory figures accumulate across runs on
+  a long-lived process, and a rollout is the only thing that resets them.
+  Doing this immediately before the run whose absolute numbers you intend to
+  quote is worth the three machine rebuilds.
+- **The patch appends to `apiServer.extraArgs`** rather than replacing it,
+  because that list is where CAREN's own `--profiling=false` lives. Appended
+  last so it wins, since a repeated flag takes the last value. Check it turned
+  over rather than trusting it:
+
+```sh
+kubectl --kubeconfig ../../bin/capi-scale.kubeconfig -n kube-system \
+  get pod -l component=kube-apiserver \
+  -o jsonpath='{.items[0].spec.containers[0].command}' | tr ',' '\n' | grep -i profil
+```
+
 ## Node labels have to be in a domain Cluster API propagates
 
 Cluster API copies a Machine label to its Node only if it has
