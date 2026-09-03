@@ -43,7 +43,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -53,18 +52,6 @@ import (
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/upstreamscale"
 )
-
-// controller is one clusterctl-installed deployment and what it should be given.
-type controller struct {
-	name      string
-	namespace string
-	deploy    string
-	cpu       string
-	memory    string
-	// devCluster is true for the one provider that ships expecting a Docker
-	// socket it does not need for the in-memory backend.
-	devCluster bool
-}
 
 func main() {
 	// This command's own flag set, not flag.CommandLine.
@@ -88,22 +75,21 @@ func main() {
 		only   = fs.String("only", "", "Run one step and stop: \"preflight\" checks that the cluster "+
 			"serves what a run will create, and touches nothing.")
 	)
-	controllers := []*controller{
-		{name: "core", namespace: "capi-system", deploy: "capi-controller-manager", cpu: "4", memory: "8Gi"},
-		{name: "kubeadm-bootstrap", namespace: "capi-kubeadm-bootstrap-system",
-			deploy: "capi-kubeadm-bootstrap-controller-manager", cpu: "2", memory: "4Gi"},
-		{name: "kubeadm-control-plane", namespace: "capi-kubeadm-control-plane-system",
-			deploy: "capi-kubeadm-control-plane-controller-manager", cpu: "4", memory: "6Gi"},
-		{name: "devcluster", namespace: "capd-system", deploy: "capd-controller-manager",
-			cpu: "6", memory: "24Gi", devCluster: true},
+	// The one list, shared with the sampler that measures what this sizes.
+	// Two lists would drift, and the failure would be a run that carefully
+	// sized a controller it then did not sample.
+	all := upstreamscale.Controllers()
+	controllers := make([]*upstreamscale.Controller, 0, len(all))
+	for i := range all {
+		controllers = append(controllers, &all[i])
 	}
 	for _, c := range controllers {
-		fs.StringVar(&c.cpu, c.name+"-cpu", c.cpu, "CPU request and limit for the "+c.name+" controller.")
-		fs.StringVar(&c.memory, c.name+"-memory", c.memory,
-			"Memory request and limit for the "+c.name+" controller. Raise it and re-run when a rung is "+
+		fs.StringVar(&c.CPU, c.Name+"-cpu", c.CPU, "CPU request and limit for the "+c.Name+" controller.")
+		fs.StringVar(&c.Memory, c.Name+"-memory", c.Memory,
+			"Memory request and limit for the "+c.Name+" controller. Raise it and re-run when a rung is "+
 				"OOM killed; that loop is the point.")
-		fs.StringVar(&c.namespace, c.name+"-namespace", c.namespace, "Namespace of the "+c.name+" controller.")
-		fs.StringVar(&c.deploy, c.name+"-deployment", c.deploy, "Deployment name of the "+c.name+" controller.")
+		fs.StringVar(&c.Namespace, c.Name+"-namespace", c.Namespace, "Namespace of the "+c.Name+" controller.")
+		fs.StringVar(&c.Deployment, c.Name+"-deployment", c.Deployment, "Deployment name of the "+c.Name+" controller.")
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -117,7 +103,7 @@ func main() {
 }
 
 func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryRun bool, only string,
-	controllers []*controller,
+	controllers []*upstreamscale.Controller,
 ) error {
 	cfg, err := restConfig(kubeconfig, kubecontext)
 	if err != nil {
@@ -148,20 +134,16 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 
 	var missing []string
 	for _, c := range controllers {
-		cpu, err := resource.ParseQuantity(c.cpu)
+		cpu, memory, err := c.Quantities()
 		if err != nil {
-			return fmt.Errorf("%s: cpu %q: %w", c.name, c.cpu, err)
-		}
-		memory, err := resource.ParseQuantity(c.memory)
-		if err != nil {
-			return fmt.Errorf("%s: memory %q: %w", c.name, c.memory, err)
+			return fmt.Errorf("%s: %w", c.Name, err)
 		}
 
 		var d appsv1.Deployment
-		key := client.ObjectKey{Namespace: c.namespace, Name: c.deploy}
+		key := client.ObjectKey{Namespace: c.Namespace, Name: c.Deployment}
 		if err := cl.Get(ctx, key, &d); err != nil {
 			if apierrors.IsNotFound(err) {
-				missing = append(missing, fmt.Sprintf("%s (%s/%s)", c.name, c.namespace, c.deploy))
+				missing = append(missing, fmt.Sprintf("%s (%s/%s)", c.Name, c.Namespace, c.Deployment))
 				continue
 			}
 			return fmt.Errorf("reading %s: %w", key, err)
@@ -174,22 +156,22 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		if upstreamscale.Profiling(&d, profilerAddr) {
 			did = append(did, "pprof on "+profilerAddr)
 		}
-		if c.devCluster && upstreamscale.RunWithoutDocker(&d) {
+		if c.DevCluster && upstreamscale.RunWithoutDocker(&d) {
 			did = append(did, "Docker socket, its hostPath volume and the privilege removed")
 		}
 
 		if len(did) == 0 {
-			fmt.Printf("%-22s already prepared (QoS %s)\n", c.name, upstreamscale.QoSClass(&d))
+			fmt.Printf("%-22s already prepared (QoS %s)\n", c.Name, upstreamscale.QoSClass(&d))
 			continue
 		}
 		if dryRun {
-			fmt.Printf("%-22s would change: %s\n", c.name, strings.Join(did, "; "))
+			fmt.Printf("%-22s would change: %s\n", c.Name, strings.Join(did, "; "))
 			continue
 		}
 		if err := cl.Update(ctx, &d); err != nil {
 			return fmt.Errorf("updating %s: %w", key, err)
 		}
-		fmt.Printf("%-22s %s (QoS %s)\n", c.name, strings.Join(did, "; "), upstreamscale.QoSClass(&d))
+		fmt.Printf("%-22s %s (QoS %s)\n", c.Name, strings.Join(did, "; "), upstreamscale.QoSClass(&d))
 	}
 
 	if len(missing) > 0 {
