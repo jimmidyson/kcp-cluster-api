@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-03
 
-**Status**: Built, never run. See "Where this stands".
+**Status**: Draft — built, and run once against a cluster. See "Where this stands".
 
 ## Where this stands
 
@@ -32,14 +32,44 @@ a baseline, climbs the ladder — defragmenting between rungs and never inside o
 — classifies whatever stops it, holds the largest fleet that converged for a
 soak, and writes one report describing all of it.
 
-**Nothing here has run against a cluster.** `task check` passes and the run
-skips cleanly when there is no kubeconfig; that is the whole of what is
-verified. The first real run is expected to find things, and the parts most
-likely to move are the ones that meet a real API server: whether this
-repository's forked object types apply against stock CRDs (which is why the
-preflight runs first and fails loudly), whether the in-memory provider holds a
-few hundred fake API servers in one process, and how the topology controller
-paces itself creating a rung's worth of Clusters at once.
+**First contact, 2026-09-03.** A smoke run of the machinery, deliberately
+small — `START_CLUSTERS=2 MAX_CLUSTERS=4 NODES_PER_CLUSTER=3 SOAK=0` — against
+stock v1.14.1 on the CAPX cluster. The preflight passed, both rungs converged
+with every control plane ready and every Machine Ready, the sampler read every
+component including the API server and etcd, and the defragmentation between
+rungs ran. The report is `evidence/stock-2-to-4x3.json`. It is a floor of 4
+clusters and says so; it is not a measurement of anything, because the ladder
+was told to stop there.
+
+What it found was the teardown. Deleting the namespaces left every one of them
+Terminating: stock Cluster API cannot finish deleting a namespace whose objects
+were all stamped at once, because the DevCluster goes first and every DevMachine
+then waits forever for it. This repository's fork already carries the fix for
+that ordering (`DRIFT.md`) — a kcp APIBinding deletion removes everything at
+once the same way — and the cluster under test is stock on purpose, so the
+harness now deletes the Clusters first and waits for them to go before it
+touches a namespace. See `upstreamscale.Teardown` and the README's recovery
+steps for a namespace the first run left behind.
+
+It found a second thing by what it did not say. Every controller sampled as
+not ready, with no memory limit and no restarts, at every rung, because the
+sampler looked for a container named after the deployment and clusterctl
+names every provider's container `manager`. Facts read from a container that
+is not there are all zero — and zero restarts with no OOM kill is exactly what
+`Classify` reads as "nothing died", so a controller the kernel killed would
+have been reported as a fleet that did not keep up (R5, wrong in the direction
+that blames Cluster API). `Controller` now names its container and the
+sampler reads that one.
+
+Two figures the smoke run could not take, and says so: the controllers'
+resident memory, because the sampler's metrics.k8s.io read returned nothing —
+no metrics-server it could reach — so it is reported as zero; and their CPU
+seconds, which the pprof scraper does not read. Both are honest zeros in the
+evidence file and neither is a measurement.
+
+Still to be met by a real run: whether the in-memory provider holds a few
+hundred fake API servers in one process, and how the topology controller paces
+itself creating a rung's worth of Clusters at once.
 
 **Input**: "i would like to create a scale test against a standard kubernetes
 cluster. i can provide a CAPX cluster with whatever resources this scale test
@@ -216,7 +246,11 @@ Cluster API:
   running one during the soak would be asking something of a cluster whose
   whole question is what it does when nothing is asked of it.
 - **R7** Teardown removes what the run created, and is safe to run against a
-  cluster where a previous run died.
+  cluster where a previous run died. It deletes the Clusters first and waits
+  until none remain before deleting a namespace: a namespace deleted over its
+  Clusters stamps every object at once, and stock Cluster API never finishes
+  from there. A wait that runs out names what remains and leaves the namespace
+  alone.
 - **R8** Every component runs Guaranteed — requests equal to limits on every
   container — with GOMEMLIMIT set below its memory limit, and the report states
   the QoS class it worked out from the manifests rather than assuming the
