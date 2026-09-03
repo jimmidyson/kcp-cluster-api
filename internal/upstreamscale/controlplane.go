@@ -197,6 +197,43 @@ type APIServer struct {
 	//
 	// Set by the sampler, not by parsing: nothing in the exposition says it.
 	HeapCollected bool `json:"heapCollected"`
+
+	// HeapSamples is how many reads the heap figure is the lowest of, when no
+	// collection could be forced. See LowestHeap.
+	HeapSamples int `json:"heapSamples,omitempty"`
+}
+
+// LowestHeap reduces several reads of the API server to one, keeping the
+// smallest heap and everything else from the freshest read.
+//
+// # Why a floor rather than a collection
+//
+// A heap read without a forced collection is a point on a sawtooth: the first
+// runs here saw the API server's heap move by 150 MiB between rungs in both
+// directions while the fleet only grew. Forcing the collection needs profiling,
+// and profiling cannot be turned on on this cluster — see
+// hack/upstream-capi-scale/README.md for the two ClusterClass rules that make
+// it impossible and the control plane that was broken finding out.
+//
+// The sawtooth has a floor, though, and the floor is close to the live set: the
+// lowest of several reads is the best estimate available without asking the
+// process for one. It is an **upper bound** — the minimum of finitely many
+// samples never lands below the true post-collection figure — and it is
+// described as one.
+func LowestHeap(samples []APIServer) APIServer {
+	if len(samples) == 0 {
+		return APIServer{}
+	}
+	// The freshest read carries the counters, which are cumulative or current
+	// rather than sawtoothed and so want the latest value, not the lowest.
+	out := samples[len(samples)-1]
+	out.HeapSamples = len(samples)
+	for _, s := range samples {
+		if s.Process.HeapAllocBytes < out.Process.HeapAllocBytes {
+			out.Process.HeapAllocBytes = s.Process.HeapAllocBytes
+		}
+	}
+	return out
 }
 
 // SheddingLoad reports whether the API server has rejected any request. A rung
@@ -217,7 +254,12 @@ func (a APIServer) Describe() string {
 		a.Process.Goroutines, humanBytes(a.Process.HeapAllocBytes), humanBytes(a.Process.ResidentBytes),
 		a.StorageObjects, a.ClusterAPIObjects, a.EventObjects,
 		a.InflightRequests, a.EtcdRequestMeanMillis())
-	if !a.HeapCollected {
+	switch {
+	case a.HeapCollected:
+	case a.HeapSamples > 1:
+		fmt.Fprintf(&b, " (heap is the lowest of %d reads: no collection could be forced, so this is "+
+			"the sawtooth's floor and an upper bound on the retained set)", a.HeapSamples)
+	default:
 		b.WriteString(" (heap not post-collection: the forced collection did not land, so this is a " +
 			"point on a sawtooth and not the retained set)")
 	}

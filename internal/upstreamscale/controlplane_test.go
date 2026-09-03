@@ -19,6 +19,8 @@ package upstreamscale
 import (
 	"strings"
 	"testing"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
 // A trimmed etcd exposition. The quota gauge is the one that matters most: the
@@ -297,5 +299,49 @@ apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 25
 	// Still in the total, which is everything the store holds.
 	if got.StorageObjects != 29 {
 		t.Errorf("total = %d, want 29", got.StorageObjects)
+	}
+}
+
+// TestTheHeapFloorStandsInForACollectionThatCannotBeForced.
+//
+// The API server's heap can only be made the retained set by forcing a
+// collection, and that needs profiling, and profiling cannot be turned on here
+// — see hack/upstream-capi-scale/README.md. What is left is the sawtooth, and
+// the sawtooth has a floor: the lowest of several reads is the closest thing to
+// the live set that can be had without asking the process for one.
+//
+// It is an upper bound and says so, because the minimum of finitely many
+// samples never lands below the true post-collection figure.
+func TestTheHeapFloorStandsInForACollectionThatCannotBeForced(t *testing.T) {
+	reads := []APIServer{
+		{Process: deployedscale.ProcessSample{Goroutines: 4193, HeapAllocBytes: 7_114_920_472}},
+		{Process: deployedscale.ProcessSample{Goroutines: 4190, HeapAllocBytes: 5_495_749_984}},
+		{Process: deployedscale.ProcessSample{Goroutines: 4201, HeapAllocBytes: 6_800_000_000}},
+	}
+	// Everything but the heap comes from the last read, which is the freshest.
+	reads[2].StorageObjects = 33482
+	reads[2].InflightRequests = 3
+
+	got := LowestHeap(reads)
+	if got.Process.HeapAllocBytes != 5_495_749_984 {
+		t.Errorf("heap = %d, want the lowest of the three", got.Process.HeapAllocBytes)
+	}
+	if got.StorageObjects != 33482 || got.InflightRequests != 3 {
+		t.Errorf("the rest of the sample did not come from the freshest read: %+v", got)
+	}
+	if got.HeapSamples != 3 {
+		t.Errorf("heap samples = %d, want 3", got.HeapSamples)
+	}
+	if d := got.Describe(); !strings.Contains(d, "lowest of 3") || !strings.Contains(d, "upper bound") {
+		t.Errorf("the description does not say what the figure is: %q", d)
+	}
+
+	// One read is not a floor, and must not be described as one.
+	one := LowestHeap(reads[:1])
+	if d := one.Describe(); strings.Contains(d, "lowest of") {
+		t.Errorf("a single read was described as a floor: %q", d)
+	}
+	if LowestHeap(nil).HeapSamples != 0 {
+		t.Error("an empty set of reads produced a sample")
 	}
 }

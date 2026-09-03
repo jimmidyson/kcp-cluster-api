@@ -392,60 +392,69 @@ Once the DevMachines go, every Machine finishes, then every Cluster, then the
 namespace. Check that the list is empty before the next run: a run that starts
 over a terminating fleet measures both.
 
-## The API server's profiling, and why this cluster turns it back on
+## The API server's profiling cannot be turned on here, and trying broke a node
 
-CAREN's ClusterClass sets `--profiling=false` on the API server, which is CIS
-benchmark 1.2.18 and right for a cluster anyone depends on. It also makes the
-API server the one component of this run whose memory cannot be measured.
+CAREN's ClusterClass sets `--profiling=false` on the API server — CIS benchmark
+1.2.18, and right for a cluster anyone depends on. It also means the harness
+cannot force a collection before reading the API server's heap, so that figure
+is a point on an allocator sawtooth rather than the retained set. The report
+says so on every line.
 
-The harness forces a collection before reading a heap figure — every controller
-through pprof with `gc=1`, so the number is the retained set rather than
-wherever the allocator happened to be. With profiling off that request never
-lands, and the report says so on every line:
+**Three attempts to patch it, and the conclusion is that it cannot be done from
+a ClusterClass patch on a CAREN class.** Recorded because each failure looked
+like a fixable mistake and the third was not:
 
-```
-apiserver@4 clusters: ... 475.1 MiB heap ... (heap not post-collection: the
-forced collection did not land, so this is a point on a sawtooth and not the
-retained set)
-```
+1. **Append a second entry.** Refused: extraArgs is validated
+   `self.all(x, self.exists_one(y, x.name == y.name))`, *"extraArgs name must be
+   unique"*. A repeated flag would take the last value on a command line, and
+   never gets one, because the object is rejected at admission. The refusal
+   surfaces on the `KubeadmControlPlane`, as the topology controller's server
+   side apply dry-run, not on the ClusterClass that caused it.
+2. **Replace that entry in place.** Refused:
+   `core/webhooks/admission/patch_validation.go` permits an array index of only
+   `0` or `-` on `add`, and forbids any index at all on `replace` and `remove` —
+   *"elements in arrays can not be accessed in a replace operation"*.
+3. **Replace the whole list**, snapshotted from the control plane template with
+   `profiling` flipped. Accepted by every validator, and **it broke the control
+   plane**: the new machine never came up.
 
-The first five runs bear that out: the API server's heap moved by 150 MiB
-between rungs, in both directions, while the fleet only grew. That is an
-allocator, not a fleet.
+The third is the one worth understanding. CAREN is a *runtime extension*, so its
+patches are `external:` entries in `spec.patches` with no `definitions` — they
+write the API server's configuration at render time, from code, and there is
+nothing in the ClusterClass to read. A whole-list replace appended last renders
+last and discards everything that extension contributed, leaving a
+`ClusterConfiguration` the node cannot come up on.
 
-So `clusterclass` adds a second patch turning it on, and `config` prints
-whether it will. Set `APISERVER_PROFILING=false` to keep CAREN's hardened
-default and give up the figure. The trade is the same one already made for
-etcd's metrics port: unauthenticated debug endpoints on a throwaway scale
-cluster, and never on anything else.
+That is not fixable by reordering. Put the patch first and CAREN's extension
+renders after it and wins, so profiling stays off; put it last and it wins and
+takes the rest of the API server's configuration with it. There is no position
+that changes one argument and keeps the others.
 
-Two things worth knowing:
-
-- **It rolls the control plane**, like any ClusterClass change — see the
-  section above. That is a cost and also a benefit: the API server's allocator
-  high-water mark never falls, so its memory figures accumulate across runs on
-  a long-lived process, and a rollout is the only thing that resets them.
-  Doing this immediately before the run whose absolute numbers you intend to
-  quote is worth the three machine rebuilds.
-- **The patch carries the whole `apiServer.extraArgs` list**, built from the
-  control plane template with `profiling` flipped to `true`. Neither narrower
-  way of saying it is allowed. A second entry is refused — extraArgs is
-  validated `self.all(x, self.exists_one(y, x.name == y.name))`, "extraArgs name
-  must be unique", so a repeated flag never reaches a command line to take the
-  last value on. And the entry cannot be edited in place either: ClusterClass
-  patch validation permits an index of only `0` or `-` on `add` and forbids any
-  index at all on `replace` and `remove` — *"elements in arrays can not be
-  accessed in a replace operation"*.
-
-  So the list is a **snapshot**. Re-run this step after anything that changes
-  the template's other API server arguments, and check what it applied rather
-  than trusting it:
+If a control plane is stuck this way, remove the patch and let it roll back:
 
 ```sh
-kubectl --kubeconfig ../../bin/capi-scale.kubeconfig -n kube-system \
-  get pod -l component=kube-apiserver \
-  -o jsonpath='{.items[0].spec.containers[0].command}' | tr ',' '\n' | grep -i profil
+./scale-cluster.sh clusterclass     # this step no longer emits an apiServer patch
 ```
+
+### What the harness does instead
+
+It reads the API server's heap **five times, two seconds apart, and keeps the
+lowest** — the sawtooth's floor, which is the closest thing to the live set
+available without asking the process for one. It is an upper bound and the
+report labels it as one:
+
+```
+apiserver@400 clusters: ... 6.6 GiB heap ... (heap is the lowest of 5 reads: no
+collection could be forced, so this is the sawtooth's floor and an upper bound
+on the retained set)
+```
+
+`APISERVER_HEAP_SAMPLES` sets the count. This needs nothing from the cluster,
+which is the point: the figure it replaces cost a control plane to chase.
+
+The API server's **resident** memory and **goroutine** count were never affected
+by any of this — both are monotonic and reproducible, and they are what the
+result rests on.
 
 ## Node labels have to be in a domain Cluster API propagates
 

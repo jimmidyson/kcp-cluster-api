@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -225,7 +226,30 @@ const EtcdMetricsPort = 2381
 // swept, and three runs disagreed by a factor of four for want of it. The API
 // server serves pprof on its own endpoint, so this is two calls to the same
 // address the client is already talking to.
-func (s *Sampler) APIServer(ctx context.Context) (APIServer, error) {
+func (s *Sampler) APIServer(ctx context.Context, samples int, gap time.Duration) (APIServer, error) {
+	if samples < 1 {
+		samples = 1
+	}
+	reads := make([]APIServer, 0, samples)
+	for i := range samples {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return APIServer{}, ctx.Err()
+			case <-time.After(gap):
+			}
+		}
+		read, err := s.apiServerOnce(ctx)
+		if err != nil {
+			return APIServer{}, err
+		}
+		reads = append(reads, read)
+	}
+	return LowestHeap(reads), nil
+}
+
+// apiServerOnce is one read of the API server's metrics.
+func (s *Sampler) apiServerOnce(ctx context.Context) (APIServer, error) {
 	rest := s.clientset.CoreV1().RESTClient()
 
 	// Best effort: an API server with profiling disabled still has metrics

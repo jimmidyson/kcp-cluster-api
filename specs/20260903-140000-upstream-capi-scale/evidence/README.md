@@ -110,9 +110,21 @@ objects — **~285 KiB per stored object**, against the ~200 KB the kcp shard
 cost. But taking the rungs pairwise gives 511 KiB (100→200) and 240 KiB
 (200→400), so this is a figure with a factor of two in it, not a measurement.
 
-The reason is exactly the one already recorded: `--profiling=false` means the
-heap figure is not post-collection, so only *resident* is usable, and resident
-carries allocator slack the fleet did not ask for. S3 needs the clean-room run.
+The reason is `--profiling=false`, so the heap figure is not post-collection and
+only *resident* is usable — and resident carries allocator slack the fleet did
+not ask for.
+
+**Profiling cannot be turned on here.** Three ClusterClass patches were tried;
+the first two were refused by validation and the third was accepted and broke a
+control plane, because CAREN's runtime extension writes that configuration from
+code and a whole-list replace discards it. `hack/upstream-capi-scale/README.md`
+records all three and why no ordering fixes it.
+
+So the harness now reads the API server's heap five times and keeps the lowest —
+the sawtooth's floor, an upper bound on the retained set, labelled as one in the
+report. It needs nothing from the cluster. S3 will tighten with it, but the
+figure it produces is a bound rather than a measurement, and the ladder's
+numbers above predate it in any case.
 
 ```sh
 task test:capi:scale START_CLUSTERS=2 MAX_CLUSTERS=4 NODES_PER_CLUSTER=3 SOAK=0
@@ -250,11 +262,11 @@ which are monotonic and reproducible within a run, and not its heap.
 
    A rung that fails there is the first real ceiling this exercise has, and
    `Classify` will name which of the three ways it went.
-3. **The clean-room run**, for the numbers that get quoted: roll the control
-   plane with profiling on (`./scale-cluster.sh clusterclass`), which also
-   clears the API server's allocator high-water mark, restart the four
-   controllers, and climb. It is the only run whose API server heap and
-   therefore whose per-object figure (S3) will mean anything.
+3. **The clean-room run**, for the numbers that get quoted: restart the API
+   server (deleting its static pods one at a time is enough) to clear the
+   allocator high-water mark, restart the four controllers, and climb with the
+   heap floor in place. Not the profiling patch — that is gone, and why is in
+   `hack/upstream-capi-scale/README.md`.
 4. **A third node count** — 3 nodes at 25 clusters — to put the per-Machine
    half of the etcd fit on three points and off the 1-node structural cliff.
 

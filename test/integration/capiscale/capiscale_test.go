@@ -74,6 +74,15 @@ var (
 		"How long to wait for the controllers' goroutine counts to stop moving before taking the baseline.")
 	settleTolerance = flag.Float64("capi-settle-tolerance", 0.02,
 		"How much a controller's goroutine count may move between samples and still count as settled.")
+
+	// The API server's heap cannot be read after a forced collection here:
+	// that needs profiling, and profiling cannot be turned on on this cluster.
+	// The lowest of several reads is the sawtooth's floor instead. See
+	// upstreamscale.LowestHeap.
+	apiHeapSamples = flag.Int("capi-apiserver-heap-samples", 5,
+		"How many times to read the API server's heap, taking the lowest as the floor.")
+	apiHeapGap = flag.Duration("capi-apiserver-heap-gap", 2*time.Second,
+		"How long between those reads.")
 )
 
 // TestStockClusterApiClimbsUntilSomethingGives is the whole run: a baseline, a
@@ -158,7 +167,7 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 			t.Logf("NOTE: could not sample the controllers at %s: %v", label, err)
 			return
 		}
-		if api, err := sampler.APIServer(ctx); err == nil {
+		if api, err := sampler.APIServer(ctx, *apiHeapSamples, *apiHeapGap); err == nil {
 			components = append(components, deployedscale.ComponentSample{
 				Component: "kube-apiserver",
 				Process:   api.Process,
