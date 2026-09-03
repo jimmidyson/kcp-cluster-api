@@ -23,8 +23,15 @@ The ladder climbs 25 → 50 → 100 → 200 → 400 clusters, and the run is the
 |---|--:|---|--:|
 | Control plane | **3** | kube-apiserver, etcd | **32 GiB, 16 vCPU** each, fast SSD |
 | Dedicated, **tainted** | 1 | the DevCluster provider, alone | **32 GiB, 8 vCPU** |
-| Generic worker | 1-2 | core, kubeadm bootstrap, kubeadm control plane | **32 GiB, 16 vCPU** |
-| Generic worker | 1 | cert-manager, metrics-server | 8 GiB, 4 vCPU |
+| Generic pool | **3** | core, kubeadm bootstrap, kubeadm control plane, cert-manager, metrics-server | **32 GiB, 16 vCPU** each |
+
+Seven nodes: three control plane, one tainted, three generic.
+
+One generic pool rather than a pool and a scrap node. The three managers ask for
+10 vCPU and 18 GiB between them, which fits on a single node of this size, so
+the third node is not there to make room — it is there so that the scheduler has
+somewhere to put a manager that is killed and rescheduled, without that landing
+on top of another one and changing what the next rung measures.
 
 Three control plane nodes, so the run measures Cluster API against an API server
 behind a real etcd quorum rather than a single member. It is one apiserver's
@@ -55,6 +62,21 @@ cliff, and revisions between compactions are what fill it during a climb.
 - Keep the default 5-minute auto-compaction; do not turn it off for a soak.
 - Fast local SSD. etcd's fsync latency is the quietest way for a scale test to
   turn into a latency test.
+
+### Where each component lands, and why the report says so
+
+Only the DevCluster provider is placed. The other three take the generic pool
+wherever the scheduler puts them, which is the honest arrangement: an
+installation does not pin its managers either. What matters is that the report
+names the node each component ran on and flags the case where they shared one,
+because a figure measured on a node with three managers on it is not the same
+figure as one measured alone — that caveat is already in the report and is not
+new here.
+
+The corollary is that a restart matters twice over. Process metrics reset when
+the process does, and a rescheduled pod may also land somewhere else, so a rung
+containing a restart is not comparable with the rungs below it on either count.
+The ladder treats a restart as a failed rung for exactly this reason.
 
 ### The dedicated node, and its taint
 
@@ -121,6 +143,12 @@ argue about it.
   is being measured.
 - **metrics-server**, or resident memory cannot be read. pprof gives heap and
   goroutines; nothing in a Go process reports its own RSS to a remote scraper.
+  It runs on the generic pool with everything else, which is worth one thought:
+  it is part of the instrument, so a starved metrics-server degrades the
+  measurement rather than the fleet. It is small, the pool is not, and the run
+  records the resident figures it got — but a rung whose resident numbers are
+  missing is a metrics-server problem and will say so rather than being read as
+  a component that shrank.
 - Permission to patch the provider Deployment (the run removes the Docker socket
   mount) and to read `/debug/pprof` on the managers.
 - A kubeconfig context named to the run. It creates namespaces of its own and
