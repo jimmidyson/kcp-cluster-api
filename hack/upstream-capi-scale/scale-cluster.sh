@@ -33,6 +33,20 @@ CLUSTER_NAME="${CLUSTER_NAME:-capi-scale}"
 CLUSTER_NAMESPACE="${CLUSTER_NAMESPACE:-default}"
 WORKLOAD_KUBECONFIG="${WORKLOAD_KUBECONFIG:-${REPO_ROOT}/bin/${CLUSTER_NAME}.kubeconfig}"
 
+# The bootstrap cluster's kubeconfig, written here rather than merged into
+# ~/.kube/config.
+#
+# kind's default is to merge its context into whatever kubeconfig is in play and
+# make it current, which leaves someone's shell pointing at a throwaway cluster
+# after a step they ran for another reason. This repository already refuses the
+# mirror image of that — the scale tasks name a context rather than taking
+# whatever is current, so that a run meant for a local cluster cannot create a
+# fleet somewhere else — and the same argument runs in this direction.
+#
+# So the bootstrap cluster lives in a file of its own, every command against it
+# names that file, and nothing outside bin/ changes.
+BOOTSTRAP_KUBECONFIG="${BOOTSTRAP_KUBECONFIG:-${REPO_ROOT}/bin/${BOOTSTRAP_CLUSTER}.kubeconfig}"
+
 # The Cluster API this test measures. Stock upstream, pinned: a figure without
 # the version it was measured on is not a figure.
 CAPI_VERSION="${CAPI_VERSION:-v1.14.1}"
@@ -72,6 +86,7 @@ WORKER_COUNT="${WORKER_COUNT:-4}"
 config() {
   cat <<CONFIG
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
+  kubeconfig             ${BOOTSTRAP_KUBECONFIG}
 cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
   control plane nodes    ${CONTROL_PLANE_COUNT}
   worker nodes           ${WORKER_COUNT}
@@ -95,9 +110,10 @@ bootstrap() {
     log "kind cluster ${BOOTSTRAP_CLUSTER} already exists"
   else
     log "Creating the kind bootstrap cluster ${BOOTSTRAP_CLUSTER}"
-    kind create cluster --name "${BOOTSTRAP_CLUSTER}"
+    kind create cluster --name "${BOOTSTRAP_CLUSTER}" --kubeconfig "${BOOTSTRAP_KUBECONFIG}"
   fi
-  kubectl config use-context "kind-${BOOTSTRAP_CLUSTER}" >/dev/null
+  # An existing cluster may predate this file, or have been made by hand.
+  kind export kubeconfig --name "${BOOTSTRAP_CLUSTER}" --kubeconfig "${BOOTSTRAP_KUBECONFIG}"
 
   # CAREN is a clusterctl provider, given somewhere to find it. Written here
   # rather than into the operator's own ~/.config/cluster-api/clusterctl.yaml:
@@ -131,6 +147,7 @@ YAML
   log "Installing Cluster API, CAPX, the Helm addon provider and CAREN ${CAREN_VERSION}"
   env CLUSTER_TOPOLOGY=true EXP_RUNTIME_SDK=true \
     clusterctl init \
+      --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
       --config "${config}" \
       --infrastructure "nutanix${CAPX_VERSION:+:${CAPX_VERSION}}" \
       --addon helm \
@@ -149,7 +166,7 @@ YAML
   # Applied after clusterctl init because the class refers to CAPX's types, and
   # applied from the chart's own file because the chart includes it verbatim.
   log "Applying CAREN's default Nutanix ClusterClass, which its clusterctl components do not carry"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     apply -f "${CAREN_CLUSTERCLASS_URL}"
 }
 
@@ -163,10 +180,10 @@ YAML
 clusterclass() {
   need kubectl; need jq
   local src="${CAREN_CLUSTERCLASS}" dst="${CLUSTER_NAME}-scale"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" >/dev/null 2>&1 || {
       echo "ClusterClasses available in ${CAREN_CLUSTERCLASS_NAMESPACE}:" >&2
-      kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+      kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
         get clusterclass -o name >&2 || true
       cat >&2 <<NOTE
 
@@ -178,7 +195,7 @@ installs, so a clusterctl-only install leaves the extension running and no class
 for a Cluster to name. Re-run '$0 bootstrap', which applies it, or apply it by
 hand:
 
-  kubectl apply -f ${CAREN_CLUSTERCLASS_URL}
+  kubectl --kubeconfig ${BOOTSTRAP_KUBECONFIG} apply -f ${CAREN_CLUSTERCLASS_URL}
 
 If the list had entries, set CAREN_CLUSTERCLASS to one of them.
 NOTE
@@ -186,7 +203,7 @@ NOTE
     }
 
   log "Copying ClusterClass ${src} to ${dst} with an etcd backend quota of ${ETCD_QUOTA_BYTES} bytes"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" -o json \
     | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
@@ -207,7 +224,7 @@ NOTE
               }]
             }]
           }])' \
-    | kubectl --context "kind-${BOOTSTRAP_CLUSTER}" apply -f -
+    | kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f -
 
   cat <<NOTE
 
@@ -232,7 +249,7 @@ create() {
   # node-restriction.kubernetes.io or node.cluster.x-k8s.io domains. Anything
   # else stops at the Machine, and a node selector against it never matches.
   clusterctl generate cluster "${CLUSTER_NAME}" \
-    --kubeconfig-context "kind-${BOOTSTRAP_CLUSTER}" \
+    --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
     --target-namespace "${CLUSTER_NAMESPACE}" \
     --control-plane-machine-count "${CONTROL_PLANE_COUNT}" \
     --worker-machine-count "${WORKER_COUNT}" \
@@ -252,12 +269,12 @@ create() {
   #     stay: without the CNI nothing networks, and without the cloud provider
   #     nodes keep the uninitialized taint and never become schedulable.
   log "Review ${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml, then apply it"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" apply -f "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
   log "Waiting for the control plane"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CLUSTER_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" \
     wait cluster "${CLUSTER_NAME}" --for=condition=ControlPlaneInitialized --timeout=30m
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CLUSTER_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" \
     wait cluster "${CLUSTER_NAME}" --for=condition=Available --timeout=45m
 }
 
@@ -265,7 +282,7 @@ kubeconfig() {
   need clusterctl
   mkdir -p "$(dirname "${WORKLOAD_KUBECONFIG}")"
   clusterctl get kubeconfig "${CLUSTER_NAME}" \
-    --kubeconfig-context "kind-${BOOTSTRAP_CLUSTER}" \
+    --kubeconfig "${BOOTSTRAP_KUBECONFIG}" \
     --namespace "${CLUSTER_NAMESPACE}" > "${WORKLOAD_KUBECONFIG}"
   log "Wrote ${WORKLOAD_KUBECONFIG}"
 }
@@ -302,10 +319,10 @@ install() {
 down() {
   need kubectl; need kind
   log "Deleting cluster ${CLUSTER_NAME}"
-  kubectl --context "kind-${BOOTSTRAP_CLUSTER}" -n "${CLUSTER_NAMESPACE}" \
+  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" \
     delete cluster "${CLUSTER_NAME}" --ignore-not-found --wait --timeout=30m
   log "Deleting the kind bootstrap cluster"
-  kind delete cluster --name "${BOOTSTRAP_CLUSTER}"
+  kind delete cluster --name "${BOOTSTRAP_CLUSTER}" --kubeconfig "${BOOTSTRAP_KUBECONFIG}"
 }
 
 case "${1:-}" in

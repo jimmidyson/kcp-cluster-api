@@ -89,6 +89,25 @@ than on the template — the template's `${VARIABLE}` placeholders sit in fields
 that are numbers once substituted, and a round trip through a YAML parser would
 quote them.
 
+## Kubeconfigs
+
+Two, both in `bin/`, and neither is `~/.kube/config`:
+
+| | |
+|---|---|
+| `bin/capi-scale-bootstrap.kubeconfig` | the kind management cluster |
+| `bin/capi-scale.kubeconfig` | the cluster under test, written by `kubeconfig` |
+
+kind's default is to merge its context into whatever kubeconfig is in play and
+make it current, which leaves your shell pointing at a throwaway cluster after a
+step you ran for another reason. This repository already refuses the mirror
+image of that — its scale tasks name a context rather than taking whatever is
+current, so a run meant for a local cluster cannot create a fleet somewhere else
+— and the argument runs the same way here. So the bootstrap cluster gets a file
+of its own, every command names it, and nothing outside `bin/` changes.
+
+`./scale-cluster.sh config` prints both paths.
+
 ## What goes where, and why
 
 `bootstrap` is one `clusterctl init`. CAREN is a clusterctl provider given
