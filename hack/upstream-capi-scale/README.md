@@ -239,11 +239,17 @@ Raising a limit after an OOM kill is the loop this is built for:
 ./scale-cluster.sh install --devcluster-memory 40Gi
 ```
 
-## etcd's backend quota
+## etcd's backend quota, and its metrics port
 
-CAREN has no variable for it, so `clusterclass` copies CAREN's ClusterClass
-under a new name and adds a patch that sets `quota-backend-bytes` on the local
-etcd. A copy rather than an edit: the CAREN-supplied ClusterClass is managed by
+CAREN has a variable for neither, so `clusterclass` copies CAREN's ClusterClass
+under a new name and adds a patch that sets both on the local etcd.
+
+The quota because the 2 GiB default is a cliff. The metrics port because kubeadm
+points `--listen-metrics-urls` at 127.0.0.1, so nothing outside the node can
+scrape it — and this run expects the store to be what runs out, which is a hard
+thing to establish about a store you cannot see. `:2381` serves etcd's
+`/metrics` and not its client API: no data, no authentication, which is a fair
+trade on a throwaway scale cluster and would not be on anything else. A copy rather than an edit: the CAREN-supplied ClusterClass is managed by
 whatever installed it, and an edit is liable to be reverted underneath a running
 experiment — which would look like a cluster that got slower halfway up the
 ladder.

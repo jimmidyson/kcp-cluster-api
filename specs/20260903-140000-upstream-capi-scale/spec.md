@@ -146,12 +146,27 @@ Cluster API:
   backend is a mode of it, and there is no such socket on a containerd node.
   `cmd/capiscale-prepare` does both, idempotently, from the same functions the
   unit tests cover.
-- **The management cluster's API server and etcd as measured components.** The
-  kcp runs found the shard, not the controllers, was what ran out, and that its
-  memory was the unstructured representation of CRD-backed objects at roughly
-  200 KB per stored object. Whether an ordinary kube-apiserver serving the same
-  CRDs costs the same is the single most interesting thing this run can say, and
-  it is the reason the API server is sampled rather than assumed.
+- **The API server and etcd as measured components, expected to be the
+  ceiling.** The kcp runs found the store, not the controllers, was what ran
+  out: at 200 clusters of fifty nodes the shard was OOM killed against 4 GiB
+  while the four managers sat at a fifth of their own limits. There is no reason
+  to expect a kube-apiserver in front of etcd to behave differently, and the
+  controllers here are the tunable half — concurrency, QPS, burst and resources
+  are all flags.
+
+  So a rung that fails carries the control plane's numbers beside it, or the
+  finding reads "Cluster API stopped at N" when the truth is "this etcd stopped
+  at N". For the API server: its cost in the same three quantities every
+  controller reports, plus how many requests are in flight, how many priority
+  and fairness has rejected, how long its calls into the store take, and how
+  many objects the store holds. For etcd: the backend size **against its quota**
+  — a size without the ceiling it is approaching is not a finding — plus keys
+  including revisions, WAL fsync and backend commit latencies, leader changes
+  and slow applies.
+
+  Reaching etcd needs one more thing from the ClusterClass patch: kubeadm points
+  `--listen-metrics-urls` at 127.0.0.1, which nothing outside the node can
+  scrape. The patch opens it on :2381, which serves metrics and not data.
 
 ## Requirements
 

@@ -203,3 +203,68 @@ func runningPodOf(pods []corev1.Pod, deployment string) *corev1.Pod {
 	}
 	return nil
 }
+
+// EtcdMetricsPort is where etcd serves metrics. kubeadm points
+// --listen-metrics-urls at 127.0.0.1 by default, which no scraper outside the
+// node can reach; the ClusterClass patch opens it so a run can be measured.
+const EtcdMetricsPort = 2381
+
+// APIServer samples the API server: a forced collection, then its own metrics.
+//
+// The collection first, for the reason the kcp runs had to be rebuilt to learn:
+// live heap read without one is the retained set plus whatever has not been
+// swept, and three runs disagreed by a factor of four for want of it. The API
+// server serves pprof on its own endpoint, so this is two calls to the same
+// address the client is already talking to.
+func (s *Sampler) APIServer(ctx context.Context) (APIServer, error) {
+	rest := s.clientset.CoreV1().RESTClient()
+
+	// Best effort: an API server with profiling disabled still has metrics
+	// worth reading, and the report says which kind of heap figure it has.
+	_, _ = rest.Get().AbsPath("/debug/pprof/heap").Param("gc", "1").Param("debug", "1").DoRaw(ctx)
+
+	raw, err := rest.Get().AbsPath("/metrics").DoRaw(ctx)
+	if err != nil {
+		return APIServer{}, fmt.Errorf("reading the API server's metrics: %w", err)
+	}
+	return ParseAPIServer(bytes.NewReader(raw))
+}
+
+// Etcd samples one etcd member through the API server's pod proxy.
+//
+// The member rather than the cluster: kubeadm runs one static pod per control
+// plane node and they do not aggregate. Sampling the leader would be neater and
+// is not worth the round trip — the backend size and the quota are the same on
+// every member, and the disk latencies are per member, which is what a reader
+// wants when one node's disk is the slow one.
+func (s *Sampler) Etcd(ctx context.Context, cl client.Client) (Etcd, string, error) {
+	var pods corev1.PodList
+	if err := cl.List(ctx, &pods, client.InNamespace("kube-system"),
+		client.MatchingLabels{"component": "etcd"}); err != nil {
+		return Etcd{}, "", fmt.Errorf("listing etcd pods: %w", err)
+	}
+	pod := firstRunning(pods.Items)
+	if pod == nil {
+		return Etcd{}, "", fmt.Errorf("no running etcd pod in kube-system: a managed control plane " +
+			"does not expose one, and this measurement needs a cluster whose etcd it can reach")
+	}
+
+	raw, err := s.clientset.CoreV1().Pods("kube-system").
+		ProxyGet("http", pod.Name, strconv.Itoa(EtcdMetricsPort), "/metrics", nil).DoRaw(ctx)
+	if err != nil {
+		return Etcd{}, pod.Name, fmt.Errorf("reading etcd's metrics from %s: %w "+
+			"(kubeadm points --listen-metrics-urls at 127.0.0.1; the ClusterClass patch opens it)",
+			pod.Name, err)
+	}
+	sample, err := ParseEtcd(bytes.NewReader(raw))
+	return sample, pod.Name, err
+}
+
+func firstRunning(pods []corev1.Pod) *corev1.Pod {
+	for i := range pods {
+		if pods[i].DeletionTimestamp == nil && pods[i].Status.Phase == corev1.PodRunning {
+			return &pods[i]
+		}
+	}
+	return nil
+}

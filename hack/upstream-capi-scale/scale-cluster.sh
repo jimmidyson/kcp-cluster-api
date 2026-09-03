@@ -275,7 +275,14 @@ NOTE
       exit 1
     }
 
-  log "Copying ClusterClass ${src} to ${dst} with an etcd backend quota of ${ETCD_QUOTA_BYTES} bytes"
+  # Two changes, both for the same reason: this run expects the store to be
+  # what runs out, and needs to be able to see it. The quota is the cliff, and
+  # the metrics port is how anything outside the node knows how close it is.
+  #
+  # The metrics port carries no data and no authentication — it is etcd's
+  # /metrics, not its client API — which is a fair trade on a throwaway scale
+  # cluster and would not be on anything else.
+  log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" -o json \
     | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" '
@@ -283,7 +290,7 @@ NOTE
         | del(.status)
         | .spec.patches = ((.spec.patches // []) + [{
             name: "etcdBackendQuota",
-            description: "Raise etcd quota-backend-bytes. The 2 GiB default is a cliff a climbing fleet walks off, and CAREN has no variable for it.",
+            description: "Raise etcd quota-backend-bytes, and open its metrics port. The 2 GiB default is a cliff a climbing fleet walks off, and kubeadm points --listen-metrics-urls at 127.0.0.1, which no scraper outside the node can reach. CAREN has a variable for neither.",
             definitions: [{
               selector: {
                 apiVersion: .spec.controlPlane.templateRef.apiVersion,
@@ -293,7 +300,10 @@ NOTE
               jsonPatches: [{
                 op: "add",
                 path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd",
-                value: {local: {extraArgs: [{name: "quota-backend-bytes", value: $quota}]}}
+                value: {local: {extraArgs: [
+                  {name: "quota-backend-bytes", value: $quota},
+                  {name: "listen-metrics-urls", value: "http://0.0.0.0:2381"}
+                ]}}
               }]
             }]
           }])' \
