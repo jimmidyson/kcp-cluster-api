@@ -16,8 +16,9 @@ limitations under the License.
 
 // Command capiscale-template turns the manifest clusterctl generated from
 // CAREN's quick-start example into a management cluster for a scale test:
-// a fixed worker count instead of an autoscaled one, and without the addons
-// this measurement does not use.
+// nodes sized for the fleet rather than for a quick start, a fixed worker count
+// instead of an autoscaled one, and without the addons this measurement does
+// not use.
 //
 // Reads a generated manifest on stdin, writes one on stdout. It runs after
 // clusterctl rather than on the template because the template's ${VARIABLE}
@@ -36,9 +37,24 @@ import (
 
 func main() {
 	fs := flag.NewFlagSet("capiscale-template", flag.ExitOnError)
-	workers := fs.Int("workers", 4, "Replicas for every worker pool, replacing the autoscaler "+
+	sizing := upstreamscale.Sizing{}
+	fs.IntVar(&sizing.Workers, "workers", 4, "Replicas for every worker pool, replacing the autoscaler "+
 		"annotations CAREN's example sizes them with. A scale test cannot have its own management "+
 		"cluster resizing underneath it.")
+	// CAREN's example builds every node at 2 vCPU and 4 GiB. That is a sensible
+	// quick start and a sixth of the memory the sizing document asks the
+	// control plane for — and nothing in a run would report it as wrong: the
+	// cluster comes up, the controllers schedule, and the ceiling the ladder
+	// finds is the box rather than Cluster API. Zero or empty leaves the
+	// template's own value alone.
+	fs.IntVar(&sizing.ControlPlaneVCPUs, "control-plane-vcpus", 16, "vCPUs per control plane node.")
+	fs.StringVar(&sizing.ControlPlaneMemory, "control-plane-memory", "32Gi", "Memory per control plane node.")
+	fs.StringVar(&sizing.ControlPlaneDisk, "control-plane-disk", "200Gi", "System disk per control plane "+
+		"node. Larger than the example's 40Gi because etcd's revisions between compactions are what a "+
+		"climbing fleet fills a disk with.")
+	fs.IntVar(&sizing.WorkerVCPUs, "worker-vcpus", 16, "vCPUs per worker node.")
+	fs.StringVar(&sizing.WorkerMemory, "worker-memory", "32Gi", "Memory per worker node.")
+	fs.StringVar(&sizing.WorkerDisk, "worker-disk", "100Gi", "System disk per worker node.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -49,7 +65,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "reading stdin: %v\n", err)
 		os.Exit(1)
 	}
-	out, err := upstreamscale.TrimForScale(string(in), *workers)
+	out, err := upstreamscale.TrimForScale(string(in), sizing)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "could not trim the manifest: %v\n", err)
 		os.Exit(1)

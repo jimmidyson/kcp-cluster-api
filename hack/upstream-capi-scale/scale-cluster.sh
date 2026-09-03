@@ -106,6 +106,17 @@ CLUSTER_TEMPLATE="${CLUSTER_TEMPLATE:-https://raw.githubusercontent.com/nutanix-
 CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-3}"
 WORKER_COUNT="${WORKER_COUNT:-4}"
 
+# Node sizes. CAREN's example builds every node at 2 vCPU and 4 GiB, which is a
+# sensible quick start and a sixth of what sizing.md asks the control plane for.
+# Nothing in a run reports that as wrong — the cluster comes up, the controllers
+# schedule, and the ceiling the ladder finds is the box rather than Cluster API.
+CONTROL_PLANE_VCPUS="${CONTROL_PLANE_VCPUS:-16}"
+CONTROL_PLANE_MEMORY="${CONTROL_PLANE_MEMORY:-32Gi}"
+CONTROL_PLANE_DISK="${CONTROL_PLANE_DISK:-200Gi}"
+WORKER_VCPUS="${WORKER_VCPUS:-16}"
+WORKER_MEMORY="${WORKER_MEMORY:-32Gi}"
+WORKER_DISK="${WORKER_DISK:-100Gi}"
+
 # config resolves and prints every input.
 #
 # It exists because the block above is ordered: one variable's default is built
@@ -122,8 +133,8 @@ config() {
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
   kubeconfig             ${BOOTSTRAP_KUBECONFIG}
 cluster                  ${CLUSTER_NAME} (namespace ${CLUSTER_NAMESPACE})
-  control plane nodes    ${CONTROL_PLANE_COUNT}
-  worker nodes           ${WORKER_COUNT}
+  control plane nodes    ${CONTROL_PLANE_COUNT} x ${CONTROL_PLANE_VCPUS} vCPU / ${CONTROL_PLANE_MEMORY} / ${CONTROL_PLANE_DISK} disk
+  worker nodes           ${WORKER_COUNT} x ${WORKER_VCPUS} vCPU / ${WORKER_MEMORY} / ${WORKER_DISK} disk
   kubeconfig             ${WORKLOAD_KUBECONFIG}
 CAPX                     ${capx}
 CAREN                    ${CAREN_VERSION}
@@ -293,7 +304,14 @@ create() {
     --control-plane-machine-count "${CONTROL_PLANE_COUNT}" \
     --worker-machine-count "${WORKER_COUNT}" \
     --from "${CLUSTER_TEMPLATE}" \
-    | go run "${REPO_ROOT}/cmd/capiscale-template" --workers "${WORKER_COUNT}" \
+    | go run "${REPO_ROOT}/cmd/capiscale-template" \
+        --workers "${WORKER_COUNT}" \
+        --control-plane-vcpus "${CONTROL_PLANE_VCPUS}" \
+        --control-plane-memory "${CONTROL_PLANE_MEMORY}" \
+        --control-plane-disk "${CONTROL_PLANE_DISK}" \
+        --worker-vcpus "${WORKER_VCPUS}" \
+        --worker-memory "${WORKER_MEMORY}" \
+        --worker-disk "${WORKER_DISK}" \
     > "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
   # Two changes the generated manifest needs, both made above:

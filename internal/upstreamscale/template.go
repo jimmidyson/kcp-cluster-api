@@ -66,7 +66,27 @@ var unwantedAddons = []string{"csi", "cosi", "clusterAutoscaler", "serviceLoadBa
 //     and the cloud provider is what clears the uninitialized taint from a new
 //     node — without it the cluster's nodes never become schedulable, which
 //     presents as a scale test that cannot place its own controllers.
-func TrimForScale(manifest string, workerReplicas int) (string, error) {
+//
+// Sizing is what a scale test needs a CAREN-generated cluster to differ in.
+//
+// A zero field means "leave the template's own value alone", so the trimmer
+// stays usable on a template whose sizes are already right.
+type Sizing struct {
+	// Workers is the replica count for every worker pool.
+	Workers int
+
+	// The rest are the node sizes. CAREN's example builds every node at 2 vCPU
+	// and 4 GiB — a sensible quick start, and a sixth of the memory the sizing
+	// document asks the control plane for.
+	ControlPlaneVCPUs  int
+	ControlPlaneMemory string
+	ControlPlaneDisk   string
+	WorkerVCPUs        int
+	WorkerMemory       string
+	WorkerDisk         string
+}
+
+func TrimForScale(manifest string, sizing Sizing) (string, error) {
 	docs, err := split(manifest)
 	if err != nil {
 		return "", err
@@ -77,7 +97,7 @@ func TrimForScale(manifest string, workerReplicas int) (string, error) {
 		if doc.GetKind() != "Cluster" {
 			continue
 		}
-		if err := trimCluster(doc, workerReplicas); err != nil {
+		if err := trimCluster(doc, sizing); err != nil {
 			return "", err
 		}
 		trimmed = true
@@ -102,7 +122,7 @@ func TrimForScale(manifest string, workerReplicas int) (string, error) {
 	return out.String(), nil
 }
 
-func trimCluster(doc *unstructured.Unstructured, workerReplicas int) error {
+func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
 	// Every machine deployment: annotations off, replicas on.
 	pools, found, err := unstructured.NestedSlice(doc.Object, "spec", "topology", "workers", "machineDeployments")
 	if err != nil {
@@ -127,7 +147,7 @@ func trimCluster(doc *unstructured.Unstructured, workerReplicas int) error {
 					delete(pool, "metadata")
 				}
 			}
-			pool["replicas"] = int64(workerReplicas)
+			pool["replicas"] = int64(sizing.Workers)
 		}
 		if err := unstructured.SetNestedSlice(doc.Object,
 			pools, "spec", "topology", "workers", "machineDeployments"); err != nil {
@@ -152,18 +172,68 @@ func trimCluster(doc *unstructured.Unstructured, workerReplicas int) error {
 		if !ok {
 			continue
 		}
-		addons, ok := value["addons"].(map[string]any)
+		if addons, ok := value["addons"].(map[string]any); ok {
+			for _, name := range unwantedAddons {
+				delete(addons, name)
+			}
+		}
+		// The control plane's machine size lives under this same variable.
+		resize(nested(value, "controlPlane", "nutanix", "machineDetails"),
+			sizing.ControlPlaneVCPUs, sizing.ControlPlaneMemory, sizing.ControlPlaneDisk)
+	}
+	for i := range variables {
+		variable, ok := variables[i].(map[string]any)
+		if !ok || variable["name"] != "workerConfig" {
+			continue
+		}
+		value, ok := variable["value"].(map[string]any)
 		if !ok {
 			continue
 		}
-		for _, name := range unwantedAddons {
-			delete(addons, name)
-		}
+		resize(nested(value, "nutanix", "machineDetails"),
+			sizing.WorkerVCPUs, sizing.WorkerMemory, sizing.WorkerDisk)
 	}
 	if err := unstructured.SetNestedSlice(doc.Object, variables, "spec", "topology", "variables"); err != nil {
 		return fmt.Errorf("writing the topology variables: %w", err)
 	}
 	return nil
+}
+
+// resize adjusts the fields a scale test cares about and leaves the rest of
+// machineDetails alone: the image, the subnet and the Prism Element cluster are
+// the operator's environment, not this harness's business.
+//
+// vCPUs are set through the socket count, with the cores per socket left as the
+// template had them. Two numbers multiply to make a vCPU count and only one of
+// them needs to move; changing both invites a cluster with four times the CPUs
+// anyone asked for.
+func resize(details map[string]any, vcpus int, memory, disk string) {
+	if details == nil {
+		return
+	}
+	if vcpus > 0 {
+		details["vcpuSockets"] = int64(vcpus)
+	}
+	if memory != "" {
+		details["memorySize"] = memory
+	}
+	if disk != "" {
+		details["systemDiskSize"] = disk
+	}
+}
+
+// nested walks a path of maps, returning nil rather than creating anything: a
+// field this harness does not find is one the template does not have, and
+// inventing it would produce a cluster shaped by a guess.
+func nested(m map[string]any, path ...string) map[string]any {
+	for _, key := range path {
+		next, ok := m[key].(map[string]any)
+		if !ok {
+			return nil
+		}
+		m = next
+	}
+	return m
 }
 
 func split(manifest string) ([]*unstructured.Unstructured, error) {

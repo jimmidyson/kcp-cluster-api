@@ -101,6 +101,20 @@ and with the autoscaler addon removed, nothing would size the pool at all. So
 the annotations come off and an explicit count goes on. Both: Cluster API
 refuses a topology that sets replicas while the annotations are still there.
 
+**Its nodes are built for a quick start.** Every one is 2 vCPU and 4 GiB — a
+sixth of the memory `sizing.md` asks the control plane for. Nothing in a run
+reports that as wrong: the cluster comes up, the controllers schedule, and the
+ceiling the ladder finds is the box rather than Cluster API. The trimmer sizes
+both pools, and `config` prints what a run will ask for.
+
+Override with `CONTROL_PLANE_VCPUS`, `CONTROL_PLANE_MEMORY`,
+`CONTROL_PLANE_DISK`, `WORKER_VCPUS`, `WORKER_MEMORY`, `WORKER_DISK`. Disks are
+larger than the example's 40 GiB because etcd's revisions between compactions
+are what a climbing fleet fills a disk with. Only the socket count moves for
+vCPUs — cores per socket stay as the template had them, since two numbers
+multiply to make a vCPU count and changing both invites four times what anyone
+asked for.
+
 **It turns on addons this measurement does not use** — CSI, COSI, the
 autoscaler, a MetalLB service load balancer and node feature discovery. Nothing
 here asks for a PersistentVolume, and every addon left on is another controller

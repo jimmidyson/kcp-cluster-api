@@ -65,6 +65,15 @@ spec:
           nutanix:
             machineDetails:
               memorySize: 4Gi
+    - name: workerConfig
+      value:
+        nutanix:
+          machineDetails:
+            bootType: uefi
+            memorySize: 4Gi
+            systemDiskSize: 40Gi
+            vcpuSockets: 2
+            vcpusPerSocket: 1
     version: v1.32.0
     workers:
       machineDeployments:
@@ -89,7 +98,7 @@ spec:
 // halves, because Cluster API refuses a topology that sets replicas while the
 // autoscaler annotations are still on it.
 func TestTheWorkerPoolGetsAReplicaCount(t *testing.T) {
-	out, err := TrimForScale(generated, 4)
+	out, err := TrimForScale(generated, Sizing{Workers: 4})
 	if err != nil {
 		t.Fatalf("trimming: %v", err)
 	}
@@ -110,7 +119,7 @@ func TestTheWorkerPoolGetsAReplicaCount(t *testing.T) {
 // left on is another controller on the API server whose cost is the subject of
 // the measurement.
 func TestTheAddonsThisTestDoesNotNeedAreRemoved(t *testing.T) {
-	out, err := TrimForScale(generated, 4)
+	out, err := TrimForScale(generated, Sizing{Workers: 4})
 	if err != nil {
 		t.Fatalf("trimming: %v", err)
 	}
@@ -135,7 +144,7 @@ func TestTheAddonsThisTestDoesNotNeedAreRemoved(t *testing.T) {
 // credentials Secrets the cluster needs, and a trimmer that dropped them would
 // produce a cluster that cannot talk to Prism.
 func TestEveryOtherDocumentIsPassedThrough(t *testing.T) {
-	out, err := TrimForScale(generated, 4)
+	out, err := TrimForScale(generated, Sizing{Workers: 4})
 	if err != nil {
 		t.Fatalf("trimming: %v", err)
 	}
@@ -148,7 +157,64 @@ func TestEveryOtherDocumentIsPassedThrough(t *testing.T) {
 }
 
 func TestTrimmingSomethingWithNoClusterIsAnError(t *testing.T) {
-	if _, err := TrimForScale("apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\n", 4); err == nil {
+	if _, err := TrimForScale("apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\n", Sizing{Workers: 4}); err == nil {
 		t.Error("a manifest with no Cluster in it was trimmed without complaint")
+	}
+}
+
+// TestTheNodesAreSizedForTheTest is the difference between a management cluster
+// and a management cluster that can hold this fleet.
+//
+// CAREN's example builds every node at 2 vCPU and 4 GiB, which is a sensible
+// quick start and a sixth of the memory the sizing document asks the control
+// plane for. Nothing in the run would report it as wrong: the cluster comes up,
+// the controllers schedule, and the ceiling the ladder finds is the box rather
+// than Cluster API.
+func TestTheNodesAreSizedForTheTest(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{
+		Workers:            4,
+		ControlPlaneVCPUs:  16,
+		ControlPlaneMemory: "32Gi",
+		ControlPlaneDisk:   "200Gi",
+		WorkerVCPUs:        16,
+		WorkerMemory:       "32Gi",
+		WorkerDisk:         "100Gi",
+	})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if strings.Contains(out, "memorySize: 4Gi") {
+		t.Errorf("a node is still at the example's 4Gi:\n%s", out)
+	}
+	if n := strings.Count(out, "memorySize: 32Gi"); n != 2 {
+		t.Errorf("memorySize: 32Gi appears %d times, want 2 (control plane and workers)", n)
+	}
+	if n := strings.Count(out, "vcpuSockets: 16"); n != 2 {
+		t.Errorf("vcpuSockets: 16 appears %d times, want 2", n)
+	}
+	if strings.Contains(out, "vcpusPerSocket: 2") {
+		t.Error("vcpusPerSocket was changed; vCPUs are set through the socket count alone")
+	}
+	if !strings.Contains(out, "systemDiskSize: 200Gi") || !strings.Contains(out, "systemDiskSize: 100Gi") {
+		t.Errorf("disks were not sized separately:\n%s", out)
+	}
+
+	// Everything else in machineDetails is the operator's environment — the
+	// image, the subnet, the Prism Element cluster — and must survive.
+	if !strings.Contains(out, "bootType: uefi") {
+		t.Error("the rest of machineDetails was replaced rather than adjusted")
+	}
+}
+
+// TestSizingIsOptional. A zero value means "leave it as the template had it",
+// so the trimmer stays usable for its other job — fixing the worker count and
+// dropping addons — on a template whose sizes are already right.
+func TestSizingIsOptional(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if !strings.Contains(out, "memorySize: 4Gi") {
+		t.Error("an unset size changed the template's own value")
 	}
 }
