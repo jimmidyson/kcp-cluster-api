@@ -4,7 +4,28 @@
 
 **Created**: 2026-09-03
 
-**Status**: Specified; harness being built
+**Status**: Cluster provisioning and every offline-testable part of the
+instrument built and tested. The driver that creates the fleet and waits for it
+is not built yet — see "Where this stands".
+
+## Where this stands
+
+Built and unit tested, without a cluster:
+
+- the pprof sampler that stands in for the metrics stock controllers do not
+  serve, forcing a collection as it goes (`ScrapeProcess`)
+- the manifest work: Guaranteed resources, GOMEMLIMIT, pprof, and the Docker
+  socket removal, applied by `cmd/capiscale-prepare` and reachable as
+  `task test:capi:cluster`
+- the ladder, its failure classification and its ceiling summary
+- the CFS throttling reader that keeps a "did not keep up" verdict honest
+- the soak's drift summary
+- `hack/upstream-capi-scale/scale-cluster.sh`, which provisions the cluster
+
+Not built: the driver that creates the fleet a rung asks for, waits for every
+control plane ready and every Machine Ready, and drives the ladder and the soak
+through those pieces. It is the part that cannot be written blind — it is where
+the fork's object types meet upstream's CRDs — and it is next.
 
 **Input**: "i would like to create a scale test against a standard kubernetes
 cluster. i can provide a CAPX cluster with whatever resources this scale test

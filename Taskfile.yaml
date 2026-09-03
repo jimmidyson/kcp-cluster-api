@@ -391,6 +391,41 @@ tasks:
     cmds:
       - '{{.BIN}}/kind delete cluster --name {{.CLUSTER_NAME}}'
 
+  test:capi:cluster:
+    desc: Prepare a cluster for the stock Cluster API scale test — set KUBECONFIG to the cluster under test
+    # Stock upstream Cluster API on an ordinary Kubernetes cluster, with the
+    # in-memory DevCluster backend, climbing until something gives and then
+    # holding the last fleet that converged. Not kcp, not this repository's
+    # fork: see specs/20260903-140000-upstream-capi-scale/spec.md for what that
+    # buys and what it costs.
+    #
+    # The cluster itself is provisioned by hack/upstream-capi-scale, which is a
+    # script rather than a task because it wants reading between its steps and
+    # because CAPX and CAREN are not this repository's business.
+    #
+    # Outside `verify` and `check`, like every other scale measurement: a
+    # done-condition that needed a cluster would hold unrelated work hostage.
+    vars:
+      # Raise one of these and re-run after an OOM kill. That loop is the point,
+      # and the patch is idempotent, so nothing else restarts.
+      DEVCLUSTER_MEMORY: '{{.DEVCLUSTER_MEMORY | default "24Gi"}}'
+      DEVCLUSTER_CPU: '{{.DEVCLUSTER_CPU | default "6"}}'
+      CORE_MEMORY: '{{.CORE_MEMORY | default "8Gi"}}'
+      CORE_CPU: '{{.CORE_CPU | default "4"}}'
+      CONTROLPLANE_MEMORY: '{{.CONTROLPLANE_MEMORY | default "6Gi"}}'
+      CONTROLPLANE_CPU: '{{.CONTROLPLANE_CPU | default "4"}}'
+      BOOTSTRAP_MEMORY: '{{.BOOTSTRAP_MEMORY | default "4Gi"}}'
+      BOOTSTRAP_CPU: '{{.BOOTSTRAP_CPU | default "2"}}'
+      DRY_RUN: '{{.DRY_RUN | default "false"}}'
+    cmds:
+      - >-
+        go run ./cmd/capiscale-prepare
+        --devcluster-memory={{.DEVCLUSTER_MEMORY}} --devcluster-cpu={{.DEVCLUSTER_CPU}}
+        --core-memory={{.CORE_MEMORY}} --core-cpu={{.CORE_CPU}}
+        --kubeadm-control-plane-memory={{.CONTROLPLANE_MEMORY}} --kubeadm-control-plane-cpu={{.CONTROLPLANE_CPU}}
+        --kubeadm-bootstrap-memory={{.BOOTSTRAP_MEMORY}} --kubeadm-bootstrap-cpu={{.BOOTSTRAP_CPU}}
+        --dry-run={{.DRY_RUN}}
+
   test:scale:cluster:
     desc: Scale a fleet on a Kubernetes cluster, one Deployment per manager — set KUBECONTEXT to pick one
     deps: [tools]
