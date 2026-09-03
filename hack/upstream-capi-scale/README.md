@@ -4,6 +4,20 @@
 several steps rather than one: the middle one wants reading before it is applied,
 and the last one is the one you will re-run.
 
+Nutanix credentials must be in the environment before the first step —
+`clusterctl init` reads them, and so does `clusterctl generate cluster` later:
+
+```sh
+export NUTANIX_ENDPOINT=... NUTANIX_PORT=9440 NUTANIX_USER=... NUTANIX_PASSWORD=...
+export NUTANIX_INSECURE=false
+export NUTANIX_SUBNET_NAME=... NUTANIX_PRISM_ELEMENT_CLUSTER_NAME=...
+export NUTANIX_MACHINE_TEMPLATE_BASE_OS=... NUTANIX_MACHINE_TEMPLATE_LOOKUP_FORMAT=...
+export NUTANIX_STORAGE_CONTAINER_NAME=...
+export CONTROL_PLANE_ENDPOINT_IP=... KUBERNETES_SERVICE_LOAD_BALANCER_IP=...
+export KUBERNETES_VERSION=v1.32.0
+export DOCKER_HUB_USERNAME=... DOCKER_HUB_PASSWORD=...
+```
+
 ```sh
 ./scale-cluster.sh bootstrap      # a local kind cluster, with CAPX and CAREN on it
 ./scale-cluster.sh clusterclass   # copy CAREN's ClusterClass, add the etcd quota
@@ -64,6 +78,16 @@ that are numbers once substituted, and a round trip through a YAML parser would
 quote them.
 
 ## What goes where, and why
+
+`bootstrap` follows CAREN's own documented install, which needs four things
+that are easy to leave out and each fail in a way that does not name itself:
+`CLUSTER_TOPOLOGY=true` (the templates are ClusterClass based, and without the
+gate the topology controller does not run), `EXP_RUNTIME_SDK=true` (CAREN is a
+runtime extension; without the gate its hooks are never called and the cluster
+comes up unpatched), `--addon helm` (the CNI and cloud provider deploy with
+`strategy: HelmAddon`, so without the Helm addon provider there is no CNI and no
+node ever becomes Ready), and the Nutanix credentials at init time. CAREN itself
+then installs from its Helm repo into `caren-system`.
 
 **CAPX and CAREN go on the kind cluster only.** They build the workload cluster
 and have no part in what it measures. Installing them on the cluster under test
