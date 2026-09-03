@@ -150,9 +150,13 @@ Cluster API:
   counterfeits the one failure mode this run most wants to believe: a fleet that
   did not arrive with nothing dead. A rung that fails that way is reported with
   its throttling beside it.
-- **R10** The DevCluster provider is placed by node selector **and** tolerates
-  the taint that keeps everything else off that node. Doing one without the
-  other leaves it Pending next to an idle machine.
+- **R10** Where a component is placed by node selector, the run also tolerates
+  the taint that keeps everything else off that node — doing one without the
+  other leaves it Pending beside an idle machine — and any node label it selects
+  on is in a domain Cluster API propagates to Nodes
+  (`node-role.kubernetes.io`, `node-restriction.kubernetes.io`,
+  `node.cluster.x-k8s.io`). A label outside those reaches the Machine and stops
+  there. No component is pinned by default: see sizing.md.
 
 ## Success Criteria
 

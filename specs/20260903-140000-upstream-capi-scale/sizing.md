@@ -22,16 +22,38 @@ The ladder climbs 25 → 50 → 100 → 200 → 400 clusters, and the run is the
 | Role | Count | What runs on it | Ask for |
 |---|--:|---|--:|
 | Control plane | **3** | kube-apiserver, etcd | **32 GiB, 16 vCPU** each, fast SSD |
-| Dedicated, **tainted** | 1 | the DevCluster provider, alone | **32 GiB, 8 vCPU** |
-| Generic pool | **3** | core, kubeadm bootstrap, kubeadm control plane, cert-manager, metrics-server | **32 GiB, 16 vCPU** each |
+| Generic pool | **4** | all four managers, cert-manager, metrics-server | **32 GiB, 16 vCPU** each |
 
-Seven nodes: three control plane, one tainted, three generic.
+Seven nodes, one worker pool, no taint.
 
-One generic pool rather than a pool and a scrap node. The three managers ask for
-10 vCPU and 18 GiB between them, which fits on a single node of this size, so
-the third node is not there to make room — it is there so that the scheduler has
-somewhere to put a manager that is killed and rescheduled, without that landing
-on top of another one and changing what the next rung measures.
+### Why there is no dedicated node any more
+
+There was one, and Guaranteed resources took the reason away. Guaranteed means
+requests equal to limits, so a component's memory is reserved and cannot be
+taken by a neighbour, and an OOM kill is a cgroup kill against its own limit
+whatever else is on the node — which is the signal the ladder classifies, so the
+classification does not need isolation to be trustworthy.
+
+What is left is smaller than it looks:
+
+- **The provider gets a node to itself anyway.** It asks for 24 GiB of a 32 GiB
+  node. After kubelet and system reservations nothing else of consequence fits
+  beside it, so the scheduler gives it one without being told to.
+- **The fourth node is the headroom.** The loop this run is built around is
+  raise-the-limit-and-retry, and on a full node there is nowhere to raise it to
+  without evicting a neighbour — which resets that neighbour's process metrics
+  and makes the next rung incomparable with the last. A spare node in the pool
+  solves that without a taint.
+
+What Guaranteed does **not** give, stated so it is a decision rather than an
+assumption: it is not exclusive cores. A Guaranteed pod gets a CFS quota and
+shares, not pinned CPUs, unless the kubelet runs `cpuManagerPolicy: static` —
+so the provider still contends for L3 cache and memory bandwidth with whatever
+shares its socket. For a process whose hot path is JSON decoding into maps that
+is a real effect and a second-order one. The CPU limits here are whole numbers,
+so static policy would work if it is wanted; it is node configuration, it is not
+free to get wrong, and the time to reach for it is when a rung fails as "did not
+converge" with throttling or contention to show for it — not before.
 
 Three control plane nodes, so the run measures Cluster API against an API server
 behind a real etcd quorum rather than a single member. It is one apiserver's
@@ -78,21 +100,31 @@ the process does, and a rescheduled pod may also land somewhere else, so a rung
 containing a restart is not comparable with the rungs below it on either count.
 The ladder treats a restart as a failed rung for exactly this reason.
 
-### The dedicated node, and its taint
+### The provider is still the component to watch
 
 Every in-memory workload cluster in the fleet is served from **one process**:
 each gets a listener on a port from 20000-30000, so 10,000 clusters is a hard
 ceiling for one pod, and every fake Node, Pod and lease in the fleet lives in
-that process's heap. It is the component most likely to be the ceiling and the
-one most easily spoiled by a neighbour.
+that process's heap. It is the component most likely to be the ceiling. It is
+given the most memory and the most room to grow for that reason, rather than a
+node of its own.
 
-```sh
-kubectl label  node <node> scale-role=devcluster
-kubectl taint  node <node> scale-role=devcluster:NoSchedule
-```
+Pinning it is still supported (`Dedicate`), and the run will use a node selector
+and toleration if given them. Nothing needs them by default.
 
-The run selects that label and tolerates that taint together, because doing one
-without the other leaves the provider Pending beside an idle machine.
+### Node labels have to be in a domain Cluster API will propagate
+
+Whatever labels the pools carry, they cannot be arbitrary. Cluster API copies a
+Machine label to its Node **only** if it has `node-role.kubernetes.io` as a
+prefix, or belongs to the `node-restriction.kubernetes.io` or
+`node.cluster.x-k8s.io` domains — or matches a regex passed to the core
+manager's `--additional-sync-machine-labels`.
+
+So a label like `scale-role=devcluster` set through a `MachineDeployment`
+template reaches the Machine and stops there: the Node never gets it, a node
+selector against it never matches, and the pod stays Pending with everything
+looking correctly configured. Use `scale-role.node.cluster.x-k8s.io/...` or
+`node-role.kubernetes.io/...` instead.
 
 ## Guaranteed resources on everything
 
