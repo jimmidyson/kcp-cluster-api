@@ -134,19 +134,20 @@ func (s *Sampler) Resident(ctx context.Context, namespace, pod string) uint64 {
 	return uint64(total)
 }
 
-// Throttled reads how much CPU the kernel took away from a pod, from the
-// kubelet's cAdvisor exposition on the node it runs on. See Throttling for why
-// this is measured at all. Best effort, for the same reason as Resident.
-func (s *Sampler) Throttled(ctx context.Context, node, namespace, pod string) (Throttling, error) {
+// Usage reads a pod's working set, CPU time and CFS throttling from the
+// kubelet's cAdvisor exposition on the node it runs on — one scrape for all
+// three. See ContainerUsage for why they come from here rather than from
+// metrics.k8s.io, and Throttling for why throttling is measured at all.
+func (s *Sampler) Usage(ctx context.Context, node, namespace, pod string) (ContainerUsage, error) {
 	if node == "" {
-		return Throttling{}, fmt.Errorf("no node recorded for %s/%s", namespace, pod)
+		return ContainerUsage{}, fmt.Errorf("no node recorded for %s/%s", namespace, pod)
 	}
 	raw, err := s.clientset.CoreV1().RESTClient().Get().
 		AbsPath("/api/v1/nodes", node, "proxy", "metrics", "cadvisor").DoRaw(ctx)
 	if err != nil {
-		return Throttling{}, fmt.Errorf("reading cadvisor on %s: %w", node, err)
+		return ContainerUsage{}, fmt.Errorf("reading cadvisor on %s: %w", node, err)
 	}
-	return ParseThrottling(bytes.NewReader(raw), namespace, pod)
+	return ParseCadvisor(bytes.NewReader(raw), namespace, pod)
 }
 
 // Sample takes one sample of every controller, with its throttling beside it.
@@ -175,16 +176,24 @@ func (s *Sampler) Sample(ctx context.Context, cl client.Client, controllers []Co
 		if err != nil {
 			return nil, nil, err
 		}
-		process.ResidentBytes = s.Resident(ctx, c.Namespace, pod.Name)
+		// The kubelet's own accounting, which serves the resident figure, the
+		// CPU time and the throttling from one scrape. metrics.k8s.io is the
+		// fallback rather than the source: the cluster under test carries no
+		// addon it does not need, so it has no metrics-server, and the first
+		// two runs reported every controller's resident memory as zero.
+		if usage, err := s.Usage(ctx, pod.Spec.NodeName, c.Namespace, pod.Name); err == nil {
+			process.ResidentBytes = usage.WorkingSetBytes
+			process.CPUSeconds = usage.CPUSeconds
+			throttling[c.Deployment] = usage.Throttling
+		} else {
+			process.ResidentBytes = s.Resident(ctx, c.Namespace, pod.Name)
+		}
 
 		samples = append(samples, deployedscale.ComponentSample{
 			Component: c.Deployment,
 			Process:   process,
 			Pod:       c.PodFacts(pod),
 		})
-		if t, err := s.Throttled(ctx, pod.Spec.NodeName, c.Namespace, pod.Name); err == nil {
-			throttling[c.Deployment] = t
-		}
 	}
 	return samples, throttling, nil
 }
@@ -220,14 +229,21 @@ func (s *Sampler) APIServer(ctx context.Context) (APIServer, error) {
 	rest := s.clientset.CoreV1().RESTClient()
 
 	// Best effort: an API server with profiling disabled still has metrics
-	// worth reading, and the report says which kind of heap figure it has.
-	_, _ = rest.Get().AbsPath("/debug/pprof/heap").Param("gc", "1").Param("debug", "1").DoRaw(ctx)
+	// worth reading. Whether it landed travels with the sample, because a heap
+	// read without it is a point on a sawtooth rather than the retained set,
+	// and that is not the same quantity the controllers report.
+	_, collectErr := rest.Get().AbsPath("/debug/pprof/heap").Param("gc", "1").Param("debug", "1").DoRaw(ctx)
 
 	raw, err := rest.Get().AbsPath("/metrics").DoRaw(ctx)
 	if err != nil {
 		return APIServer{}, fmt.Errorf("reading the API server's metrics: %w", err)
 	}
-	return ParseAPIServer(bytes.NewReader(raw))
+	sample, err := ParseAPIServer(bytes.NewReader(raw))
+	if err != nil {
+		return sample, err
+	}
+	sample.HeapCollected = collectErr == nil
+	return sample, nil
 }
 
 // Etcd samples one etcd member through the API server's pod proxy.

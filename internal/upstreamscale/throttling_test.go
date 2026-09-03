@@ -37,6 +37,14 @@ container_cpu_cfs_throttled_periods_total{container="manager",namespace="capi-sy
 # TYPE container_cpu_cfs_throttled_seconds_total counter
 container_cpu_cfs_throttled_seconds_total{container="manager",namespace="capd-system",pod="capd-controller-manager-abc"} 42.5
 container_cpu_cfs_throttled_seconds_total{container="manager",namespace="capi-system",pod="capi-controller-manager-xyz"} 0
+# TYPE container_memory_working_set_bytes gauge
+container_memory_working_set_bytes{container="",namespace="capd-system",pod="capd-controller-manager-abc"} 9.0e+09
+container_memory_working_set_bytes{container="manager",namespace="capd-system",pod="capd-controller-manager-abc"} 4.0e+09
+container_memory_working_set_bytes{container="manager",namespace="capi-system",pod="capi-controller-manager-xyz"} 1.0e+09
+# TYPE container_cpu_usage_seconds_total counter
+container_cpu_usage_seconds_total{container="",namespace="capd-system",pod="capd-controller-manager-abc"} 999
+container_cpu_usage_seconds_total{container="manager",namespace="capd-system",pod="capd-controller-manager-abc"} 612.5
+container_cpu_usage_seconds_total{container="manager",namespace="capi-system",pod="capi-controller-manager-xyz"} 71.25
 `
 
 // TestThrottlingIsReadPerPod is the check on the ladder's most interesting
@@ -90,5 +98,42 @@ func TestFractionIsZeroWithNoPeriods(t *testing.T) {
 	var none Throttling
 	if none.Fraction() != 0 {
 		t.Errorf("fraction = %v with no periods", none.Fraction())
+	}
+}
+
+// TestUsageComesFromTheSameScrapeAsThrottling. The first two real runs reported
+// every controller's resident memory and CPU time as zero: resident was read
+// from metrics.k8s.io, and the cluster under test has no metrics-server the
+// sampler can reach, while CPU time was never read at all.
+//
+// Both are in the cAdvisor exposition this harness already scrapes for
+// throttling, so they come from that one read rather than from a component the
+// measurement would otherwise have to install on the cluster it is measuring.
+// Resident matters because a container limit is set against it: it is how a
+// reader sees the next rung's OOM kill coming instead of discovering it.
+func TestUsageComesFromTheSameScrapeAsThrottling(t *testing.T) {
+	got, err := ParseCadvisor(strings.NewReader(cadvisorBody), "capd-system", "capd-controller-manager-abc")
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	// The manager container's, not the pod sandbox's 9 GiB and 999s.
+	if got.WorkingSetBytes != 4_000_000_000 {
+		t.Errorf("working set = %d, want 4e9 — the pod sandbox series was counted", got.WorkingSetBytes)
+	}
+	if got.CPUSeconds != 612.5 {
+		t.Errorf("cpu seconds = %v, want 612.5", got.CPUSeconds)
+	}
+	// And the throttling from the same pass, so one scrape serves both.
+	if got.Periods != 4000 || got.ThrottledPeriods != 1000 {
+		t.Errorf("throttling was lost from the combined read: %+v", got.Throttling)
+	}
+}
+
+// TestUsageIsNotSilentlyZero. A pod the scrape could not see must not report a
+// working set of zero: zero reads as a controller costing nothing, which is
+// the direction nobody checks.
+func TestUsageIsNotSilentlyZero(t *testing.T) {
+	if _, err := ParseCadvisor(strings.NewReader(cadvisorBody), "capd-system", "not-a-pod"); err == nil {
+		t.Error("a pod with no series parsed into a measurement of zero cost")
 	}
 }

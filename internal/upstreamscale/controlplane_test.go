@@ -138,6 +138,62 @@ func TestTheAPIServerIsMeasuredForBothPressures(t *testing.T) {
 	}
 }
 
+// TestStoredObjectsSeparateClusterApiFromEvents. S3 asks what the API server
+// costs per stored Cluster API object, and the total cannot answer it: in this
+// fixture, as in the first real runs, Events outnumber Cluster API objects
+// several to one. They also expire on their own hour-long TTL, so the total
+// moved by 2x between two runs of the same fleet size with nothing else
+// changed — a denominator that drifts under a figure nobody would suspect.
+func TestStoredObjectsSeparateClusterApiFromEvents(t *testing.T) {
+	got, err := ParseAPIServer(strings.NewReader(apiserverBody))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.ClusterAPIObjects != 5000 {
+		t.Errorf("Cluster API objects = %d, want 5000", got.ClusterAPIObjects)
+	}
+	if got.EventObjects != 18000 {
+		t.Errorf("event objects = %d, want 18000", got.EventObjects)
+	}
+	if got.StorageObjects != 23000 {
+		t.Errorf("total = %d, want 23000 — the split must not replace the total", got.StorageObjects)
+	}
+	// Both in the line a report leads with, because a reader given only the
+	// total would divide by a number four fifths of which is Events.
+	if d := got.Describe(); !strings.Contains(d, "5000 Cluster API") || !strings.Contains(d, "18000 event") {
+		t.Errorf("the description does not separate them: %q", d)
+	}
+}
+
+func TestTheStoredObjectSplitCountsEveryClusterApiGroup(t *testing.T) {
+	// Every group a blueprint draws on stores objects, and only the core one
+	// is named "cluster.x-k8s.io" exactly. A split that matched that string
+	// would silently drop the control plane, bootstrap and infrastructure
+	// objects — most of what a fleet creates.
+	body := `go_goroutines 1
+go_memstats_heap_alloc_bytes 1
+apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 1
+apiserver_storage_objects{resource="kubeadmcontrolplanes.controlplane.cluster.x-k8s.io"} 2
+apiserver_storage_objects{resource="kubeadmconfigs.bootstrap.cluster.x-k8s.io"} 4
+apiserver_storage_objects{resource="devmachines.infrastructure.cluster.x-k8s.io"} 8
+apiserver_storage_objects{resource="secrets"} 16
+apiserver_storage_objects{resource="events.events.k8s.io"} 32
+`
+	got, err := ParseAPIServer(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.ClusterAPIObjects != 15 {
+		t.Errorf("Cluster API objects = %d, want 15 (every cluster.x-k8s.io group)", got.ClusterAPIObjects)
+	}
+	if got.EventObjects != 32 {
+		t.Errorf("event objects = %d, want 32 — the events.k8s.io group form was missed", got.EventObjects)
+	}
+	if got.StorageObjects != 63 {
+		t.Errorf("total = %d, want 63", got.StorageObjects)
+	}
+}
+
 func TestAnAPIServerBodyMissingProcessMetricsIsAnError(t *testing.T) {
 	if _, err := ParseAPIServer(strings.NewReader("apiserver_current_inflight_requests 1\n")); err == nil {
 		t.Error("an exposition with no process metrics parsed into a sample")
@@ -191,5 +247,28 @@ func TestFragmentationIsTheDifferenceBetweenTwoCeilings(t *testing.T) {
 	}
 	if !strings.Contains(full.Describe(), "defragment") {
 		t.Errorf("a near-quota fragmented store does not say what to do: %q", full.Describe())
+	}
+}
+
+// TestTheHeapFigureSaysWhetherItIsPostCollection. Every controller's heap is
+// read through pprof with gc=1, so it is the retained set. The API server's is
+// read from its /metrics, and the forced collection before it is a separate,
+// best-effort request — profiling can be disabled, or the authorization can
+// refuse it. When that request does not land the heap figure is a point on a
+// sawtooth instead, and comparing it with a controller's is comparing two
+// different quantities. So the sample carries which one it is.
+func TestTheHeapFigureSaysWhetherItIsPostCollection(t *testing.T) {
+	got, err := ParseAPIServer(strings.NewReader(apiserverBody))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	collected := got
+	collected.HeapCollected = true
+	if strings.Contains(collected.Describe(), "not post-collection") {
+		t.Errorf("a post-collection heap was caveated: %q", collected.Describe())
+	}
+	if d := got.Describe(); !strings.Contains(d, "not post-collection") {
+		t.Errorf("a heap figure taken without a forced collection was reported as if it were "+
+			"the retained set: %q", d)
 	}
 }

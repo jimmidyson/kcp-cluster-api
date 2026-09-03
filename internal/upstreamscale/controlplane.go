@@ -173,6 +173,30 @@ type APIServer struct {
 
 	// StorageObjects is everything the store holds, summed over resources.
 	StorageObjects uint64 `json:"storageObjects"`
+	// ClusterAPIObjects is the part of it a fleet actually created: every
+	// resource in a cluster.x-k8s.io group, core and providers alike.
+	//
+	// Separated because S3 asks what the API server costs per stored Cluster
+	// API object and the total cannot answer it. In the first two runs Events
+	// outnumbered Cluster API objects several to one — and Events expire on
+	// their own hour-long TTL, so the total for the same fleet size moved by
+	// 2x between two runs an hour apart with nothing else changed. A
+	// denominator that drifts like that under a per-object figure is worse
+	// than no figure, because nothing about it looks wrong.
+	ClusterAPIObjects uint64 `json:"clusterApiObjects"`
+	// EventObjects is the largest thing that is not the fleet, named so that a
+	// reader can see how much of the total is not.
+	EventObjects uint64 `json:"eventObjects"`
+
+	// HeapCollected says whether a collection was forced before the heap
+	// figure was read. Every controller's is, through pprof with gc=1, so it
+	// is the retained set; the API server's needs a separate request that
+	// profiling being disabled — or authorization refusing it — can lose,
+	// leaving a point on a sawtooth instead. Two different quantities, so the
+	// sample says which one this is rather than the report claiming both.
+	//
+	// Set by the sampler, not by parsing: nothing in the exposition says it.
+	HeapCollected bool `json:"heapCollected"`
 }
 
 // SheddingLoad reports whether the API server has rejected any request. A rung
@@ -188,15 +212,32 @@ func (a APIServer) EtcdRequestMeanMillis() float64 {
 // Describe is what a rung carries about the API server.
 func (a APIServer) Describe() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d goroutines, %s heap, %s resident, %d objects stored, %d requests in flight, "+
-		"etcd calls %.1fms",
+	fmt.Fprintf(&b, "%d goroutines, %s heap, %s resident, %d objects stored "+
+		"(%d Cluster API, %d event), %d requests in flight, etcd calls %.1fms",
 		a.Process.Goroutines, humanBytes(a.Process.HeapAllocBytes), humanBytes(a.Process.ResidentBytes),
-		a.StorageObjects, a.InflightRequests, a.EtcdRequestMeanMillis())
+		a.StorageObjects, a.ClusterAPIObjects, a.EventObjects,
+		a.InflightRequests, a.EtcdRequestMeanMillis())
+	if !a.HeapCollected {
+		b.WriteString(" (heap not post-collection: the forced collection did not land, so this is a " +
+			"point on a sawtooth and not the retained set)")
+	}
 	if a.SheddingLoad() {
 		fmt.Fprintf(&b, " — **shedding load**: %d request(s) rejected by priority and fairness",
 			a.RejectedRequests)
 	}
 	return b.String()
+}
+
+// isClusterAPIResource matches every Cluster API group rather than the core
+// one: a fleet's objects are spread over controlplane., bootstrap. and
+// infrastructure. as well, and those are most of what it creates.
+func isClusterAPIResource(resource string) bool {
+	return strings.HasSuffix(resource, ".cluster.x-k8s.io")
+}
+
+// isEventResource matches both names the API server stores events under.
+func isEventResource(resource string) bool {
+	return resource == "events" || resource == "events.events.k8s.io"
 }
 
 // ParseEtcd reads the gauges and counters that say whether the store is the
@@ -271,8 +312,13 @@ func ParseAPIServer(r io.Reader) (APIServer, error) {
 			out.EtcdRequestCount += uint64(value)
 		case "apiserver_storage_objects":
 			out.StorageObjects += uint64(value)
+			switch resource := labels["resource"]; {
+			case isClusterAPIResource(resource):
+				out.ClusterAPIObjects += uint64(value)
+			case isEventResource(resource):
+				out.EventObjects += uint64(value)
+			}
 		}
-		_ = labels
 	})
 	if err != nil {
 		return APIServer{}, err

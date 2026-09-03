@@ -74,14 +74,48 @@ func (t Throttling) Describe() string {
 		100*t.Fraction(), t.ThrottledPeriods, t.Periods, t.ThrottledSeconds)
 }
 
-// ParseThrottling reads one pod's containers out of a kubelet cAdvisor
+// ContainerUsage is what one pod cost and how much CPU the kernel took away
+// from it, from a single cAdvisor scrape.
+//
+// # Why these three together
+//
+// The first two real runs reported every controller's resident memory and CPU
+// time as zero. Resident was read from metrics.k8s.io and the cluster under
+// test has no metrics-server the sampler can reach; CPU time was never read at
+// all, because pprof does not carry it. Both are in the exposition this
+// harness already scrapes for throttling, so they come from that read rather
+// than from a component the measurement would have to install on the cluster
+// it is measuring — which would be another controller reconciling against the
+// API server whose cost is the subject of the run.
+//
+// Resident is the one that changes what a reader can conclude: a container
+// limit is enforced against the working set, so this is how the next rung's
+// OOM kill is seen coming rather than discovered.
+type ContainerUsage struct {
+	Throttling
+
+	// WorkingSetBytes is what the limit is enforced against, summed over the
+	// pod's containers — the same quantity metrics-server serves, from the
+	// same source it reads.
+	WorkingSetBytes uint64 `json:"workingSetBytes"`
+	// CPUSeconds is cumulative container CPU time since the pod started.
+	CPUSeconds float64 `json:"cpuSeconds"`
+}
+
+// ParseThrottling reads one pod's CFS accounting out of a cAdvisor exposition.
+func ParseThrottling(r io.Reader, namespace, pod string) (Throttling, error) {
+	usage, err := ParseCadvisor(r, namespace, pod)
+	return usage.Throttling, err
+}
+
+// ParseCadvisor reads one pod's containers out of a kubelet cAdvisor
 // exposition, which is served at
 // /api/v1/nodes/<node>/proxy/metrics/cadvisor through the API server.
 //
 // Series with an empty container label are the pod sandbox's own accounting and
 // are skipped: counting them alongside the containers double-counts every pod.
-func ParseThrottling(r io.Reader, namespace, pod string) (Throttling, error) {
-	var out Throttling
+func ParseCadvisor(r io.Reader, namespace, pod string) (ContainerUsage, error) {
+	var out ContainerUsage
 	found := false
 
 	scanner := bufio.NewScanner(r)
@@ -98,7 +132,9 @@ func ParseThrottling(r io.Reader, namespace, pod string) (Throttling, error) {
 		switch name {
 		case "container_cpu_cfs_throttled_seconds_total",
 			"container_cpu_cfs_periods_total",
-			"container_cpu_cfs_throttled_periods_total":
+			"container_cpu_cfs_throttled_periods_total",
+			"container_memory_working_set_bytes",
+			"container_cpu_usage_seconds_total":
 		default:
 			continue
 		}
@@ -113,17 +149,22 @@ func ParseThrottling(r io.Reader, namespace, pod string) (Throttling, error) {
 			out.Periods += int64(value)
 		case "container_cpu_cfs_throttled_periods_total":
 			out.ThrottledPeriods += int64(value)
+		case "container_memory_working_set_bytes":
+			out.WorkingSetBytes += uint64(value)
+		case "container_cpu_usage_seconds_total":
+			out.CPUSeconds += value
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return Throttling{}, fmt.Errorf("reading the cadvisor exposition: %w", err)
+		return ContainerUsage{}, fmt.Errorf("reading the cadvisor exposition: %w", err)
 	}
 	if !found {
-		// Not zero. A pod the scrape could not see reported as "never
-		// throttled" would retire the only evidence that could overturn a
-		// verdict about reconciliation keeping up.
-		return Throttling{}, fmt.Errorf("no CFS series for pod %s/%s: it may be on another node, "+
-			"or the scrape was of the wrong one", namespace, pod)
+		// Not zero, for either figure. A pod the scrape could not see reported
+		// as "never throttled" would retire the only evidence that could
+		// overturn a verdict about reconciliation keeping up, and one reported
+		// as costing nothing is wrong in the direction nobody checks.
+		return ContainerUsage{}, fmt.Errorf("no cAdvisor series for pod %s/%s: it may be on another "+
+			"node, or the scrape was of the wrong one", namespace, pod)
 	}
 	return out, nil
 }
