@@ -197,6 +197,16 @@ Cluster API:
   time — and the classification is in the report. "It broke" is not a result.
 - **R6** The soak reports drift, not just an endpoint: first and last sample of
   the held rung, and whether every cluster was still Ready at the end.
+- **R6a** etcd is defragmented **between rungs, never inside one, and never
+  during the soak**, and every defragmentation is recorded with what it
+  reclaimed. The quota counts the backend file rather than the live data in it,
+  so a converging fleet's churn can reach the quota with most of the file free
+  — and a rung that fails that way records a ceiling about accumulated free
+  pages rather than about how much state the store can hold. A defrag is a
+  stop-the-world rewrite on the member, so running one inside a rung would put
+  a write stall and a possible leader change in the middle of a measurement;
+  running one during the soak would be asking something of a cluster whose
+  whole question is what it does when nothing is asked of it.
 - **R7** Teardown removes what the run created, and is safe to run against a
   cluster where a previous run died.
 - **R8** Every component runs Guaranteed — requests equal to limits on every

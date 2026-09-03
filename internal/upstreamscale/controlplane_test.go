@@ -143,3 +143,53 @@ func TestAnAPIServerBodyMissingProcessMetricsIsAnError(t *testing.T) {
 		t.Error("an exposition with no process metrics parsed into a sample")
 	}
 }
+
+// TestFragmentationIsTheDifferenceBetweenTwoCeilings is the reason a defrag
+// belongs in this run at all.
+//
+// etcd's quota counts the backend file, not the live data in it. Compaction
+// frees pages inside the file and returns none of them, so a fleet with heavy
+// churn can hit the quota with most of the file free — etcd goes read-only and
+// the run records a ceiling that is about accumulated free pages rather than
+// about how much Cluster API state this store can hold. Those are different
+// findings and only one of them was being looked for.
+func TestFragmentationIsTheDifferenceBetweenTwoCeilings(t *testing.T) {
+	got, err := ParseEtcd(strings.NewReader(etcdBody))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	// 3 GiB allocated, 2 GiB in use.
+	if free := got.FreeBytes(); free != 1073741824 {
+		t.Errorf("free = %d, want 1 GiB", free)
+	}
+	if share := got.Fragmentation(); share < 0.33 || share > 0.34 {
+		t.Errorf("fragmentation = %v, want about 1/3", share)
+	}
+	if !got.Fragmented() {
+		t.Error("a third of the file free was not called fragmented")
+	}
+
+	tight := got
+	tight.DBInUseBytes = tight.DBTotalBytes
+	if tight.Fragmented() || tight.Fragmentation() != 0 {
+		t.Errorf("a fully used file was called fragmented: %+v", tight)
+	}
+
+	// The sentence a run needs when it hits the quota: whether defragmenting
+	// would have bought room, or whether the store is genuinely full.
+	if !strings.Contains(got.Describe(), "1.0 GiB reclaimable") {
+		t.Errorf("the description does not say what a defrag would recover: %q", got.Describe())
+	}
+
+	// A store near its quota that is also badly fragmented is the case where
+	// the ceiling is not the fleet's, and it has to be said outright.
+	full := got
+	full.DBTotalBytes = 8_000_000_000
+	full.DBInUseBytes = 2_000_000_000
+	if !full.NearQuota() || !full.Fragmented() {
+		t.Fatalf("test setup: %+v", full)
+	}
+	if !strings.Contains(full.Describe(), "defragment") {
+		t.Errorf("a near-quota fragmented store does not say what to do: %q", full.Describe())
+	}
+}

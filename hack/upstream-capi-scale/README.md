@@ -258,6 +258,33 @@ The default 2 GiB quota is a cliff. The database itself is not large at these
 object counts; the revisions between compactions during a climb are what fill
 it.
 
+## etcd is defragmented between rungs
+
+Compaction frees pages inside etcd's backend file and returns none of them, and
+the quota counts the file. A converging Cluster API fleet churns, so a climb can
+reach the quota with most of the file free — at which point etcd goes read-only
+and the run has recorded a ceiling about accumulated free pages rather than
+about how much state the store can hold.
+
+So each rung starts from a defragmented store, and the report says what each
+defragmentation reclaimed. Two rules that matter as much as doing it at all:
+
+- **Never inside a rung.** A defrag is a stop-the-world rewrite on the member it
+  runs against — writes block, latencies spike, a leader change is possible. All
+  three in the middle of a measurement, none of them about the fleet.
+- **Never during the soak.** The soak asks what a held fleet does when nothing
+  is being asked of the cluster. A defrag is something being asked of the
+  cluster.
+
+Members go one at a time: three at once on a three-member cluster is an outage
+rather than a maintenance window. A member that will not defragment is reported
+and does not abandon the climb — it is simply the one whose file reaches the
+quota first.
+
+The report also carries the gap either way, so a run that hits the quota can say
+whether defragmenting would have bought room or whether the store is genuinely
+full.
+
 ## Node labels have to be in a domain Cluster API propagates
 
 Cluster API copies a Machine label to its Node only if it has

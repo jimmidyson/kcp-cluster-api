@@ -260,6 +260,17 @@ func (s *Sampler) Etcd(ctx context.Context, cl client.Client) (Etcd, string, err
 	return sample, pod.Name, err
 }
 
+// etcdOf reads one named member, which is what a defragmentation needs either
+// side of itself to say what it reclaimed.
+func (s *Sampler) etcdOf(ctx context.Context, pod string) (Etcd, error) {
+	raw, err := s.clientset.CoreV1().Pods("kube-system").
+		ProxyGet("http", pod, strconv.Itoa(EtcdMetricsPort), "/metrics", nil).DoRaw(ctx)
+	if err != nil {
+		return Etcd{}, err
+	}
+	return ParseEtcd(bytes.NewReader(raw))
+}
+
 func firstRunning(pods []corev1.Pod) *corev1.Pod {
 	for i := range pods {
 		if pods[i].DeletionTimestamp == nil && pods[i].Status.Phase == corev1.PodRunning {

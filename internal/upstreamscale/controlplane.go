@@ -87,6 +87,39 @@ func (e Etcd) QuotaUsed() float64 {
 // stops accepting writes.
 func (e Etcd) NearQuota() bool { return e.QuotaUsed() > nearQuota }
 
+// FreeBytes is space inside the backend file that compaction has released and
+// that only defragmentation returns.
+func (e Etcd) FreeBytes() uint64 {
+	if e.DBInUseBytes > e.DBTotalBytes {
+		return 0
+	}
+	return e.DBTotalBytes - e.DBInUseBytes
+}
+
+// Fragmentation is the share of the backend file that is free.
+//
+// # Why a scale run cares
+//
+// The quota counts the file, not the live data in it. Compaction frees pages
+// inside the file and returns none of them, so a fleet with heavy churn — which
+// is what a converging Cluster API fleet is — can reach the quota with most of
+// the file free. etcd then goes read-only, and the run records a ceiling that is
+// about accumulated free pages rather than about how much state this store can
+// hold. Those are different findings, and only one of them was being looked for.
+func (e Etcd) Fragmentation() float64 {
+	if e.DBTotalBytes == 0 {
+		return 0
+	}
+	return float64(e.FreeBytes()) / float64(e.DBTotalBytes)
+}
+
+// Fragmented reports whether enough of the file is free to be worth reclaiming.
+//
+// A fifth is a judgement: below it, defragmenting buys little and costs a
+// stop-the-world rewrite on the member; above it, the gap is large enough that a
+// quota reached with it unreclaimed would be the wrong ceiling.
+func (e Etcd) Fragmented() bool { return e.Fragmentation() > 0.20 }
+
 // WALFsyncMeanMillis and BackendCommitMeanMillis are means rather than
 // percentiles: a histogram's buckets are not in this parser, and what matters
 // here is a figure that moves by an order of magnitude between rungs.
@@ -101,8 +134,15 @@ func (e Etcd) Describe() string {
 	fmt.Fprintf(&b, "%s of %s backend quota (%.0f%%), %d keys, wal fsync %.1fms, commit %.1fms",
 		humanBytes(e.DBTotalBytes), humanBytes(e.QuotaBytes), 100*e.QuotaUsed(),
 		e.Keys, e.WALFsyncMeanMillis(), e.BackendCommitMeanMillis())
+	if e.FreeBytes() > 0 {
+		fmt.Fprintf(&b, ", %s reclaimable", humanBytes(e.FreeBytes()))
+	}
 	if e.NearQuota() {
 		b.WriteString(" — **near the quota**, at which etcd stops accepting writes")
+		if e.Fragmented() {
+			fmt.Fprintf(&b, ", and %.0f%% of the file is free: defragment before believing this "+
+				"is the fleet's ceiling", 100*e.Fragmentation())
+		}
 	}
 	if !e.HasLeader {
 		b.WriteString(" — **no leader**")
