@@ -178,8 +178,15 @@ message that names the object rather than the installation. It does **not** need
 `EXP_RUNTIME_SDK`: no runtime extension runs there, since CAREN stays on the
 bootstrap cluster.
 
-`capiscale-prepare` checks the gate on every controller it patches and says so
-with the fix, rather than leaving a run to discover it one namespace in.
+`capiscale-prepare` **sets** the gate rather than reporting it missing, on the
+two controllers that read it — core, whose topology controller does the work, and
+the DevCluster provider, whose template webhooks refuse the objects without it.
+The two kubeadm providers accept the flag and nothing reads it.
+
+Setting rather than reporting, because `clusterctl init` will not revisit a
+provider it has already installed: a cluster whose providers arrived before the
+`install` step set `CLUSTER_TOPOLOGY` would otherwise need a reinstall to become
+measurable, and re-running `install` then `test:capi:cluster` is enough.
 
 CAPX is unpinned — clusterctl takes its latest. To pin one:
 

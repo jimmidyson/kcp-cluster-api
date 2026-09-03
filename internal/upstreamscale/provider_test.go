@@ -170,3 +170,51 @@ func TestTheTopologyGateIsChecked(t *testing.T) {
 		t.Error("the gate was missed on a deployment whose manager is not the first container")
 	}
 }
+
+// TestTheTopologyGateIsSetRatherThanReported. The gate is a container argument,
+// so the step that already patches these deployments can simply add it — and
+// then a cluster whose providers were installed without it is one command from
+// being measurable rather than one reinstall.
+func TestTheTopologyGateIsSetRatherThanReported(t *testing.T) {
+	// No feature gates at all: the flag has to be added.
+	fresh := released()
+	fresh.Spec.Template.Spec.Containers[0].Args = []string{"--leader-elect"}
+	if !EnableTopology(fresh) {
+		t.Fatal("nothing changed on a deployment with no gate")
+	}
+	if !TopologyEnabled(fresh) {
+		t.Error("the gate was not enabled")
+	}
+	if got := fresh.Spec.Template.Spec.Containers[0].Args; len(got) != 2 {
+		t.Errorf("args = %v, want the original plus one", got)
+	}
+
+	// Gates already present: ClusterTopology joins them rather than replacing
+	// them, because a provider installed with MachinePool on wants to keep it.
+	existing := released()
+	existing.Spec.Template.Spec.Containers[0].Args = []string{"--feature-gates=MachinePool=true"}
+	if !EnableTopology(existing) {
+		t.Fatal("nothing changed on a deployment with other gates")
+	}
+	args := strings.Join(existing.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "MachinePool=true") {
+		t.Errorf("an existing gate was lost: %s", args)
+	}
+	if !TopologyEnabled(existing) {
+		t.Errorf("the gate was not enabled: %s", args)
+	}
+
+	// Explicitly false is corrected rather than left alone.
+	off := released()
+	off.Spec.Template.Spec.Containers[0].Args = []string{"--feature-gates=ClusterTopology=false"}
+	if !EnableTopology(off) || !TopologyEnabled(off) {
+		t.Errorf("an explicitly disabled gate was not corrected: %v",
+			off.Spec.Template.Spec.Containers[0].Args)
+	}
+
+	// Idempotent, like every other patch here: re-running must not restart a
+	// controller whose metrics are the measurement.
+	if EnableTopology(off) {
+		t.Error("re-enabling an enabled gate reported a change")
+	}
+}

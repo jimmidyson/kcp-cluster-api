@@ -37,6 +37,11 @@ type Controller struct {
 	// DevCluster marks the one provider that ships expecting a Docker socket
 	// it does not need for the in-memory backend.
 	DevCluster bool
+	// TopologyGate marks the controllers that read the ClusterTopology feature
+	// gate: core, whose topology controller does the work, and the DevCluster
+	// provider, whose template webhooks refuse the objects without it. The two
+	// kubeadm providers accept the flag and nothing reads it.
+	TopologyGate bool
 }
 
 // Quantities parses the resources, so a bad flag fails before the cluster is
@@ -59,12 +64,12 @@ func (c Controller) Quantities() (cpu, memory resource.Quantity, err error) {
 func Controllers() []Controller {
 	return []Controller{
 		{Name: "core", Namespace: "capi-system", Deployment: "capi-controller-manager",
-			CPU: "4", Memory: "8Gi"},
+			CPU: "4", Memory: "8Gi", TopologyGate: true},
 		{Name: "kubeadm-bootstrap", Namespace: "capi-kubeadm-bootstrap-system",
 			Deployment: "capi-kubeadm-bootstrap-controller-manager", CPU: "2", Memory: "4Gi"},
 		{Name: "kubeadm-control-plane", Namespace: "capi-kubeadm-control-plane-system",
 			Deployment: "capi-kubeadm-control-plane-controller-manager", CPU: "4", Memory: "6Gi"},
 		{Name: "devcluster", Namespace: "capd-system", Deployment: "capd-controller-manager",
-			CPU: "6", Memory: "24Gi", DevCluster: true},
+			CPU: "6", Memory: "24Gi", DevCluster: true, TopologyGate: true},
 	}
 }

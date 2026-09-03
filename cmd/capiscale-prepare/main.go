@@ -149,13 +149,6 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 			return fmt.Errorf("reading %s: %w", key, err)
 		}
 
-		// The gate the whole run depends on. Reported per controller rather
-		// than assumed, because without it every object this run creates is
-		// refused at admission with a message that names the object.
-		if !upstreamscale.TopologyEnabled(&d) {
-			gateless = append(gateless, c.Name)
-		}
-
 		var did []string
 		if upstreamscale.Guarantee(&d, cpu, memory) {
 			did = append(did, fmt.Sprintf("Guaranteed at %s CPU / %s memory, with GOMEMLIMIT below it", &cpu, &memory))
@@ -165,6 +158,17 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		}
 		if c.DevCluster && upstreamscale.RunWithoutDocker(&d) {
 			did = append(did, "Docker socket, its hostPath volume and the privilege removed")
+		}
+		// The gate the whole run depends on, set rather than complained about:
+		// clusterctl init will not revisit a provider it has already installed,
+		// so a cluster whose providers arrived without CLUSTER_TOPOLOGY would
+		// otherwise need a reinstall to become measurable. Only on the two
+		// controllers that read it.
+		if c.TopologyGate && upstreamscale.EnableTopology(&d) {
+			did = append(did, "ClusterTopology feature gate enabled")
+		}
+		if c.TopologyGate && !upstreamscale.TopologyEnabled(&d) {
+			gateless = append(gateless, c.Name)
 		}
 
 		if len(did) == 0 {
@@ -182,13 +186,13 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 	}
 
 	if len(gateless) > 0 {
-		return fmt.Errorf("these controllers do not have the ClusterTopology feature gate: %s.\n\n"+
-			"Every cluster this run creates is built from a ClusterClass, and a provider without the "+
-			"gate refuses them at admission with \"spec: Forbidden: can be set only if the "+
-			"ClusterTopology feature flag is enabled\" — which names the object rather than the "+
-			"installation. clusterctl sets it from its environment, so the fix is to re-run\n\n"+
-			"    CLUSTER_TOPOLOGY=true clusterctl init ...\n\n"+
-			"or, through the provisioning script, ./scale-cluster.sh install",
+		// Should be unreachable: the loop above enables it. Kept because the
+		// consequence of it being off is an admission error that names the
+		// object rather than the installation, and a run should not discover
+		// that one namespace in.
+		return fmt.Errorf("these controllers still do not have the ClusterTopology feature gate "+
+			"after being patched to: %s. Every cluster this run creates is built from a "+
+			"ClusterClass, and a provider without the gate refuses them at admission",
 			strings.Join(gateless, ", "))
 	}
 	if len(missing) > 0 {

@@ -173,3 +173,54 @@ func TopologyEnabled(d *appsv1.Deployment) bool {
 	}
 	return false
 }
+
+// EnableTopology switches the ClusterTopology feature gate on, and reports
+// whether it had to.
+//
+// A container argument, so the step that already patches these deployments can
+// add it: a cluster whose providers were installed without CLUSTER_TOPOLOGY set
+// is then one command from being measurable rather than one reinstall — and
+// clusterctl init will not revisit a provider it has already installed, so the
+// reinstall is the awkward path.
+//
+// Only two controllers need it, and this is applied only to those: core, whose
+// topology controller does the work, and the DevCluster provider, whose
+// template webhooks refuse the objects without it. The kubeadm bootstrap and
+// control plane providers do not reference the gate at all — they accept the
+// flag and nothing reads it — so setting it there would be noise that looks
+// like configuration.
+func EnableTopology(d *appsv1.Deployment) bool {
+	if TopologyEnabled(d) {
+		return false
+	}
+	for i := range d.Spec.Template.Spec.Containers {
+		c := &d.Spec.Template.Spec.Containers[i]
+		for j, arg := range c.Args {
+			value, ok := strings.CutPrefix(arg, "--feature-gates=")
+			if !ok {
+				continue
+			}
+			// Joined rather than replaced: a provider installed with other
+			// gates on wants to keep them.
+			var gates []string
+			for _, gate := range strings.Split(value, ",") {
+				gate = strings.TrimSpace(gate)
+				if gate == "" || strings.HasPrefix(gate, "ClusterTopology=") {
+					continue
+				}
+				gates = append(gates, gate)
+			}
+			gates = append(gates, "ClusterTopology=true")
+			c.Args[j] = "--feature-gates=" + strings.Join(gates, ",")
+			return true
+		}
+	}
+	// No feature-gates flag anywhere: add one to the first container, which is
+	// the manager in every one of these deployments.
+	if len(d.Spec.Template.Spec.Containers) == 0 {
+		return false
+	}
+	c := &d.Spec.Template.Spec.Containers[0]
+	c.Args = append(c.Args, "--feature-gates=ClusterTopology=true")
+	return true
+}
