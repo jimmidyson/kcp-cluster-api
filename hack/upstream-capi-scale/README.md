@@ -14,6 +14,20 @@ export CLUSTER_TEMPLATE=/path/to/your/caren-cluster-template.yaml
 ./scale-cluster.sh install        # stock Cluster API on it, prepared for measuring
 ```
 
+Then, before anything creates a fleet:
+
+```sh
+KUBECONFIG=../../bin/capi-scale.kubeconfig \
+  go run ../../cmd/capiscale-prepare --only=preflight
+```
+
+This touches nothing and answers the largest open question in the whole
+exercise: the objects a run creates are built against this repository's fork of
+Cluster API, off the v1.15 line, and the CRDs come from the stock release
+clusterctl installed. It says whether those agree — by kind and by version, and
+naming the provider to install for anything missing — before there is a fleet
+to be confused by it.
+
 ## What goes where, and why
 
 **CAPX and CAREN go on the kind cluster only.** They build the workload cluster

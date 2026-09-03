@@ -113,3 +113,13 @@ func Preflight(served map[string][]string) error {
 		"Cluster API older than this harness was written for, and the fix is the provider versions "+
 		"rather than anything in the run", strings.Join(problems, "\n  - "))
 }
+
+// NeededGroupVersions is what a caller has to ask the cluster about before
+// [Preflight] can judge the answer.
+func NeededGroupVersions() []string {
+	out := make([]string, 0, len(needed))
+	for _, n := range needed {
+		out = append(out, n.groupVersion)
+	}
+	return out
+}

@@ -44,7 +44,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -64,15 +67,26 @@ type controller struct {
 }
 
 func main() {
+	// This command's own flag set, not flag.CommandLine.
+	//
+	// Some of what this imports registers flags in an init function —
+	// controller-runtime's config package registers --kubeconfig — and a
+	// process that shares the global set with its dependencies panics at
+	// startup the day one of them claims a name it wanted. Which is what
+	// happened here, on a flag this command had been parsing perfectly well
+	// until an import two commits later reached it.
+	fs := flag.NewFlagSet("capiscale-prepare", flag.ExitOnError)
 	var (
-		kubeconfig = flag.String("kubeconfig", "", "Path to the kubeconfig of the cluster to prepare. "+
+		kubeconfig = fs.String("kubeconfig", "", "Path to the kubeconfig of the cluster to prepare. "+
 			"Defaults to the usual rules (KUBECONFIG, then ~/.kube/config).")
-		kubecontext = flag.String("context", "", "Context to use. Named rather than taken from whatever "+
+		kubecontext = fs.String("context", "", "Context to use. Named rather than taken from whatever "+
 			"is current, because this patches deployments and the current context may be somewhere else.")
-		profilerAddr = flag.String("profiler-address", ":6060",
+		profilerAddr = fs.String("profiler-address", ":6060",
 			"Address each controller serves pprof on. Bind all interfaces, not localhost: the samples are "+
 				"read through the API server's pod proxy, which reaches the pod IP.")
-		dryRun = flag.Bool("dry-run", false, "Report what would change and change nothing.")
+		dryRun = fs.Bool("dry-run", false, "Report what would change and change nothing.")
+		only   = fs.String("only", "", "Run one step and stop: \"preflight\" checks that the cluster "+
+			"serves what a run will create, and touches nothing.")
 	)
 	controllers := []*controller{
 		{name: "core", namespace: "capi-system", deploy: "capi-controller-manager", cpu: "4", memory: "8Gi"},
@@ -84,25 +98,52 @@ func main() {
 			cpu: "6", memory: "24Gi", devCluster: true},
 	}
 	for _, c := range controllers {
-		flag.StringVar(&c.cpu, c.name+"-cpu", c.cpu, "CPU request and limit for the "+c.name+" controller.")
-		flag.StringVar(&c.memory, c.name+"-memory", c.memory,
+		fs.StringVar(&c.cpu, c.name+"-cpu", c.cpu, "CPU request and limit for the "+c.name+" controller.")
+		fs.StringVar(&c.memory, c.name+"-memory", c.memory,
 			"Memory request and limit for the "+c.name+" controller. Raise it and re-run when a rung is "+
 				"OOM killed; that loop is the point.")
-		flag.StringVar(&c.namespace, c.name+"-namespace", c.namespace, "Namespace of the "+c.name+" controller.")
-		flag.StringVar(&c.deploy, c.name+"-deployment", c.deploy, "Deployment name of the "+c.name+" controller.")
+		fs.StringVar(&c.namespace, c.name+"-namespace", c.namespace, "Namespace of the "+c.name+" controller.")
+		fs.StringVar(&c.deploy, c.name+"-deployment", c.deploy, "Deployment name of the "+c.name+" controller.")
 	}
-	flag.Parse()
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
-	if err := run(context.Background(), *kubeconfig, *kubecontext, *profilerAddr, *dryRun, controllers); err != nil {
+	if err := run(context.Background(), *kubeconfig, *kubecontext, *profilerAddr, *dryRun, *only, controllers); err != nil {
 		fmt.Fprintf(os.Stderr, "could not prepare the cluster: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryRun bool, controllers []*controller) error {
-	cl, err := newClient(kubeconfig, kubecontext)
+func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryRun bool, only string,
+	controllers []*controller,
+) error {
+	cfg, err := restConfig(kubeconfig, kubecontext)
 	if err != nil {
 		return err
+	}
+
+	// Preflight first, and on its own if that is all that was asked for.
+	//
+	// It is the cheapest thing here and it answers the largest open question:
+	// the objects a run creates are built against this repository's fork of
+	// Cluster API, off the v1.15 line, and the CRDs come from the stock release
+	// clusterctl installed. This says whether those agree before a fleet exists
+	// to be confused by it.
+	preflightErr := preflight(ctx, cfg)
+	if preflightErr == nil {
+		fmt.Println("preflight               the cluster serves every kind and version a run creates")
+	} else {
+		fmt.Printf("preflight               FAILED\n\n%v\n\n", preflightErr)
+	}
+	if only == "preflight" {
+		return preflightErr
+	}
+
+	cl, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		return fmt.Errorf("building a client: %w", err)
 	}
 
 	var missing []string
@@ -157,10 +198,38 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 			"docker provider is what serves DevCluster, in-memory backend included",
 			strings.Join(missing, ", "))
 	}
-	return nil
+	// Reported last as well as first: the patching is worth doing either way,
+	// and a preflight failure is what stops a run rather than what stops this.
+	return preflightErr
 }
 
-func newClient(kubeconfig, kubecontext string) (client.Client, error) {
+// preflight asks the cluster which of the group versions this run builds
+// against it actually serves.
+//
+// Version by version rather than through ServerPreferredResources, which
+// returns one version per group: a cluster serving both v1beta1 and v1beta2
+// would answer with whichever it prefers, and "the preferred version does not
+// have this kind" is a different statement from "this cluster cannot serve it".
+func preflight(ctx context.Context, cfg *rest.Config) error {
+	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("building a discovery client: %w", err)
+	}
+	served := map[string][]string{}
+	for _, gv := range upstreamscale.NeededGroupVersions() {
+		list, err := dc.ServerResourcesForGroupVersion(gv)
+		if err != nil {
+			// Not served at all is the answer Preflight wants, and it says
+			// which provider installs it.
+			continue
+		}
+		served[gv] = upstreamscale.IndexResources([]*metav1.APIResourceList{list})[gv]
+	}
+	_ = ctx
+	return upstreamscale.Preflight(served)
+}
+
+func restConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
 		rules.ExplicitPath = kubeconfig
@@ -170,9 +239,5 @@ func newClient(kubeconfig, kubecontext string) (client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building a client config: %w", err)
 	}
-	cl, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
-	if err != nil {
-		return nil, fmt.Errorf("building a client: %w", err)
-	}
-	return cl, nil
+	return cfg, nil
 }
