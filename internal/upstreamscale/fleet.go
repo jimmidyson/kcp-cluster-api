@@ -20,9 +20,14 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
+	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	infrav1 "sigs.k8s.io/cluster-api/test/infrastructure/docker/api/v1beta2"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/demo"
 )
@@ -154,4 +159,33 @@ func Clusters(namespace string, names []string, shape FleetShape) []*clusterv1.C
 		out = append(out, c)
 	}
 	return out
+}
+
+// Scheme is every API group this run creates or reads.
+//
+// # Why this is not the caller's business
+//
+// The first real run died on its first rung with "no kind is registered for the
+// type v1beta2.DevClusterTemplate": the driver had registered the core Cluster
+// API types and none of the four other groups a blueprint draws on. It had
+// already created a namespace by then, and nothing else.
+//
+// Which schemes a blueprint needs is a property of the blueprint, so it lives
+// here, and a test walks every object the blueprint produces to check that this
+// carries its kind. Add an object whose group is missing and the test fails
+// rather than the run.
+func Scheme() (*runtime.Scheme, error) {
+	s := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		clusterv1.AddToScheme,
+		bootstrapv1.AddToScheme,
+		controlplanev1.AddToScheme,
+		infrav1.AddToScheme,
+	} {
+		if err := add(s); err != nil {
+			return nil, fmt.Errorf("registering types: %w", err)
+		}
+	}
+	return s, nil
 }

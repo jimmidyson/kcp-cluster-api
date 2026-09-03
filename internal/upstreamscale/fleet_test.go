@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
@@ -130,5 +131,48 @@ func TestAShapeWithNoControlPlaneIsRefused(t *testing.T) {
 	// The port range is the provider's, and a shape past it cannot run.
 	if err := (FleetShape{Clusters: 20000, ClustersPerNamespace: 1, ControlPlaneMachines: 1}).Validate(); err == nil {
 		t.Error("a fleet past the in-memory port range was accepted")
+	}
+}
+
+// TestEveryBlueprintObjectHasAKindInTheScheme is the test the first real run
+// earned.
+//
+// The driver registered the core Cluster API types and none of the four other
+// groups the blueprint draws on, so the first rung died on
+// "no kind is registered for the type v1beta2.DevClusterTemplate" — after
+// creating a namespace, before creating anything worth measuring. The knowledge
+// of which schemes a blueprint needs belongs beside the blueprint rather than in
+// whatever happens to apply it, and this is what keeps the two in step: add an
+// object to Blueprint whose group Scheme does not carry, and this fails.
+func TestEveryBlueprintObjectHasAKindInTheScheme(t *testing.T) {
+	s, err := Scheme()
+	if err != nil {
+		t.Fatalf("building the scheme: %v", err)
+	}
+	objects := Blueprint("capi-scale-0000")
+	for _, cluster := range Clusters("capi-scale-0000", []string{"c0000"}, FleetShape{ControlPlaneMachines: 1}) {
+		objects = append(objects, cluster)
+	}
+
+	if len(objects) < 6 {
+		t.Fatalf("only %d objects: this test is not exercising the blueprint", len(objects))
+	}
+	for _, obj := range objects {
+		kinds, _, err := s.ObjectKinds(obj)
+		if err != nil {
+			t.Errorf("%T is not in the scheme: %v", obj, err)
+			continue
+		}
+		if len(kinds) == 0 {
+			t.Errorf("%T has no kind", obj)
+		}
+	}
+
+	// And the types the run reads back while waiting, which are not in the
+	// blueprint and are just as necessary.
+	for _, list := range []runtime.Object{&clusterv1.ClusterList{}, &clusterv1.MachineList{}} {
+		if _, _, err := s.ObjectKinds(list); err != nil {
+			t.Errorf("%T is not in the scheme: %v", list, err)
+		}
 	}
 }

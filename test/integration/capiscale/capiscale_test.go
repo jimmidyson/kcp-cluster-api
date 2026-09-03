@@ -36,7 +36,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/kubernetes/scheme"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -80,12 +80,16 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	if err != nil {
 		t.Skipf("could not run: no cluster (%v)", err)
 	}
-	cl, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	// Every group the blueprint draws on, from beside the blueprint. Building
+	// the scheme here by hand is what made the first run die on its first rung
+	// with "no kind is registered for the type v1beta2.DevClusterTemplate".
+	s, err := upstreamscale.Scheme()
+	if err != nil {
+		t.Fatalf("building the scheme: %v", err)
+	}
+	cl, err := client.New(cfg, client.Options{Scheme: s})
 	if err != nil {
 		t.Skipf("could not run: no client (%v)", err)
-	}
-	if err := clusterv1.AddToScheme(scheme.Scheme); err != nil {
-		t.Fatalf("registering the Cluster API types: %v", err)
 	}
 
 	ctx := ctrl.SetupSignalHandler()
@@ -387,7 +391,7 @@ func mustRESTClient(t *testing.T, cfg *rest.Config) rest.Interface {
 	c := rest.CopyConfig(cfg)
 	c.GroupVersion = &corev1.SchemeGroupVersion
 	c.APIPath = "/api"
-	c.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
+	c.NegotiatedSerializer = clientgoscheme.Codecs.WithoutConversion()
 	rc, err := rest.RESTClientFor(c)
 	if err != nil {
 		t.Fatalf("building a REST client: %v", err)
