@@ -89,10 +89,24 @@ that run predates the fix:
 | 400 | 200 | 1m29s | 4m50s | 1.45s | 24% |
 
 Per-cluster convergence **improves** with fleet size, three-fold from the first
-rung to the last: the work batches. The column that should worry a reader is the
-last one — the driver creating the rung's objects through one client is now 24%
-of the rung's wall time, up from 6%. The spec named that as a risk and it is now
-measurable and growing.
+rung to the last: the work batches.
+
+**The last column is the driver, not Cluster API, and it was the harness's own
+fault.** Creation was serial through one client, and that client was on
+client-go's default rate limit — `DefaultQPS = 5`, `DefaultBurst = 10`, applied
+whenever `QPS` is left at zero, which this driver never set. A 400-cluster rung
+is about 680 objects, so over two minutes of it was pure client-side throttling
+before the cluster was asked for anything. The first ceiling run made it
+unmissable: 7m52s to create 400 clusters, against 1m29s for the 200 the ladder
+added at its top rung — more than twice the time for twice the objects.
+
+Both are fixed: namespaces are created concurrently (`CREATE_CONCURRENCY`, 16)
+and the client's limits are raised (`CLIENT_QPS`, 200). The `created in` figures
+in every run above therefore measure the driver's throttle, not the API server's
+admission path, and the "driver's share" column should be read as an upper
+bound on the harness's overhead rather than a property of Cluster API. The
+convergence column beside it is unaffected — it is timed after creation
+finishes.
 
 ### The soak (S4)
 

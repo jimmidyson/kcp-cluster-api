@@ -27,10 +27,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -83,6 +88,14 @@ var (
 		"How many times to read the API server's heap, taking the lowest as the floor.")
 	apiHeapGap = flag.Duration("capi-apiserver-heap-gap", 2*time.Second,
 		"How long between those reads.")
+
+	// The driver's own throughput, which is not the subject of the run and
+	// was silently capping it. See restConfig and create.
+	createConcurrency = flag.Int("capi-create-concurrency", 16,
+		"How many namespaces' objects to create at once.")
+	clientQPS = flag.Float64("capi-client-qps", 200,
+		"The driver's client-side rate limit. client-go defaults to 5, which throttles the run rather than the cluster.")
+	clientBurst = flag.Int("capi-client-burst", 400, "Its burst.")
 )
 
 // TestStockClusterApiClimbsUntilSomethingGives is the whole run: a baseline, a
@@ -93,6 +106,13 @@ var (
 // needed one would hold unrelated work hostage, which is the rule every other
 // scale measurement here follows.
 func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
+	// controller-runtime routes the API server's warning headers through its
+	// own logger, and prints a stack trace instead when none is set. The
+	// warning is the part worth having — the API server has something to say
+	// about objects this run creates, and without this it says it into a
+	// goroutine dump.
+	ctrl.SetLogger(logr.FromSlogHandler(slog.NewTextHandler(os.Stderr, nil)))
+
 	cfg, err := restConfig(*kubeconfig, *kubecontext)
 	if err != nil {
 		t.Skipf("could not run: no cluster (%v)", err)
@@ -131,6 +151,9 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	report.AddFact("nodesPerCluster", fmt.Sprint(*nodesPer))
 	report.AddFact("clustersPerNamespace", fmt.Sprint(*perNamespace))
 	report.AddFact("endState", "every control plane ready and every Machine Ready")
+	report.AddFact("driver", fmt.Sprintf("creates %d namespaces' objects at once, at %g QPS "+
+		"(burst %d): client-go's default is 5 QPS, which times the driver rather than the cluster",
+		*createConcurrency, *clientQPS, *clientBurst))
 	report.AddFact("heapSample", "every controller's is read through pprof with gc=1, so live heap is "+
 		"the retained set; the API server's line says for itself, since the collection it needs is a "+
 		"separate best-effort request")
@@ -266,7 +289,9 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		// spec names it as a candidate bottleneck. A total that cannot be
 		// split is not a measurement of Cluster API. See RungResult.
 		startedCreate := time.Now()
-		if err := create(ctx, cl, fleet, &created); err != nil {
+		madeNamespaces, err := create(ctx, cl, fleet, *createConcurrency)
+		created = append(created, madeNamespaces...)
+		if err != nil {
 			rungs = append(rungs, upstreamscale.RungResult{
 				Clusters: clusters, Machines: machines, Added: clusters - held,
 				CreatedIn: time.Since(startedCreate),
@@ -322,29 +347,59 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	}
 }
 
-// create applies one rung's blueprint and Clusters.
-func create(ctx context.Context, cl client.Client, fleet upstreamscale.Fleet, created *[]string) error {
-	for _, ns := range fleet.Namespaces {
-		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns.Name}}
-		if err := cl.Create(ctx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating namespace %s: %w", ns.Name, err)
-		}
-		*created = append(*created, ns.Name)
-
-		// The blueprint in dependency order, the class last, so that by the
-		// time it exists everything it refers to does.
-		for _, obj := range upstreamscale.Blueprint(ns.Name) {
-			if err := cl.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("creating %T in %s: %w", obj, ns.Name, err)
-			}
-		}
-		for _, cluster := range upstreamscale.Clusters(ns.Name, ns.Clusters, fleet.Shape) {
-			if err := cl.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("creating cluster %s/%s: %w", ns.Name, cluster.Name, err)
-			}
-		}
+// create applies one rung's blueprint and Clusters, several namespaces at once.
+//
+// # Why this is concurrent
+//
+// It was not, and the first ceiling run spent 7m52s creating 400 clusters —
+// against 1m29s for the 200 the ladder added at its top rung, which is more
+// than twice the time for twice the objects. Serial creation through one client
+// makes the driver's own throughput part of every rung's wall time, and the
+// spec named that as the risk that would stop this measuring Cluster API.
+//
+// Namespaces run in parallel and each namespace's objects stay in order, since
+// a Cluster names a ClusterClass in its own namespace and the class has to
+// exist first.
+//
+// The namespaces created are returned even when one fails, so that teardown
+// removes what a half-built rung left behind.
+func create(ctx context.Context, cl client.Client, fleet upstreamscale.Fleet, concurrency int) ([]string, error) {
+	if concurrency < 1 {
+		concurrency = 1
 	}
-	return nil
+	var (
+		mu      sync.Mutex
+		created []string
+	)
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(concurrency)
+	for _, ns := range fleet.Namespaces {
+		group.Go(func() error {
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns.Name}}
+			if err := cl.Create(groupCtx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("creating namespace %s: %w", ns.Name, err)
+			}
+			mu.Lock()
+			created = append(created, ns.Name)
+			mu.Unlock()
+
+			// The blueprint in dependency order, the class last, so that by
+			// the time it exists everything it refers to does.
+			for _, obj := range upstreamscale.Blueprint(ns.Name) {
+				if err := cl.Create(groupCtx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+					return fmt.Errorf("creating %T in %s: %w", obj, ns.Name, err)
+				}
+			}
+			for _, cluster := range upstreamscale.Clusters(ns.Name, ns.Clusters, fleet.Shape) {
+				if err := cl.Create(groupCtx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
+					return fmt.Errorf("creating cluster %s/%s: %w", ns.Name, cluster.Name, err)
+				}
+			}
+			return nil
+		})
+	}
+	return created, group.Wait()
 }
 
 // wait polls until the rung reaches the end state, or a component dies, or time
@@ -451,8 +506,20 @@ func restConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
 	if _, err := os.Stat(rules.ExplicitPath); rules.ExplicitPath != "" && err != nil {
 		return nil, err
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		rules, &clientcmd.ConfigOverrides{CurrentContext: kubecontext}).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// client-go applies DefaultQPS 5 and DefaultBurst 10 whenever QPS is left
+	// at zero, so a driver that never sets them is rate limited to five
+	// requests a second. A 400 cluster rung is some 680 objects, which is over
+	// two minutes of pure client-side throttling before the cluster is asked
+	// to do anything — time that reads as the fleet being slow to create.
+	cfg.QPS = float32(*clientQPS)
+	cfg.Burst = *clientBurst
+	return cfg, nil
 }
 
 func mustRESTClient(t *testing.T, cfg *rest.Config) rest.Interface {
