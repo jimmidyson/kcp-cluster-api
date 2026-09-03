@@ -66,6 +66,9 @@ var (
 	outDir  = flag.String("capi-out", "bin", "Where the report is written.")
 	outName = flag.String("capi-out-name", "capi-scale", "Its name.")
 	keep    = flag.Bool("capi-keep", false, "Leave the fleet behind for inspection.")
+
+	teardownTimeout = flag.Duration("capi-teardown-timeout", 30*time.Minute,
+		"How long teardown may wait for the fleet's Clusters to go before it stops and says what remains.")
 )
 
 // TestStockClusterApiClimbsUntilSomethingGives is the whole run: a baseline, a
@@ -124,13 +127,22 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 	defragmenter := upstreamscale.NewDefragmenter(cfg, mustRESTClient(t, cfg))
 
 	// Everything this run creates, torn down at the end unless asked not to.
+	//
+	// Clusters first, then namespaces, and never the other way round: stock
+	// Cluster API cannot finish deleting a namespace whose objects were all
+	// stamped at once. The first run left every namespace Terminating that
+	// way. See upstreamscale.Teardown. A teardown that does not finish is a
+	// failure of the run, after the report is written: what it leaves behind
+	// is what the next run would measure as its baseline.
 	var created []string
 	t.Cleanup(func() {
 		if *keep {
 			t.Logf("NOTE: leaving %d namespaces behind (--capi-keep)", len(created))
 			return
 		}
-		teardown(context.Background(), t, cl, created)
+		if err := upstreamscale.Teardown(context.Background(), cl, created, *teardownTimeout, *pollInterval, t.Logf); err != nil {
+			t.Errorf("teardown did not finish: %v", err)
+		}
 	})
 
 	sample := func(label string, clusters, machines int) {
@@ -340,21 +352,6 @@ func holdAndReport(ctx context.Context, t *testing.T, cl client.Client, report *
 	drift := upstreamscale.Drift(report.Samples[before:], ceiling.LastGood.Clusters, ready)
 	report.AddFact("soak", drift.Describe())
 	t.Logf("%s", drift.Describe())
-}
-
-func teardown(ctx context.Context, t *testing.T, cl client.Client, namespaces []string) {
-	seen := map[string]bool{}
-	for _, ns := range namespaces {
-		if seen[ns] {
-			continue
-		}
-		seen[ns] = true
-		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}
-		if err := cl.Delete(ctx, namespace); err != nil && !apierrors.IsNotFound(err) {
-			t.Logf("NOTE: could not delete namespace %s: %v", ns, err)
-		}
-	}
-	t.Logf("deleted %d namespaces", len(seen))
 }
 
 func preflight(ctx context.Context, cfg *rest.Config) error {

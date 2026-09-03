@@ -328,6 +328,65 @@ The report also carries the gap either way, so a run that hits the quota can say
 whether defragmenting would have bought room or whether the store is genuinely
 full.
 
+## Teardown deletes Clusters first, and namespaces only once they are gone
+
+The first run deleted its namespaces and left every one of them Terminating,
+with the DevCluster provider logging, forever:
+
+```
+"Connect failed" err="error creating REST config: error getting kubeconfig
+secret: Secret \"c0001-kubeconfig\" not found" controller="clustercache"
+```
+
+The Secret is a symptom. Deleting a namespace stamps every object in it at once,
+with no order, and stock Cluster API cannot finish from there:
+
+- A `Secret` has no finalizer, so the kubeconfig goes at once, and the cluster
+  cache logs the line above for as long as the `Cluster` — which does have one —
+  is still there.
+- A deleting `DevCluster` removes its finalizer immediately, taking the in-memory
+  resource group and listener every `DevMachine` would clean up with it.
+- A deleting `DevMachine` whose `DevCluster` has gone logs `DevCluster is not
+  available yet` and returns without releasing its finalizer. Its `Machine`
+  waits for it, the `Cluster` waits for its Machines, and the namespace waits
+  for the `Cluster`. Nothing times out.
+
+This repository's fork carries a fix for both halves — a deleting DevCluster
+waits for its DevMachines, and a deleting DevMachine whose DevCluster has gone
+releases itself; see `DRIFT.md` — because deleting a kcp `APIBinding` removes
+every bound object at once exactly as a namespace does. The cluster under test
+runs stock Cluster API **on purpose**, so it does not have them, and the harness
+keeps the order itself: `upstreamscale.Teardown` deletes every `Cluster`, waits
+until none remain, and only then deletes the namespaces and waits for those.
+Deleting the `Cluster` lets the Cluster controller order its own descendants —
+workers, control plane, infrastructure, then the Cluster and the Secrets it owns
+— which is the order upstream's own tests rely on.
+
+`TEARDOWN_TIMEOUT` (30m) is how long that wait may take. A teardown that runs
+out reports what it was still waiting for, by name and with the Cluster's own
+`Deleting` condition message, and **leaves the namespaces alone**: deleting them
+anyway is the failure above. It fails the run, after the report is written,
+because whatever it leaves behind is what the next run would take as its
+baseline.
+
+### Recovering a namespace the first run left Terminating
+
+A namespace stuck this way stays stuck: nothing in stock Cluster API will ever
+release those DevMachines. Their in-memory state went with the DevCluster's
+resource group, so releasing them by hand loses nothing:
+
+```sh
+export KUBECONFIG=../../bin/capi-scale.kubeconfig
+for ns in $(kubectl get namespaces -o name | grep '^namespace/capi-scale-' | cut -d/ -f2); do
+  kubectl -n "$ns" patch devmachines --all --type=merge -p '{"metadata":{"finalizers":null}}'
+done
+kubectl get namespaces | grep capi-scale    # until none remain
+```
+
+Once the DevMachines go, every Machine finishes, then every Cluster, then the
+namespace. Check that the list is empty before the next run: a run that starts
+over a terminating fleet measures both.
+
 ## Node labels have to be in a domain Cluster API propagates
 
 Cluster API copies a Machine label to its Node only if it has

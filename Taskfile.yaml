@@ -417,6 +417,9 @@ tasks:
       SOAK: '{{.SOAK | default "30m"}}'
       OUT_NAME: '{{.OUT_NAME | default "capi-scale"}}'
       KEEP: '{{.KEEP | default "false"}}'
+      # Clusters are deleted first and waited for, then the namespaces; this is
+      # how long that wait may take before teardown stops and says what remains.
+      TEARDOWN_TIMEOUT: '{{.TEARDOWN_TIMEOUT | default "30m"}}'
     cmds:
       - >-
         go test -tags integration -count 1 -v -timeout 24h ./test/integration/capiscale/...
@@ -431,6 +434,7 @@ tasks:
         -capi-out={{.BIN}}
         -capi-out-name={{.OUT_NAME}}
         -capi-keep={{.KEEP}}
+        -capi-teardown-timeout={{.TEARDOWN_TIMEOUT}}
 
   test:capi:cluster:
     desc: Prepare a cluster for the stock Cluster API scale test — set KUBECONFIG to the cluster under test
