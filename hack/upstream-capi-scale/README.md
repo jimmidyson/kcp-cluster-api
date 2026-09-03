@@ -170,6 +170,17 @@ itself:
   nothing here needs.
 - the Nutanix credentials, which clusterctl reads at init time.
 
+`install` needs `CLUSTER_TOPOLOGY=true` for the same reason on a different
+cluster: every cluster the scale test creates is built from a ClusterClass, and
+a provider installed without the gate refuses them at admission with `spec:
+Forbidden: can be set only if the ClusterTopology feature flag is enabled` — a
+message that names the object rather than the installation. It does **not** need
+`EXP_RUNTIME_SDK`: no runtime extension runs there, since CAREN stays on the
+bootstrap cluster.
+
+`capiscale-prepare` checks the gate on every controller it patches and says so
+with the fix, rather than leaving a run to discover it one namespace in.
+
 CAPX is unpinned — clusterctl takes its latest. To pin one:
 
 ```sh

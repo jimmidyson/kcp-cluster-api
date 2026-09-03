@@ -399,7 +399,15 @@ install() {
   # The docker provider is what serves DevCluster; the in-memory backend is a
   # mode of it, which is also why its deployment arrives wanting a Docker
   # socket that the prepare step below takes away.
-  KUBECONFIG="${WORKLOAD_KUBECONFIG}" "$(clusterctl_for "${CAPI_VERSION}")" init \
+  # CLUSTER_TOPOLOGY=true, for the same reason the bootstrap init needs it and
+  # a different cluster: every cluster this run creates is built from a
+  # ClusterClass, and a provider installed without the gate refuses them at
+  # admission with a message that names the object rather than the install.
+  #
+  # Not EXP_RUNTIME_SDK: no runtime extension runs here. CAREN is on the
+  # bootstrap cluster and has no part in what is measured.
+  KUBECONFIG="${WORKLOAD_KUBECONFIG}" env CLUSTER_TOPOLOGY=true \
+    "$(clusterctl_for "${CAPI_VERSION}")" init \
     --core "cluster-api:${CAPI_VERSION}" \
     --bootstrap "kubeadm:${CAPI_VERSION}" \
     --control-plane "kubeadm:${CAPI_VERSION}" \

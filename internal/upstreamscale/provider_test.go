@@ -130,3 +130,43 @@ func TestTheMuxPortRangeIsAStatedCeiling(t *testing.T) {
 		t.Errorf("the refusal does not say where the bound comes from: %v", err)
 	}
 }
+
+// TestTheTopologyGateIsChecked, because the run cannot work without it and the
+// failure names something else.
+//
+// A ClusterClass-based fleet needs the ClusterTopology feature gate on the
+// providers, and clusterctl sets it from CLUSTER_TOPOLOGY at init time. Without
+// it the objects are refused by an admission webhook — "spec: Forbidden: can be
+// set only if the ClusterTopology feature flag is enabled" — which reads like a
+// problem with the object rather than with how the provider was installed.
+func TestTheTopologyGateIsChecked(t *testing.T) {
+	off := released()
+	if TopologyEnabled(off) {
+		t.Error("a deployment with no feature gates was reported as having the topology gate")
+	}
+
+	on := released()
+	on.Spec.Template.Spec.Containers[0].Args = []string{
+		"--leader-elect",
+		"--feature-gates=MachinePool=true,ClusterTopology=true",
+	}
+	if !TopologyEnabled(on) {
+		t.Error("ClusterTopology=true was not recognised")
+	}
+
+	// Explicitly off is not the same as absent, and both are wrong here.
+	disabled := released()
+	disabled.Spec.Template.Spec.Containers[0].Args = []string{"--feature-gates=ClusterTopology=false"}
+	if TopologyEnabled(disabled) {
+		t.Error("ClusterTopology=false was read as enabled")
+	}
+
+	// A gate on any container counts: these deployments have carried sidecars,
+	// and the manager is not always first.
+	sidecar := released()
+	sidecar.Spec.Template.Spec.Containers = append([]corev1.Container{{Name: "kube-rbac-proxy"}},
+		corev1.Container{Name: "manager", Args: []string{"--feature-gates=ClusterTopology=true"}})
+	if !TopologyEnabled(sidecar) {
+		t.Error("the gate was missed on a deployment whose manager is not the first container")
+	}
+}

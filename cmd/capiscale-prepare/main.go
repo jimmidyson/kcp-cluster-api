@@ -132,7 +132,7 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		return fmt.Errorf("building a client: %w", err)
 	}
 
-	var missing []string
+	var missing, gateless []string
 	for _, c := range controllers {
 		cpu, memory, err := c.Quantities()
 		if err != nil {
@@ -147,6 +147,13 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 				continue
 			}
 			return fmt.Errorf("reading %s: %w", key, err)
+		}
+
+		// The gate the whole run depends on. Reported per controller rather
+		// than assumed, because without it every object this run creates is
+		// refused at admission with a message that names the object.
+		if !upstreamscale.TopologyEnabled(&d) {
+			gateless = append(gateless, c.Name)
 		}
 
 		var did []string
@@ -174,6 +181,16 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		fmt.Printf("%-22s %s (QoS %s)\n", c.Name, strings.Join(did, "; "), upstreamscale.QoSClass(&d))
 	}
 
+	if len(gateless) > 0 {
+		return fmt.Errorf("these controllers do not have the ClusterTopology feature gate: %s.\n\n"+
+			"Every cluster this run creates is built from a ClusterClass, and a provider without the "+
+			"gate refuses them at admission with \"spec: Forbidden: can be set only if the "+
+			"ClusterTopology feature flag is enabled\" — which names the object rather than the "+
+			"installation. clusterctl sets it from its environment, so the fix is to re-run\n\n"+
+			"    CLUSTER_TOPOLOGY=true clusterctl init ...\n\n"+
+			"or, through the provisioning script, ./scale-cluster.sh install",
+			strings.Join(gateless, ", "))
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("these controllers are not installed: %s. Run clusterctl init for the core, "+
 			"kubeadm bootstrap, kubeadm control plane and docker providers first — and note that the "+

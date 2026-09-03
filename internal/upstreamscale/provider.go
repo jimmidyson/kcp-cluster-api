@@ -143,3 +143,33 @@ func hasFlag(args []string, name string) bool {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TopologyEnabled reports whether a controller has the ClusterTopology feature
+// gate switched on.
+//
+// # Why this is worth checking rather than assuming
+//
+// Every cluster this run creates is built from a ClusterClass, and a provider
+// without the gate refuses the objects at admission: "spec: Forbidden: can be
+// set only if the ClusterTopology feature flag is enabled". That message names
+// the object rather than the installation, so it reads as a problem with what
+// the run is creating when it is a problem with how clusterctl was run —
+// CLUSTER_TOPOLOGY=true has to be in its environment, and there is nothing
+// afterwards that says it was not.
+func TopologyEnabled(d *appsv1.Deployment) bool {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		for _, arg := range c.Args {
+			value, ok := strings.CutPrefix(arg, "--feature-gates=")
+			if !ok {
+				continue
+			}
+			for _, gate := range strings.Split(value, ",") {
+				name, setting, ok := strings.Cut(strings.TrimSpace(gate), "=")
+				if ok && name == "ClusterTopology" && setting == "true" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
