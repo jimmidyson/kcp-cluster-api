@@ -1,117 +1,154 @@
 # Runs of the stock Cluster API climb
 
-Every run with an evidence file, and what it was for:
-
-| File | Rungs | Nodes per cluster | What it is |
+| File | Clusters | Nodes each | What it is |
 |---|---|--:|---|
-| `stock-2-to-4x3.json` | 2, 4 | 3 | **First contact, cold controllers.** Preflight, two rungs, a defrag between them, no soak. Found the teardown ordering and the container name the sampler was reading. |
-| `stock-2-to-4x3-warm-baseline.json` | 2, 4 | 3 | **The same shape, an hour later, on controllers that had already served a fleet.** Confirms both fixes and shows that the first run's cost did not come back. |
+| `stock-2-to-4x3.json` | 2, 4 | 3 | First contact. Found the teardown ordering and the container name the sampler read. |
+| `stock-2-to-4x3-warm-baseline.json` | 2, 4 | 3 | The same, an hour later. Both fixes held; the baseline was not cold. |
+| `stock-2-to-4x3-refixed.json` | 2, 4 | 3 | With the cAdvisor, defrag-before-baseline, object-split and heap-provenance fixes. |
+| `stock-2-to-4x3-retention-probe.json` | 2, 4 | 3 | A third identical shape, to see whether cost accumulates per cluster ever created. It does not. |
+| `stock-25x1.json` | 25 | 1 | Node sweep, cold controllers. **Its baseline is unusable — see below.** |
+| `stock-25x5.json` | 25 | 5 | Node sweep. |
+| `stock-25x10.json` | 25 | 10 | Node sweep. |
 
-Neither is a measurement of Cluster API's limits. Both stopped where
-`MAX_CLUSTERS` told them to, so the ceiling line reads as a floor — correctly.
-They are runs of the *instrument*.
-
-## How to reproduce them
+None is a measurement of Cluster API's ceiling: every one stopped where
+`MAX_CLUSTERS` told it to, so each "ceiling" line reads as a floor, correctly.
+The sweep does answer **S2**, which is what it was for.
 
 ```sh
 task test:capi:scale START_CLUSTERS=2 MAX_CLUSTERS=4 NODES_PER_CLUSTER=3 SOAK=0
+task test:capi:scale START_CLUSTERS=25 MAX_CLUSTERS=25 NODES_PER_CLUSTER=10 SOAK=0 OUT_NAME=25x10
 ```
 
-Stock Cluster API v1.14.1, installed by clusterctl, on the CAPX cluster
-`hack/upstream-capi-scale` builds; in-memory DevCluster backend; every
-controller Guaranteed with GOMEMLIMIT set, by `task test:capi:cluster`.
+Stock Cluster API v1.14.1 by clusterctl, in-memory DevCluster backend, every
+controller Guaranteed with GOMEMLIMIT set by `task test:capi:cluster`.
 
-## What the second run fixed, and what it found
+## S2: goroutines are per-Cluster, heap and etcd are per-Machine
 
-Fixed, and visible in the file: every controller reads `ready: true` with its
-real `memoryLimitBytes`, so the container-name bug is gone — and with it the
-hole where an OOM kill would have been reported as "the fleet did not keep up".
-The ordered teardown left nothing behind.
+Twenty-five clusters, at one, five and ten nodes each — 25, 125 and 250
+Machines — sampled at the end state:
 
-**The baseline is not cold, and that is the finding.** Same pods, never
-restarted, in both runs:
+| Component, goroutines | 25×1 | 25×5 | 25×10 |
+|---|--:|--:|--:|
+| core | 1496 | 1502 | 1506 |
+| capd | 1312 | 1282 | 1294 |
+| kubeadm control plane | 1097 | 1078 | 1082 |
+| kubeadm bootstrap | 405 | 403 | 403 |
 
-| Component | Run 1 baseline | Run 1 @ 2 clusters | Run 2 baseline | Run 2 @ 4 clusters |
+**Ten times the Machines, the same goroutines** — within 2%, which is the
+run-to-run reproducibility established by the three 2→4 runs. Goroutine cost is
+a function of Clusters and is flat in Machines.
+
+Heap is the opposite:
+
+| Component, live heap at 25 clusters | 25×1 | 25×5 | 25×10 | per Machine |
 |---|--:|--:|--:|--:|
-| core | 79 | 1101 | **1069** | 1133 |
-| capd | 45 | 939 | **905** | 973 |
-| kubeadm control plane | 35 | 426 | **375** | 492 |
-| kubeadm bootstrap | 32 | 346 | **333** | 350 |
+| core | 20.6 MB | 30.4 MB | 41.1 MB | ~91 KB |
+| capd | 24.9 MB | 34.1 MB | 42.3 MB | ~77 KB |
+| kubeadm control plane | 20.8 MB | 24.0 MB | 28.2 MB | ~33 KB |
+| kubeadm bootstrap | 10.6 MB | 12.2 MB | 14.0 MB | ~15 KB |
 
-Run 2's *baseline* — no Clusters anywhere, the first run's fleet deleted and its
-namespaces gone — sits within a few percent of run 1's *two-cluster* sample.
-Roughly a thousand goroutines per controller arrived with the first fleet and
-did not leave with it.
+And etcd is the cleanest signal in the whole exercise. Baseline keys were 725,
+726, 726 across the three runs — the same number three times — and the fleet's
+own keys were 612, 1416 and 2174. The 5- and 10-node points fit
 
-Two readings, and they have opposite consequences:
+    fleet keys ≈ 26.3 per Cluster + 6.06 per Machine
 
-- **A one-time warm-up.** Caches, informers and worker pools that start on
-  first use and then stay. If so the marginal cost is the ~15 goroutines per
-  cluster both runs agree on, and a warm baseline is the *right* baseline.
-- **Retention proportional to clusters ever created.** If so a climbing ladder
-  accumulates every rung it has already left behind, later rungs report the sum
-  of all previous ones, and no per-cluster figure from a multi-rung run means
-  what it says.
+to within one key at 250 Machines. **Two points, not three**: this is a fit
+that meets the arithmetic and not the repository's three-point rule, so it
+needs a third node count before it is quoted as a cost model.
 
-Nothing in these two runs separates them, which is why the next run is the one
-that does. Until it has run, **no slope from this harness should be quoted.**
+### Why the 1-node point is not on the curve
 
-## Two figures the runs could not take
+That fit predicts 810 keys for 25×1 and the run measured 612. Not noise — a
+different shape. `NODES_PER_CLUSTER=1 CONTROL_PLANE_NODES=1` leaves zero
+workers, and `demo.NewCluster` omits the `Workers` topology entirely when there
+are none, so those clusters have **no MachineDeployment, MachineSet or worker
+template at all**. It is a structurally different cluster, not a smaller one.
 
-- `residentBytes` and `cpuSeconds` are zero for all four controllers in both
-  files. Resident was read from metrics.k8s.io and this cluster has no
-  metrics-server; CPU time was not read at all. Both now come from the kubelet's
-  cAdvisor exposition, which the harness was already scraping for throttling —
-  fixed after these runs, so the zeros stand in the files. Not measured, and not
-  to be read as small.
-- The etcd column is **not comparable across rungs in either file**: 32.6 MiB
-  holding two clusters and 14.1 MiB holding four, which reads as a store
-  shrinking as the fleet grows. The defrag ran between rungs but not before the
-  baseline, so the baseline and the first rung measured a store carrying a
-  previous run's free pages and every later rung measured a defragmented one.
-  Fixed by defragmenting before the baseline too.
+A node sweep wanting three comparable points should use 3, 5 and 10 nodes.
 
-## The object count moved 2x for the same fleet
+## The baseline has to wait for the managers to start
 
-Run 1 held 1907 stored objects at four clusters; run 2 held 910, an hour later,
-same shape. Events expire on their own TTL, and at these sizes they are most of
-the store — the first run was taken on a cluster whose bringup events had not
-yet aged out. A per-object cost divided by that total would be wrong by 2x with
-nothing in the report looking odd, so `apiserver_storage_objects` is now split:
-Cluster API groups, events, and the total.
+The 25×1 baseline caught the kubeadm control plane manager at **35 goroutines**.
+Three minutes later, in the 25×5 run, with no fleet created in between, the same
+pod reported **375**. Then 378. The 35 was a manager that had not finished
+starting.
+
+This corrects what the earlier runs here were read to mean. The warm baseline
+in `stock-2-to-4x3-warm-baseline.json` was put down to cost retained from the
+first fleet; it was not. The managers reach ~1060 (core) and ~900 (capd)
+goroutines with **no clusters at all**, given a minute or two after start. The
+mechanism is time since start, not clusters ever created — which is why the
+three 2→4 runs agreed on their baselines to about 1%, each having created and
+deleted six clusters in between:
+
+| Baseline goroutines | run 2 | run 3 | run 4 |
+|---|--:|--:|--:|
+| core | 1069 | 1057 | 1061 |
+| capd | 905 | 900 | 903 |
+
+So the ladder is sound — rungs do not accumulate — and the fix is not a restart
+between rungs but a **wait before the baseline**. The harness now polls until
+two consecutive samples agree within 2% and records whether they did
+(`baseline` in the facts). Left unfixed, a baseline taken 340 goroutines low
+inflates every slope measured from it, which is exactly what the 25×1 run's
+apparent per-rung cost did.
+
+## What the API server and etcd bytes cannot tell you yet
+
+Both are contaminated **across runs**, and the sweep shows it plainly:
+
+| Baseline, no clusters | 25×1 | 25×5 | 25×10 |
+|---|--:|--:|--:|
+| API server resident | 873 MiB | 1.2 GiB | 2.2 GiB |
+| etcd backend | 16.6 MiB | 34.7 MiB | 119.3 MiB |
+| etcd keys | 725 | 726 | 726 |
+
+The same empty cluster, three times, costing 2.5x more each time. Two separate
+causes:
+
+- **The API server's allocator never gives it back.** `heapSys` is a high-water
+  mark, so each run starts where the last one peaked. The 25×10 run measured
+  its 250-Machine fleet as costing 31 MiB of resident growth, against 559 MiB
+  for the 125-Machine fleet before it — not a result, an artefact of an
+  allocator that was already large enough. API server memory can only be read
+  **within** one run, and only cleanly after a restart.
+- **etcd's backend holds uncompacted revisions.** 119.3 MiB against 726 keys is
+  the previous run's teardown churn, not live data, and a defrag cannot reclaim
+  it: those revisions are still in use until the API server's next compaction.
+  The defrag before the baseline reclaimed 9-10 MiB in the first two sweep runs
+  and 0.09 MiB in the third, which is the tell. **Keys are trustworthy; bytes
+  are not, without a compaction first.**
+
+The API server's heap figure is separately unusable on this cluster: every run
+says `heap not post-collection`, meaning the forced-collection request never
+lands. Most likely `--profiling=false` — check with
+
+```sh
+kubectl -n kube-system get pod -l component=kube-apiserver \
+  -o jsonpath='{.items[0].spec.containers[0].command}' | tr ',' '\n' | grep -i profil
+```
+
+If it is off, the same ClusterClass copy that opens etcd's metrics port can turn
+it on. Until then use the API server's **goroutines and resident**, which are
+monotonic and reproducible, and not its heap.
 
 ## What to run next
 
-In this order, because each one gates the next.
+1. ~~Smoke, retention probe, cold restart, node sweep~~ — done, above.
+2. **The ladder** (S1, S3): 25 → 50 → 100 → 200 → 400 at 10 nodes with the
+   soak. Note its baseline inherits the sweep's high-water API server and
+   uncompacted etcd, so read its *within-run* slopes and not its absolutes.
+3. **A third node count** — 3 nodes at 25 clusters — to put the etcd fit on
+   three points and off the 1-node structural cliff.
+4. **A clean-room ladder**: restart the four controllers *and* the API server,
+   wait for the settle, then climb. That is the run whose absolute numbers can
+   be quoted.
 
-1. **The smoke run again, unchanged** (~5 min). The four fixes above have not
-   met a cluster. Read back: non-zero resident and CPU per controller, an etcd
-   figure that grows with the fleet, a `defrag@baseline` fact, and the stored
-   object line split three ways.
-2. **The retention probe** — the same 2→4 shape a third time, and compare its
-   baseline with run 2's. Plateau near 1069 means warm-up, and the ladder is
-   sound. Another ~1000 means retention per cluster ever created, and the ladder
-   needs a restart between rungs — which costs comparability, and would be the
-   most important thing this exercise has found.
-3. **Cold, then climb.** `kubectl rollout restart` all four controllers, confirm
-   the baseline returns to ~45-79 goroutines, and only then start a real ladder.
-   Every slope should be measured from a cold start, once, rather than from
-   whatever the previous run left.
-4. **A node-count sweep at a fixed cluster count** — 1, 5 and 10 nodes at the
-   same number of clusters, which is what separates per-Cluster cost from
-   per-Machine cost. Three points, the same rule as every other figure here (S2).
-5. **The ladder**: 25 → 50 → 100 → 200 → 400 at 10 nodes, with the soak, which
-   is S1 and S3.
-
-A prediction, stated as one: nothing in these runs suggests storage is the
-limit. At three nodes a cluster costs ~38 etcd keys, so 400 clusters is ~16k
-keys against a store that held 412k in the kcp runs. The candidates are watch
-and goroutine growth in core and capd, the API server's watch caches, and
-time-to-converge.
-
-Time-to-converge is now recorded per rung — `rung@N` in the facts, and in the
-ceiling sentence — split into how long the driver took to create the rung's
-objects and how long the fleet then took to reach the end state, with the pace
-per cluster. Neither of these two runs has it: the only timing in them is the
-`taken` stamp on each sample, which puts the whole of run 2's climb, both rungs
-and a defragmentation, inside three minutes.
+A prediction, stated as one: the controllers will not be the ceiling. At 25
+clusters and 250 Machines the largest is capd at 42 MB of live heap against a
+24 GiB limit; extrapolating the fits to 400 clusters and 4000 Machines gives
+roughly 670 MB. The candidates are the API server's memory — already 2.4 GiB
+holding 250 Machines — and etcd, at roughly 35,000 keys and, at the 27 KB per
+key the 25×1 run implies, something under a gigabyte of live data against an
+8 GiB quota, before churn and fragmentation.

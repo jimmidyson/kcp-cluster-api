@@ -1,0 +1,228 @@
+{
+  "title": "Stock Cluster API: climbing from 25 clusters at 5 nodes each",
+  "facts": {
+    "clusterApi": "stock upstream, installed by clusterctl",
+    "clustersPerNamespace": "10",
+    "devClusterBackend": "inMemory",
+    "endState": "every control plane ready and every Machine Ready",
+    "heapSample": "every controller's is read through pprof with gc=1, so live heap is the retained set; the API server's line says for itself, since the collection it needs is a separate best-effort request",
+    "nodesPerCluster": "5",
+    "apiserver@baseline (no clusters)": "4231 goroutines, 902.7 MiB heap, 1.2 GiB resident, 1095 objects stored (32 Cluster API, 285 event), 2 requests in flight, etcd calls 3.5ms (heap not post-collection: the forced collection did not land, so this is a point on a sawtooth and not the retained set)",
+    "apiserver@25 clusters": "4312 goroutines, 1.1 GiB heap, 1.7 GiB resident, 2022 objects stored (565 Cluster API, 560 event), 2 requests in flight, etcd calls 3.9ms (heap not post-collection: the forced collection did not land, so this is a point on a sawtooth and not the retained set)",
+    "ceiling": "Held 25 clusters and 125 Machines, every control plane ready and every Machine Ready, created in 6s, converged in 1m33s (3.719s per cluster). **That is a floor, not a ceiling**: no rung failed, so the largest fleet tried is the largest measured and not the largest possible.",
+    "defrag@baseline": "defragmented between rungs: etcd-capi-scale-pddjz-fw9n7 reclaimed 10.4 MiB (45.1 MiB to 34.7 MiB); etcd-capi-scale-pddjz-nl882 reclaimed 10.4 MiB (45.1 MiB to 34.7 MiB); etcd-capi-scale-pddjz-w4pp6 reclaimed 10.4 MiB (45.1 MiB to 34.7 MiB)",
+    "etcd@baseline (no clusters)": "34.7 MiB of 8.0 GiB backend quota (0%), 726 keys, wal fsync 1.5ms, commit 2.6ms, 16.0 KiB reclaimable, 2 leader change(s)",
+    "etcd@25 clusters": "97.3 MiB of 8.0 GiB backend quota (1%), 2142 keys, wal fsync 1.5ms, commit 2.6ms, 28.0 KiB reclaimable, 2 leader change(s)",
+    "rung@25": "created in 6s, converged in 1m33s (3.719s per cluster)"
+  },
+  "samples": [
+    {
+      "label": "baseline (no clusters)",
+      "workspaces": 0,
+      "clusters": 0,
+      "nodes": 0,
+      "taken": "2026-09-03T15:59:00.433571165Z",
+      "components": [
+        {
+          "component": "capi-controller-manager",
+          "process": {
+            "goroutines": 1084,
+            "heapAllocBytes": 13554880,
+            "heapSysBytes": 52166656,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-controller-manager-6cdd5f746f-mr5gt",
+            "node": "capi-scale-md-0-p4vdl-rpw92-4z8d4",
+            "podIP": "192.168.4.194",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 8589934592
+          }
+        },
+        {
+          "component": "capi-kubeadm-bootstrap-controller-manager",
+          "process": {
+            "goroutines": 338,
+            "heapAllocBytes": 7086088,
+            "heapSysBytes": 30834688,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-kubeadm-bootstrap-controller-manager-5fd878c47d-4b885",
+            "node": "capi-scale-pddjz-w4pp6",
+            "podIP": "192.168.0.118",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        },
+        {
+          "component": "capi-kubeadm-control-plane-controller-manager",
+          "process": {
+            "goroutines": 375,
+            "heapAllocBytes": 13191584,
+            "heapSysBytes": 120520704,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-kubeadm-control-plane-controller-manager-6969cc8fbb-f6trn",
+            "node": "capi-scale-md-0-p4vdl-rpw92-dvsbj",
+            "podIP": "192.168.2.67",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 6442450944
+          }
+        },
+        {
+          "component": "capd-controller-manager",
+          "process": {
+            "goroutines": 909,
+            "heapAllocBytes": 15737848,
+            "heapSysBytes": 84869120,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capd-controller-manager-7bc44c4f9-rpxhn",
+            "node": "capi-scale-pddjz-nl882",
+            "podIP": "192.168.5.181",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 25769803776
+          }
+        },
+        {
+          "component": "kube-apiserver",
+          "process": {
+            "goroutines": 4231,
+            "heapAllocBytes": 946563752,
+            "heapSysBytes": 1207738392,
+            "residentBytes": 1278517248,
+            "cpuSeconds": 441.89
+          },
+          "pod": {
+            "name": "kube-apiserver",
+            "node": "",
+            "podIP": "",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "label": "25 clusters",
+      "workspaces": 25,
+      "clusters": 25,
+      "nodes": 125,
+      "taken": "2026-09-03T16:00:48.310828174Z",
+      "components": [
+        {
+          "component": "capi-controller-manager",
+          "process": {
+            "goroutines": 1502,
+            "heapAllocBytes": 30399760,
+            "heapSysBytes": 83656704,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-controller-manager-6cdd5f746f-mr5gt",
+            "node": "capi-scale-md-0-p4vdl-rpw92-4z8d4",
+            "podIP": "192.168.4.194",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 8589934592
+          }
+        },
+        {
+          "component": "capi-kubeadm-bootstrap-controller-manager",
+          "process": {
+            "goroutines": 403,
+            "heapAllocBytes": 12196184,
+            "heapSysBytes": 34865152,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-kubeadm-bootstrap-controller-manager-5fd878c47d-4b885",
+            "node": "capi-scale-pddjz-w4pp6",
+            "podIP": "192.168.0.118",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 4294967296
+          }
+        },
+        {
+          "component": "capi-kubeadm-control-plane-controller-manager",
+          "process": {
+            "goroutines": 1078,
+            "heapAllocBytes": 24006760,
+            "heapSysBytes": 164560896,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capi-kubeadm-control-plane-controller-manager-6969cc8fbb-f6trn",
+            "node": "capi-scale-md-0-p4vdl-rpw92-dvsbj",
+            "podIP": "192.168.2.67",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 6442450944
+          }
+        },
+        {
+          "component": "capd-controller-manager",
+          "process": {
+            "goroutines": 1282,
+            "heapAllocBytes": 34055160,
+            "heapSysBytes": 123076608,
+            "residentBytes": 0,
+            "cpuSeconds": 0
+          },
+          "pod": {
+            "name": "capd-controller-manager-7bc44c4f9-rpxhn",
+            "node": "capi-scale-pddjz-nl882",
+            "podIP": "192.168.5.181",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 25769803776
+          }
+        },
+        {
+          "component": "kube-apiserver",
+          "process": {
+            "goroutines": 4312,
+            "heapAllocBytes": 1225512536,
+            "heapSysBytes": 1763314584,
+            "residentBytes": 1837768704,
+            "cpuSeconds": 620.6
+          },
+          "pod": {
+            "name": "kube-apiserver",
+            "node": "",
+            "podIP": "",
+            "ready": true,
+            "restartCount": 0,
+            "oomKilled": false,
+            "memoryLimitBytes": 0
+          }
+        }
+      ]
+    }
+  ]
+}

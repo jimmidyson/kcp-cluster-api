@@ -113,6 +113,30 @@ Four instrument defects the two runs exposed, all fixed:
   forced collection behind it actually landed, which the code claimed and did
   not do.
 
+**The node sweep, and S2 answered.** Twenty-five clusters at one, five and ten
+nodes each. Goroutine cost is per-Cluster and flat in Machines — core 1496,
+1502, 1506 across a tenfold change in Machines — while heap and etcd keys are
+per-Machine. The 5- and 10-node points fit `26.3 keys per Cluster + 6.06 per
+Machine` to within one key, which is two points and not the three this
+repository requires, so it is recorded and not yet quoted.
+
+The sweep also corrected the reading of the warm baseline above. It is not cost
+retained from a first fleet: the kubeadm control plane manager was caught at 35
+goroutines in one run's baseline and reported 375 three minutes later with no
+fleet ever created in between. The managers simply take a minute or two after
+start to open their caches, which is why three runs that each created and
+deleted six clusters agreed on their baselines to about 1%. So the ladder is
+sound — rungs do not accumulate — and the fix is a **wait before the baseline**
+rather than a restart between rungs. The harness now polls until two
+consecutive samples agree within 2% and records whether they did.
+
+Two things the sweep showed cannot yet be read across runs, both in
+`evidence/README.md`: the API server's memory, because its allocator's
+high-water mark carries into the next run and made a 250-Machine fleet look
+like it cost 31 MiB, and etcd's backend bytes, because uncompacted revisions
+from the previous teardown survive a defragmentation. etcd's *key* count is
+unaffected and was identical to within one key across three runs.
+
 Still to be met by a real run: whether the in-memory provider holds a few
 hundred fake API servers in one process, and how the topology controller paces
 itself creating a rung's worth of Clusters at once.
