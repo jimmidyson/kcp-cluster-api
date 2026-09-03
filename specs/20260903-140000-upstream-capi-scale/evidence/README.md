@@ -262,11 +262,41 @@ which are monotonic and reproducible within a run, and not its heap.
 
    A rung that fails there is the first real ceiling this exercise has, and
    `Classify` will name which of the three ways it went.
-3. **The clean-room run**, for the numbers that get quoted: restart the API
-   server (deleting its static pods one at a time is enough) to clear the
-   allocator high-water mark, restart the four controllers, and climb with the
-   heap floor in place. Not the profiling patch — that is gone, and why is in
-   `hack/upstream-capi-scale/README.md`.
+3. **The clean-room run**, for the numbers that get quoted: clear the API
+   server's allocator high-water mark, restart the four controllers, and climb
+   with the heap floor in place. Not the profiling patch — that is gone, and why
+   is in `hack/upstream-capi-scale/README.md`.
+
+   The API server runs as one static pod per control plane node, so restarting
+   it means **one node at a time**, waiting for each to come back before the
+   next. Deleting them by label deletes all three at once, which is an outage:
+
+   ```sh
+   export KUBECONFIG=../../bin/capi-scale.kubeconfig
+   for pod in $(kubectl -n kube-system get pod -l component=kube-apiserver \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+     before="$(kubectl -n kube-system get pod "$pod" -o jsonpath='{.status.startTime}')"
+     kubectl -n kube-system delete pod "$pod" --wait=false
+     # The kubelet recreates the mirror pod under the same name, so wait for the
+     # start time to move rather than for the name to reappear.
+     until [ "$(kubectl -n kube-system get pod "$pod" \
+                  -o jsonpath='{.status.startTime}' 2>/dev/null)" != "$before" ]; do
+       sleep 5
+     done
+     kubectl -n kube-system wait --for=condition=Ready "pod/$pod" --timeout=5m
+     sleep 30
+   done
+   ```
+
+   Check it actually restarted rather than assuming: the run's own
+   `cpuSeconds` for `kube-apiserver` is cumulative since process start, so a
+   restart drops it from thousands to near zero. If it does not move, the
+   kubelet recreated the mirror pod without restarting the container, and the
+   manifest has to be touched on the node instead
+   (`mv /etc/kubernetes/manifests/kube-apiserver.yaml` out and back).
+
+   **This is an optimisation, not a prerequisite.** Within-run slopes are valid
+   without it — it only makes the run's *absolute* baseline honest.
 4. **A third node count** — 3 nodes at 25 clusters — to put the per-Machine
    half of the etcd fit on three points and off the 1-node structural cliff.
 
