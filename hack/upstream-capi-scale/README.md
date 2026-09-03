@@ -427,10 +427,19 @@ Two things worth knowing:
   a long-lived process, and a rollout is the only thing that resets them.
   Doing this immediately before the run whose absolute numbers you intend to
   quote is worth the three machine rebuilds.
-- **The patch appends to `apiServer.extraArgs`** rather than replacing it,
-  because that list is where CAREN's own `--profiling=false` lives. Appended
-  last so it wins, since a repeated flag takes the last value. Check it turned
-  over rather than trusting it:
+- **The patch carries the whole `apiServer.extraArgs` list**, built from the
+  control plane template with `profiling` flipped to `true`. Neither narrower
+  way of saying it is allowed. A second entry is refused — extraArgs is
+  validated `self.all(x, self.exists_one(y, x.name == y.name))`, "extraArgs name
+  must be unique", so a repeated flag never reaches a command line to take the
+  last value on. And the entry cannot be edited in place either: ClusterClass
+  patch validation permits an index of only `0` or `-` on `add` and forbids any
+  index at all on `replace` and `remove` — *"elements in arrays can not be
+  accessed in a replace operation"*.
+
+  So the list is a **snapshot**. Re-run this step after anything that changes
+  the template's other API server arguments, and check what it applied rather
+  than trusting it:
 
 ```sh
 kubectl --kubeconfig ../../bin/capi-scale.kubeconfig -n kube-system \

@@ -312,61 +312,75 @@ NOTE
   # The metrics port carries no data and no authentication — it is etcd's
   # /metrics, not its client API — which is a fair trade on a throwaway scale
   # cluster and would not be on anything else.
-  # Where the existing --profiling entry is, because the patch has to replace it
-  # rather than append beside it.
+  # The whole extraArgs list, with profiling flipped, because neither of the
+  # narrower ways of saying it is allowed.
   #
-  # extraArgs is validated `self.all(x, self.exists_one(y, x.name == y.name))`,
-  # message "extraArgs name must be unique", so a second entry named profiling
-  # is refused at admission and the command line is never built. An earlier
-  # version of this appended one, on the reasoning that a repeated flag takes
-  # the last value; it does, and it never gets the chance, because the object is
-  # rejected first. The refusal surfaces on the KubeadmControlPlane rather than
-  # on the ClusterClass, as the topology controller's dry-run:
+  # A second entry named profiling is refused: extraArgs is validated
+  # `self.all(x, self.exists_one(y, x.name == y.name))`, "extraArgs name must be
+  # unique", so a repeated flag never reaches a command line to take the last
+  # value on. And the entry cannot be edited in place either — ClusterClass
+  # patch validation (core/webhooks/admission/patch_validation.go) allows an
+  # index of only "0" or "-" on add, and forbids any index at all on replace and
+  # remove: "elements in arrays can not be accessed in a replace operation".
   #
-  #   KubeadmControlPlane "..." is invalid:
-  #   spec.kubeadmConfigSpec.clusterConfiguration.apiServer.extraArgs:
-  #   Invalid value: extraArgs name must be unique
+  # So the patch carries the entire list. It is built here from the control
+  # plane template, preserving every other argument, with profiling set to true
+  # — an "add" on the list itself rather than a "replace", since add creates the
+  # key when it is missing and replaces it when it is not, and carries no index
+  # either way.
   #
-  # JSON Patch cannot find an entry by value, so the index is looked up here, in
-  # the control plane template the ClusterClass points at.
-  local profiling_index=-1
+  # The cost is that the list is a snapshot: anything that changes the
+  # template's other arguments afterwards is pinned to what was there when this
+  # ran. Re-running this step refreshes it, and it prints what it applied.
+  local profiling_args="[]" profiling_had=false
   if [[ "${APISERVER_PROFILING}" == "true" ]]; then
-    local cp_ref cp_kind cp_api cp_name cp_resource
+    local cp_ref cp_kind cp_api cp_name cp_resource cp_json
     cp_ref="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
       get clusterclass "${src}" -o json \
       | jq -r '.spec.controlPlane.templateRef | "\(.kind) \(.apiVersion) \(.name)"')"
     read -r cp_kind cp_api cp_name <<<"${cp_ref}"
     cp_resource="$(printf '%s' "${cp_kind}" | tr '[:upper:]' '[:lower:]')s.${cp_api%%/*}"
 
-    profiling_index="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
-      get "${cp_resource}" "${cp_name}" -o json \
-      | jq '[(.spec.template.spec.kubeadmConfigSpec.clusterConfiguration.apiServer.extraArgs // [])
-             | to_entries[] | select(.value.name == "profiling") | .key] | first // -1')"
+    cp_json="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+      get "${cp_resource}" "${cp_name}" -o json)"
+    profiling_had="$(printf '%s' "${cp_json}" | jq '
+      [(.spec.template.spec.kubeadmConfigSpec.clusterConfiguration.apiServer.extraArgs // [])[]
+       | select(.name == "profiling")] | length > 0')"
+    profiling_args="$(printf '%s' "${cp_json}" | jq -c '
+      (.spec.template.spec.kubeadmConfigSpec.clusterConfiguration.apiServer.extraArgs // [])
+      | if any(.[]; .name == "profiling")
+        then map(if .name == "profiling" then .value = "true" else . end)
+        else . + [{name: "profiling", value: "true"}] end')"
 
-    if [[ "${profiling_index}" -lt 0 ]]; then
+    if [[ "${profiling_args}" == "[]" || "${profiling_args}" == "null" ]]; then
+      log "WARNING: ${cp_resource}/${cp_name} has no apiServer.extraArgs to patch; leaving profiling alone"
+      profiling_args="[]"
+    fi
+
+    # A CAREN patch that also writes this list would be overwritten by ours,
+    # since ours is appended last and patches apply in order.
+    if kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+         get clusterclass "${src}" -o json \
+         | jq -e '
+           [.spec.patches[]?.definitions[]?.jsonPatches[]?.path
+            | select(test("apiServer/extraArgs"))] | length > 0' >/dev/null; then
       cat >&2 <<NOTE
 
-WARNING: no --profiling entry in ${cp_resource}/${cp_name}, so this step is not
-patching it and the API server's heap figure stays unusable.
-
-The flag is set somewhere this cannot reach - most likely a patch on the CAREN
-ClusterClass itself, which renders after the template. Appending an entry anyway
-would be refused: extraArgs names must be unique. Find it with
+WARNING: ${src} already has a patch writing apiServer/extraArgs. This step's
+patch is appended last and so renders last, which means it overwrites that one
+rather than merging with it. Check what it sets before trusting this run:
 
   kubectl --kubeconfig ${BOOTSTRAP_KUBECONFIG} -n ${CAREN_CLUSTERCLASS_NAMESPACE} \\
     get clusterclass ${src} -o json | jq '.spec.patches'
-
-and replace that entry's value rather than adding a second one.
 NOTE
     fi
   fi
-
-  log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381, profiling ${APISERVER_PROFILING} (extraArgs index ${profiling_index})"
+  log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381, profiling ${APISERVER_PROFILING} (profiling already present: ${profiling_had})"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" -o json \
     | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
          --argjson profiling "${APISERVER_PROFILING}" \
-         --argjson profilingIndex "${profiling_index}" '
+         --argjson profilingArgs "${profiling_args}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
         | .spec.patches = ((.spec.patches // []) + [{
@@ -388,7 +402,7 @@ NOTE
               }]
             }]
           }])
-        | if $profiling and $profilingIndex >= 0 then .spec.patches += [{
+        | if $profiling and ($profilingArgs | length) > 0 then .spec.patches += [{
             name: "apiServerProfiling",
             description: "Turn the API server pprof endpoints back on. The scale run forces a collection before reading its heap, so that the figure is the retained set rather than a point on an allocator sawtooth; CAREN disables profiling for CIS 1.2.18, which is right for a real cluster and leaves this one unable to measure the component most likely to be its ceiling.",
             definitions: [{
@@ -398,9 +412,9 @@ NOTE
                 matchResources: {controlPlane: true}
               },
               jsonPatches: [{
-                op: "replace",
-                path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs/\($profilingIndex)/value",
-                value: "true"
+                op: "add",
+                path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs",
+                value: $profilingArgs
               }]
             }]
           }] else . end' \
@@ -415,12 +429,13 @@ Applied as ClusterClass ${dst}. Two things to check against your CAREN version:
     extraArgs is a map, the patch above needs the map form instead.
   * the patch replaces .etcd wholesale. If your ClusterClass already patches
     etcd, merge the two rather than stacking them.
-  * the profiling patch *replaces the value* of the existing --profiling entry,
-    at the index this step looks up in the control plane template. It cannot
-    append one: extraArgs names must be unique, so a second entry is refused at
-    admission, and the refusal surfaces on the KubeadmControlPlane rather than
-    on the ClusterClass. The index is resolved fresh on every run, so re-run
-    this step if the template's extraArgs order changes.
+  * the profiling patch carries the *whole* apiServer.extraArgs list, taken from
+    the control plane template with profiling flipped to true. It cannot append
+    an entry (names must be unique) and it cannot edit one in place (ClusterClass
+    patches forbid an array index on replace), so the whole list is the only
+    thing left. That makes it a snapshot: re-run this step after anything that
+    changes the template's other API server arguments. It prints the list it
+    applied.
 
 Once the control plane has rolled, check the flag actually turned over rather
 than trusting the patch:
