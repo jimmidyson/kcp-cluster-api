@@ -313,13 +313,30 @@ from CAREN's ClusterClass. Every run says `heap not post-collection` because
 the forced-collection request cannot land, and the numbers show it — the heap
 moved by 150 MiB between rungs, in both directions, while the fleet only grew.
 
-`scale-cluster.sh clusterclass` now adds a patch turning it back on, off by
-`APISERVER_PROFILING=false`. It rolls the control plane, which is also the only
-thing that resets the API server's allocator high-water mark, so it is worth
-doing immediately before the run whose absolutes are meant to be quoted.
+**It cannot be turned back on from a ClusterClass patch on a CAREN class.**
+Three attempts, the third of which broke the control plane, are written up in
+[`hack/upstream-capi-scale/README.md`](../../../hack/upstream-capi-scale/README.md#the-api-servers-profiling-cannot-be-turned-on-here-and-trying-broke-a-node).
+What the harness does instead is read the heap five times two seconds apart and
+keep the lowest — the sawtooth's floor, which is an upper bound on the retained
+set, and the report labels it as one.
 
-Until that patch has rolled, use the API server's **goroutines and resident**,
+For the runs recorded here, use the API server's **goroutines and resident**,
 which are monotonic and reproducible within a run, and not its heap.
+
+### Every control-plane figure in these runs is one arbitrary instance
+
+The API server was read through the cluster's own kubeconfig, which addresses
+the VIP, so each sample landed on whichever of the three the load balancer
+picked. Every API server figure in these files is therefore one instance of
+three — not a third of the control plane's cost, which would at least be
+divisible, but one process per sample with no guarantee it was the same one
+twice. The five-read heap floor is a floor across up to three processes rather
+than across one process's sawtooth.
+
+That is fixed in the harness — instances are read one at a time by name now,
+with the floor applied per process, and where the pod proxy cannot reach them
+the report says the reading fell back to the endpoint. It is not fixed in these
+files, which were taken before it, and no re-reading of them can be.
 
 ## Against the kcp runs
 
