@@ -531,6 +531,10 @@ tasks:
       # gives the control plane under test. Empty leaves them to the scheduler,
       # which is not the same budget the stock side's control plane gets.
       CONTROL_PLANE_NODE_SELECTOR: '{{.CONTROL_PLANE_NODE_SELECTOR | default ""}}'
+      # key=value keeping the four managers off that pool. Without it they are
+      # scheduled wherever there is room, which on a cluster sized for the
+      # stock run is the same three nodes the shard is pinned to.
+      MANAGER_NODE_SELECTOR: '{{.MANAGER_NODE_SELECTOR | default ""}}'
       KCP_MEMORY: '{{.KCP_MEMORY | default ""}}'
       MANAGER_MEMORY: '{{.MANAGER_MEMORY | default ""}}'
     requires:
@@ -563,6 +567,7 @@ tasks:
         -comparable-etcd-storage-size={{.ETCD_STORAGE_SIZE}}
         -comparable-etcd-quota-bytes={{.ETCD_QUOTA_BYTES}}
         -comparable-control-plane-node-selector={{.CONTROL_PLANE_NODE_SELECTOR}}
+        -comparable-manager-node-selector={{.MANAGER_NODE_SELECTOR}}
         -comparable-step-timeout={{.STEP_TIMEOUT}}
         -comparable-soak={{.SOAK}}
         -comparable-teardown-timeout={{.TEARDOWN_TIMEOUT}}

@@ -216,3 +216,28 @@ func TestProfilingIsOffUnlessAsked(t *testing.T) {
 		}
 	}
 }
+
+// TestTheManagersCanBeKeptOffTheControlPlanesNodes.
+//
+// R5 gives the control plane under test its own nodes — three of them, one
+// shard replica and one etcd member each, which is the shape kubeadm gives the
+// stock side. That only holds if nothing else is scheduled there, and the four
+// managers are the something else: they are the fleet's own load, and a
+// manager sharing a node with the shard it is driving makes the shard's
+// figures a measurement of both.
+func TestTheManagersCanBeKeptOffTheControlPlanesNodes(t *testing.T) {
+	o := testOptions()
+	o.ManagerNodeSelector = map[string]string{"scale-role": "managers"}
+
+	for _, c := range o.components() {
+		spec := o.ManagerDeployment(c).Spec.Template.Spec
+		if spec.NodeSelector["scale-role"] != "managers" {
+			t.Errorf("%s is not pinned: %v", c.Name, spec.NodeSelector)
+		}
+	}
+	// And the control plane keeps its own pool, which is a different one.
+	o.KcpNodeSelector = map[string]string{"scale-role": "control-plane"}
+	if got := o.KcpDeployment().Spec.Template.Spec.NodeSelector["scale-role"]; got != "control-plane" {
+		t.Errorf("the shard followed the managers to %q", got)
+	}
+}

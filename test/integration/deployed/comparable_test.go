@@ -74,6 +74,10 @@ var (
 	comparableControlPlaneNodes = flag.String("comparable-control-plane-node-selector", "",
 		"key=value pinning the shard and its store to the nodes the comparison gives the control plane under "+
 			"test. Empty leaves them to the scheduler, which is not the same budget the stock side gets.")
+	comparableManagerNodes = flag.String("comparable-manager-node-selector", "",
+		"key=value keeping the four managers off those nodes. The other half of giving a control plane its "+
+			"own nodes: a manager sharing a node with the shard it is driving makes the shard's figures a "+
+			"measurement of both.")
 	comparableEtcdCPU    = flag.String("comparable-etcd-cpu", "2", "CPU request for each etcd member.")
 	comparableEtcdMemory = flag.String("comparable-etcd-memory", "8Gi",
 		"Memory request and limit for each etcd member.")
@@ -149,6 +153,13 @@ func TestKcpClusterApiClimbsUntilSomethingGives(t *testing.T) {
 
 	options, err := comparableOptions(t)
 	if err != nil {
+		t.Fatalf("could not run: %v", err)
+	}
+
+	// Before anything is applied: this cluster is generated for the stock side,
+	// where nothing asks for a volume, and the store asks for one per member.
+	// See deployedscale.StorageAvailable for what it looks like without this.
+	if err := deployedscale.StorageAvailable(ctx, host, options.Etcd.StorageClass); err != nil {
 		t.Fatalf("could not run: %v", err)
 	}
 
@@ -353,6 +364,10 @@ func comparableOptions(t *testing.T) (deployedscale.Options, error) {
 	if err != nil {
 		return deployedscale.Options{}, err
 	}
+	managers, err := parseSelector(*comparableManagerNodes)
+	if err != nil {
+		return deployedscale.Options{}, err
+	}
 
 	cpu, err := resource.ParseQuantity(*comparableEtcdCPU)
 	if err != nil {
@@ -365,6 +380,7 @@ func comparableOptions(t *testing.T) (deployedscale.Options, error) {
 
 	options.ShardReplicas = int32(*comparableShardReplicas) //nolint:gosec // a replica count from a flag.
 	options.KcpNodeSelector = selector
+	options.ManagerNodeSelector = managers
 	options.ProfilerPort = deployedscale.ProfilerPort
 	options.Etcd = deployedscale.EtcdOptions{
 		Members:      int32(*comparableEtcdMembers), //nolint:gosec // a member count from a flag.

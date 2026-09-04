@@ -200,6 +200,14 @@ type Options struct {
 	// KcpNodeSelector pins the shard to the pool the comparison gives the
 	// control plane under test, as EtcdOptions.NodeSelector pins its store.
 	KcpNodeSelector map[string]string
+	// ManagerNodeSelector keeps the four managers off that pool.
+	//
+	// The other half of giving a control plane its own nodes: the managers are
+	// the fleet's own load, and one sharing a node with the shard it is driving
+	// makes the shard's figures a measurement of both. The stock side gets this
+	// for free — kubeadm's control plane nodes are tainted and clusterctl's
+	// providers land on workers.
+	ManagerNodeSelector map[string]string
 
 	// ProfilerPort makes the managers serve pprof, which is how the stock side
 	// of the comparison is sampled: a heap profile taken with gc=1 is the
@@ -604,6 +612,7 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 	podLabels := labels(c.Name)
 
 	spec := corev1.PodSpec{
+		NodeSelector: o.ManagerNodeSelector,
 		Containers: []corev1.Container{{
 			Name:            c.Name,
 			Image:           o.Images[c.Name],

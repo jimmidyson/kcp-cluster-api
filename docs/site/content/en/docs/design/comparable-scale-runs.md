@@ -132,6 +132,32 @@ fleets, and their reports would be diffable without being comparable.
 Both write a report naming the same facts, so that a diff of the two files is a
 readable answer rather than an exercise in matching field names.
 
+### One cluster, two runs, in sequence
+
+They share a cluster — that is the point of the arrangement — but not at the
+same time, and three things have to be arranged first.
+
+The store needs a provisioner. The cluster is generated for the stock side with
+the CSI addon trimmed, because nothing in that measurement asks for a volume and
+every addon left on is another controller reconciling against the API server
+whose cost is the subject; the kcp side asks for one volume per etcd member. The
+run checks for a usable storage class before it applies anything, rather than
+letting the mismatch arrive as Pending pods and a timeout naming the shard.
+
+The stock providers have to be scaled to zero. They do not compete for work —
+the kcp fleet is not in their API server — but clusterctl's four managers
+*request* 16 CPU and 42 GiB between them, which is most of what the worker pool
+has, and they hold it against the scheduler.
+
+Both pools have to be named: `CONTROL_PLANE_NODE_SELECTOR` puts the shard and
+its store on the nodes the comparison gives the control plane under test, one
+replica and one member each, which is the shape kubeadm gives the stock side;
+`MANAGER_NODE_SELECTOR` keeps the managers off them, because a manager sharing a
+node with the shard it is driving makes the shard's figures a measurement of
+both.
+
+The specification has the commands.
+
 Neither has been run yet at the time of writing: this describes the instrument,
 not a result. The specification is
 [`specs/20260904-090000-comparable-kcp-stock-scale`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/specs/20260904-090000-comparable-kcp-stock-scale),

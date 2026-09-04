@@ -199,10 +199,68 @@ means the same thing: `CLUSTERS_PER_NAMESPACE` on the stock side and
 `CLUSTERS_PER_WORKSPACE` on the kcp side. Two runs whose knobs disagree are two
 fleets, and the reports would be diffable without being comparable.
 
-`ETCD_STORAGE_CLASS` empty takes the cluster's default class, which on a cluster
-with none leaves every member `Pending` rather than failing; and
-`CONTROL_PLANE_NODE_SELECTOR` empty leaves the shard and its store to the
-scheduler, which is not the budget R5 asks for.
+`ETCD_STORAGE_CLASS` empty takes the cluster's default class; the run refuses
+before it applies anything when there is neither. `CONTROL_PLANE_NODE_SELECTOR`
+empty leaves the shard and its store to the scheduler, which is not the budget
+R5 asks for.
+
+### Both sides on the one cluster
+
+They share it, one at a time. The cluster `hack/upstream-capi-scale` builds is
+three control plane nodes and four workers, all 16 vCPU and 32 GiB, and it holds
+both runs — but only in sequence and only with three things arranged first.
+
+**One: the store needs a provisioner, and the cluster is generated without one.**
+`KEEP_CSI` defaults to false because nothing in the stock measurement asks for a
+volume, and every addon left on is another controller reconciling against the
+API server whose cost is the subject. The kcp side asks for three. Either
+regenerate the cluster with `KEEP_CSI=true` or install a provisioner into the
+one that exists; `kubectl get storageclass` is the check, and the run makes it
+for you before it applies anything.
+
+**Two: the stock providers have to be out of the way, and scaling them to zero
+is not tidiness.** clusterctl's four managers *request* 16 CPU and 42 GiB
+between them — the sizes `internal/upstreamscale.Controllers` gives them — which
+is most of what four 32 GiB workers have to offer. Left running they do not
+compete for work, since the kcp fleet is not in their API server, but they hold
+that capacity against the scheduler and the shard's pods stay Pending:
+
+```sh
+for ns in capi-system capi-kubeadm-bootstrap-system           capi-kubeadm-control-plane-system capd-system; do
+  kubectl scale deployment --all --replicas=0 -n "$ns"
+done
+```
+
+Scale them back before the next stock run. Their CRDs and webhooks can stay:
+the kcp side creates no Cluster API object in the hosting cluster.
+
+**Three: the two pools have to be named.** R5 wants the control plane under test
+on its own nodes, and on this cluster that is three of the four workers holding
+one shard replica and one etcd member each — which is exactly the shape kubeadm
+gives the stock side, an API server and an etcd member per control plane node.
+The fourth worker takes the managers, and it takes them because it is asked to:
+
+```sh
+kubectl label node <worker-1> <worker-2> <worker-3> scale-role=control-plane
+kubectl label node <worker-4> scale-role=managers
+
+task test:kcp:scale MANAGER_IMAGE=... \
+  CONTROL_PLANE_NODE_SELECTOR=scale-role=control-plane \
+  MANAGER_NODE_SELECTOR=scale-role=managers
+```
+
+Without the second label the managers are scheduled wherever there is room,
+which is the three nodes the shard is pinned to — and a manager sharing a node
+with the shard it is driving makes the shard's figures a measurement of both.
+
+**What each run leaves for the other.** Both tear down what they created and
+wait for it to go, which is R8 and is where the stock side's own numbers were
+once wrong. Two residues survive teardown either way and neither is repaired by
+waiting: the hosting API server's allocator high-water mark, and its etcd's
+uncompacted revisions. Neither is the subject of a kcp run — that run's control
+plane is the shard and its store is its own — so what they cost is a slower
+hosting cluster rather than a wrong figure. For a **stock** run whose absolutes
+are to be quoted, roll the control plane first; the evidence README says why.
 
 ## Open questions, to be answered with measurements
 
