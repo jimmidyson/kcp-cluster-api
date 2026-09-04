@@ -95,6 +95,22 @@ asks for it, and the deployed manifests can open it on the port the stock side's
 managers use. One sampler then reads either side without being told which it is
 looking at.
 
+## The one figure that is not symmetric
+
+The stock cluster's API servers are started with `--profiling=false`, so
+`/debug/pprof` is not served at all and their heap can only be read as the
+lowest of several scrapes — an upper bound on the retained set. The kcp shard
+serves pprof to the run's privileged identity, so its heap is the retained set.
+
+A heap-for-heap ratio between the two sides therefore is not like for like, and
+it leans one way: the stock figure can only be too high, which flatters kcp.
+Every sample says which quantity it is. **Resident memory is the figure to
+compare across sides** — both are read the same way, and it is what a container
+limit is set against. Heap is the figure to compare within a side, between
+rungs, where it is the same quantity throughout.
+
+This is a property of the cluster under test rather than of how it is read.
+
 ## Running it
 
 Two commands, one per side, against the same cluster:

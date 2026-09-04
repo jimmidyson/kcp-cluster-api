@@ -154,6 +154,34 @@ figure appears. Everything else is either held or is the subject.
 - **S5** Both sides soaked at the largest fleet that converged, with the
   peak-aware drift check.
 
+## The one figure that is not symmetric, and which way it leans
+
+The stock cluster's API servers are started with `--profiling=false` — CIS
+benchmark 1.2.18, from CAREN's ClusterClass — so `/debug/pprof` is not served at
+all, whoever asks. Their heap can only be read as the lowest of several
+scrapes: the sawtooth's floor, which is an **upper bound** on the retained set.
+The kcp shard serves pprof to the run's privileged identity, so its heap is read
+after a forced collection and **is** the retained set.
+
+So a heap-for-heap ratio between the two sides is not like for like, and it
+leans one way: the stock figure can only be too high, never too low, which
+flatters kcp. Three things follow, and the reports carry all three rather than
+leaving them to a reader:
+
+- Every sample says which quantity it is — `heap is the lowest of N reads` or
+  post-collection — because they are different quantities.
+- **Resident memory is the figure to compare across sides.** Both are read the
+  same way, from `process_resident_memory_bytes`, on both control planes and
+  every manager. It is also what a container limit is set against, which is what
+  a capacity finding is about.
+- Heap is the figure to compare **within** a side, between rungs, where it is
+  the same quantity throughout and is the one that reproduces.
+
+This cannot be fixed by the harness: it is a property of the cluster under test,
+not of how it is read. It could be fixed by a control plane started with
+profiling on, and that is a decision about a real cluster rather than a change
+to a measurement.
+
 ## Running it
 
 Two commands, one per side, against the same cluster:
