@@ -227,6 +227,12 @@ type ControlPlaneReading struct {
 }
 
 // Samples are the reading as report components, one per instance.
+//
+// The ordinal is the instance's place among those that answered, and the pod
+// name is what says which process it was. Those come apart when a replica is
+// unreachable for one sample: the ordinals close up, so #2 in that sample is
+// the pod that was #3 in the last one. The pod name in each sample is the
+// reliable identity, and the summed figures are what the rung is read on.
 func (r ControlPlaneReading) Samples(component string) []deployedscale.ComponentSample {
 	labels := ReplicaNames(component, len(r.Instances))
 	out := make([]deployedscale.ComponentSample, 0, len(r.Instances))
