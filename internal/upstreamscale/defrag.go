@@ -31,20 +31,6 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
-// etcdctlDefrag is run inside each etcd static pod, against that member only.
-//
-// The pod's own certificates, at the paths kubeadm puts them: a defrag needs
-// the client API rather than the metrics port, and the member already holds
-// what it takes to talk to itself.
-var etcdctlDefrag = []string{
-	"etcdctl",
-	"--endpoints=https://127.0.0.1:2379",
-	"--cacert=/etc/kubernetes/pki/etcd/ca.crt",
-	"--cert=/etc/kubernetes/pki/etcd/server.crt",
-	"--key=/etc/kubernetes/pki/etcd/server.key",
-	"defrag",
-}
-
 // Defragmenter reclaims the free space inside etcd's backend file.
 //
 // # When to run this, and when not to
@@ -85,6 +71,32 @@ type StoreLocation struct {
 	// MetricsPort is where the member serves /metrics. The same on both sides,
 	// or the two etcd columns are read differently and are not comparable.
 	MetricsPort int
+	// Container is what to exec into for a defragmentation. Named rather than
+	// left out: an exec with no container runs in whichever one the pod lists
+	// first, which on a store that grows a sidecar would silently stop being
+	// etcd.
+	Container string
+	// Defrag is the command that defragments one member from inside it, which
+	// differs because the two stores are reached differently — see
+	// DefragCommand.
+	Defrag []string
+}
+
+// DefragCommand is how to defragment this store's member from inside it.
+//
+// A defrag needs etcd's client API rather than its metrics port, so it needs
+// whatever that API requires: kubeadm's serves it over TLS and the member holds
+// the certificates to talk to itself, while the store this run deploys serves it
+// in the clear inside the pod network and holds no certificates at all. The
+// command was kubeadm's, hardcoded, which against the deployed store would have
+// failed on every member — leaving the kcp side's store the only one never
+// defragmented, and a difference between the two sides' figures that nothing in
+// them would explain.
+func (s StoreLocation) DefragCommand() []string {
+	if len(s.Defrag) > 0 {
+		return s.Defrag
+	}
+	return []string{"etcdctl", "defrag"}
 }
 
 // KubeadmStore is the stock side's: kubeadm's static pods, whose metrics port
@@ -94,6 +106,15 @@ func KubeadmStore() StoreLocation {
 		Namespace:   "kube-system",
 		Labels:      map[string]string{"component": "etcd"},
 		MetricsPort: EtcdMetricsPort,
+		Container:   "etcd",
+		Defrag: []string{
+			"etcdctl",
+			"--endpoints=https://127.0.0.1:2379",
+			"--cacert=/etc/kubernetes/pki/etcd/ca.crt",
+			"--cert=/etc/kubernetes/pki/etcd/server.crt",
+			"--key=/etc/kubernetes/pki/etcd/server.key",
+			"defrag",
+		},
 	}
 }
 
@@ -104,6 +125,16 @@ func DeployedStore(namespace string) StoreLocation {
 		Namespace:   namespace,
 		Labels:      map[string]string{deployedscale.ComponentLabel: deployedscale.EtcdName},
 		MetricsPort: EtcdMetricsPort,
+		Container:   deployedscale.EtcdName,
+		// In the clear on the loopback inside the member's own pod. It holds no
+		// certificates: nothing outside the pod network reaches it, and giving
+		// it TLS would be a second difference from the stock store on top of
+		// the one being measured.
+		Defrag: []string{
+			"etcdctl",
+			fmt.Sprintf("--endpoints=http://127.0.0.1:%d", deployedscale.EtcdClientPort),
+			"defrag",
+		},
 	}
 }
 
@@ -183,7 +214,7 @@ func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sam
 		if before, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
 			result.BeforeBytes = before.DBTotalBytes
 		}
-		if err := d.exec(ctx, pod.Namespace, pod.Name); err != nil {
+		if err := d.exec(ctx, store, pod.Name); err != nil {
 			result.Err = err.Error()
 			out = append(out, result)
 			continue
@@ -196,12 +227,12 @@ func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sam
 	return out, nil
 }
 
-func (d *Defragmenter) exec(ctx context.Context, namespace, pod string) error {
+func (d *Defragmenter) exec(ctx context.Context, store StoreLocation, pod string) error {
 	req := d.client.Post().
-		Resource("pods").Namespace(namespace).Name(pod).SubResource("exec").
+		Resource("pods").Namespace(store.Namespace).Name(pod).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: "etcd",
-			Command:   etcdctlDefrag,
+			Container: store.Container,
+			Command:   store.DefragCommand(),
 			Stdout:    true,
 			Stderr:    true,
 		}, scheme.ParameterCodec)

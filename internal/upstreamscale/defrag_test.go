@@ -119,3 +119,46 @@ func names(pods []corev1.Pod) string {
 	}
 	return strings.Join(out, ",")
 }
+
+// TestEachStoreCarriesHowToTalkToItself.
+//
+// A defragmentation is an exec inside the member, and the two stores are
+// reached differently: kubeadm's serves the client API over TLS with the
+// cluster's own certificates at kubeadm's paths, and the store this run deploys
+// serves it in the clear inside the pod network. The command was kubeadm's,
+// hardcoded — so against the deployed store every member would have failed with
+// a certificate error, the run would have gone on, and the kcp side's store
+// would have been the only one never defragmented. That is a difference between
+// the two sides' figures that nothing in them would explain.
+func TestEachStoreCarriesHowToTalkToItself(t *testing.T) {
+	kubeadm := strings.Join(KubeadmStore().DefragCommand(), " ")
+	if !strings.Contains(kubeadm, "/etc/kubernetes/pki/etcd/ca.crt") {
+		t.Errorf("kubeadm's store lost its certificates: %q", kubeadm)
+	}
+	if !strings.Contains(kubeadm, "https://127.0.0.1:2379") {
+		t.Errorf("kubeadm's store is not addressed over TLS: %q", kubeadm)
+	}
+
+	deployed := strings.Join(DeployedStore("kcp-scale").DefragCommand(), " ")
+	if strings.Contains(deployed, "cacert") || strings.Contains(deployed, "https") {
+		t.Errorf("the deployed store is addressed with certificates it does not have: %q", deployed)
+	}
+	if !strings.Contains(deployed, "http://127.0.0.1:2379") {
+		t.Errorf("the deployed store is not addressed at all: %q", deployed)
+	}
+	for _, cmd := range []string{kubeadm, deployed} {
+		if !strings.HasPrefix(cmd, "etcdctl ") || !strings.HasSuffix(cmd, " defrag") {
+			t.Errorf("this does not defragment anything: %q", cmd)
+		}
+	}
+}
+
+// TestBothStoresNameTheContainerToExecIn, because an exec with no container
+// runs in whichever one the pod lists first.
+func TestBothStoresNameTheContainerToExecIn(t *testing.T) {
+	for _, store := range []StoreLocation{KubeadmStore(), DeployedStore("kcp-scale")} {
+		if store.Container == "" {
+			t.Errorf("%v names no container", store.Labels)
+		}
+	}
+}
