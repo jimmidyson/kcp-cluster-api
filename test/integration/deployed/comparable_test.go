@@ -41,6 +41,15 @@ import (
 // The comparable run's own flags. The images, the namespace and the cluster
 // come from the deployed run's, because they are the same things.
 var (
+	// Off unless asked for. This test shares a package with the deployed
+	// harness, which a cluster run drives with its own flags — and without this
+	// guard `task test:scale:cluster` would start a 24-hour climb nobody asked
+	// for, on the cluster it was pointed at, because the package's tests all
+	// run together.
+	comparableRun = flag.Bool("comparable-run", false,
+		"Run the comparable kcp climb. Off by default: it is hours of wall clock against whatever cluster "+
+			"the deployed flags name, and it shares a package with the deployed harness.")
+
 	comparableStartClusters = flag.Int("comparable-start-clusters", 25, "The first rung.")
 	comparableMaxClusters   = flag.Int("comparable-max-clusters", 400, "The last rung the ladder will offer.")
 	comparableNodesPer      = flag.Int("comparable-nodes-per-cluster", 10,
@@ -113,6 +122,11 @@ var (
 // It skips rather than fails when there is no cluster, like every other scale
 // measurement here.
 func TestKcpClusterApiClimbsUntilSomethingGives(t *testing.T) {
+	if !*comparableRun {
+		t.Skip("could not run: not asked for. This climb takes hours against whatever cluster the " +
+			"deployed flags name, so it runs only with -comparable-run; `task test:kcp:scale` passes it.")
+	}
+
 	cfg, err := deployedscale.ClusterConfig(*kubeconfig, *kubecontext)
 	if err != nil {
 		t.Skipf("could not run: %v", err)

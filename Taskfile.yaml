@@ -521,6 +521,7 @@ tasks:
         PATH="{{.BIN}}:$PATH" go test -tags integration -count 1 -v -timeout 24h
         ./test/integration/deployed/... -run TestKcpClusterApiClimbsUntilSomethingGives
         -args
+        -comparable-run=true
         -deployed-kcp-image={{.KCP_IMAGE | default (printf "ghcr.io/kcp-dev/kcp:%s" .KCP_VERSION)}}
         -deployed-manager-image={{.MANAGER_IMAGE}}
         -deployed-image-tag={{.IMAGE_TAG}}
