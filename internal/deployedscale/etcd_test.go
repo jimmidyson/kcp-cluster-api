@@ -178,3 +178,28 @@ func TestNoStoreAskedForMeansNoStoreDeployed(t *testing.T) {
 		}
 	}
 }
+
+// TestTheStoreDoesNotCompactBehindTheShard.
+//
+// kcp inherits kube-apiserver's compactor — `--etcd-compaction-interval`,
+// default 5m — so it compacts its own store exactly as the API server compacts
+// the stock one. kubeadm sets no `--auto-compaction-*` on its etcd for that
+// reason, and neither does this.
+//
+// An earlier version of this file set periodic auto-compaction on the server,
+// which would have given the kcp side two compactors against the stock side's
+// one. Not corrupting — whoever compacts to the later revision wins — but it
+// changes when revisions are released, and revision retention is most of what
+// the backend size measures. The equivalence this comparison claims is that
+// both stores behave the same; a second compactor is exactly the kind of
+// difference that would make the etcd column mean two things.
+func TestTheStoreDoesNotCompactBehindTheShard(t *testing.T) {
+	args := strings.Join(etcdOptions().EtcdArgs(), " ")
+	if strings.Contains(args, "auto-compaction") {
+		t.Errorf("the store compacts on its own as well as kcp doing it: %q", args)
+	}
+	// The quota is still the store's business, and still has to match.
+	if !strings.Contains(args, "--quota-backend-bytes=") {
+		t.Errorf("the quota went with it: %q", args)
+	}
+}

@@ -161,12 +161,14 @@ func (o Options) EtcdArgs() []string {
 		"--initial-cluster-state=new",
 		"--initial-cluster-token=" + o.Namespace + "-" + EtcdName,
 		fmt.Sprintf("--quota-backend-bytes=%d", o.Etcd.QuotaBytes),
-		// Compaction is the other half of the quota: without it the backend
-		// grows with revisions rather than with data, and the run records a
-		// ceiling about history. The stock side gets this from the API server,
-		// which compacts on its own; kcp's store is told directly.
-		"--auto-compaction-mode=periodic",
-		"--auto-compaction-retention=5m",
+		// And no --auto-compaction-*. kcp inherits kube-apiserver's compactor
+		// (--etcd-compaction-interval, default 5m) and compacts its own store
+		// exactly as the API server compacts the stock one, which is why
+		// kubeadm sets no auto-compaction on its etcd either. Setting it here
+		// would give this side two compactors against the stock side's one:
+		// not corrupting, since whoever compacts to the later revision wins,
+		// but it changes when revisions are released — and revision retention
+		// is most of what the backend size measures.
 	}
 }
 
