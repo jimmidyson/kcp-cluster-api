@@ -31,10 +31,12 @@ holds constant, or is recorded as a difference:
 
 | | stock | kcp | same? |
 |---|---|---|:-:|
-| Cluster under test | the CAPX cluster's own API server | a single kcp shard, deployed onto it | by design different |
+| Cluster under test | the CAPX cluster's own API server | one kcp shard, deployed onto it | by design different |
 | Control plane budget | 3 × 16 vCPU / 32 GiB | 3 × 16 vCPU / 32 GiB, dedicated pool | **yes** |
+| Serving processes | **3** kube-apiservers, active/active behind the VIP | **3** shard replicas, active/active | **yes** |
+| Embedded controllers | none — kube-controller-manager is a separate process | in the shard, leader-elected across the replicas | by design different |
 | Store | kubeadm etcd, 3 members, node-local disk, 8 GiB quota | etcd StatefulSet, 3 members, node-local PV, 8 GiB quota | **yes** |
-| Shards | n/a | **one**, deliberately | — |
+| Shards | n/a | **one**, at three replicas | — |
 | Controllers | clusterctl's four, on the worker pool | this project's four, on the worker pool | **yes** |
 | Infrastructure | DevCluster, in-memory backend | DevCluster, in-memory backend | **yes** |
 | Tenancy unit | Namespace | Workspace | by design different |
@@ -63,8 +65,33 @@ figure appears. Everything else is either held or is the subject.
   quota, `:2381` metrics reachable, on persistent volumes. Not the embedded
   single-member etcd inside the shard's own pod, which shares the shard's
   memory limit and cannot be sampled or defragmented the way the stock store is.
-- **R4 One shard.** The comparison is against one API server, so it is against
-  one shard. Sharding is the next question and not this one.
+- **R4 One shard, three replicas.** One *shard* — sharding is the next question
+  and not this one. Three *replicas* of it, because the stock side is not one
+  API server either: the CAPX control plane runs three, active/active behind
+  the VIP, each holding its own full watch cache. A single-replica shard against
+  three API servers compares one process with three, and gets the total cost of
+  a control plane wrong by about that factor in whichever direction the reader
+  is not expecting.
+
+  kcp supports this directly — `--enable-leader-election`, with
+  `--leader-election-name` and `--leader-election-namespace` — which is the
+  same split Kubernetes makes between the API server and the controller
+  manager, except that kcp puts both in one process. So three replicas serve
+  the API and exactly one of them runs the shard's controllers.
+- **R4a Every replica is sampled, on both sides.** The consequence of R4, and
+  it is a change to the instrument rather than a note about it:
+  - The API server sample is taken through the cluster's own kubeconfig, which
+    addresses the VIP, so **consecutive scrapes may land on different API
+    servers**. Every stock figure recorded so far is therefore one arbitrary
+    instance per sample, and the five-read heap floor is a floor across up to
+    three processes rather than across one process's sawtooth.
+  - `runningPodOf` returns the first running pod matching a deployment's name
+    and its comment says a second would mean a rollout. With three shard
+    replicas that is no longer true, and it would silently report one replica
+    as "the shard".
+  Both sides must therefore report **per process and summed**, because the two
+  answer different questions: per process is what a single instance costs and
+  bounds the node it sits on, and the sum is what the control plane costs.
 - **R5 The control plane under test gets the same budget either way**: three
   nodes of the same size, with the shard and the etcd members pinned to them and
   spread one per node. A control plane that fits on fewer resources than the
@@ -90,8 +117,10 @@ figure appears. Everything else is either held or is the subject.
   ratio between them stated per component and for the total.
 - **S3** A statement about the store: what a cluster costs in etcd keys and
   bytes on each side, with both stores defragmented and compacted the same way.
-- **S4** A statement about the control plane process: the shard against the API
-  server, at the same fleet sizes, on the same hardware.
+- **S4** A statement about the control plane: the shard against the API server
+  at the same fleet sizes on the same hardware, given **both** per process and
+  summed across the three of each, and naming which replica held the shard's
+  controller leadership.
 - **S5** Both sides soaked at the largest fleet that converged, with the
   peak-aware drift check.
 
@@ -104,10 +133,17 @@ figure appears. Everything else is either held or is the subject.
   go to the pool that is under test. This is a measurement to take during the
   first kcp run, not an assumption to build on: the sampler already reads the
   CAPX API server, so the run will say.
-- **Does the shard need the same shape as three API servers?** One shard against
-  three API servers is not a like-for-like process count, and R5 gives the
-  budget rather than the topology. Whether a single shard can use three nodes'
-  worth of anything is itself a finding.
+- **Does the shard scale horizontally at all?** Three replicas is the shape R4
+  requires for comparability, and whether the second and third earn their keep
+  is a separate finding: kube-apiservers are stateless and share read load, and
+  whether a kcp shard does the same under this workload is not something the
+  existing runs can say. If a fleet size exists where one shard saturates and
+  three do not, that is worth more than the cost ratio.
+- **What does leadership cost?** With leader election exactly one replica runs
+  the shard's controllers. The difference between that replica and the other two
+  is the controller half of a shard, measured directly — something the stock
+  side cannot show, because its controllers are in another process on another
+  schedule.
 
 ## What this is not
 
