@@ -401,3 +401,47 @@ apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 8
 }
 
 func (f *fakeShard) ForceCollection(context.Context, string) error { return nil }
+
+// TestAWorkspaceIsMadeOnceAcrossRungs.
+//
+// The ladder climbs by re-creating the whole fleet at each rung, so most of a
+// rung's workspaces already exist. Making them again is not wrong — it is
+// idempotent — but it re-binds every export in every existing workspace at
+// every rung, which is work the driver does to itself and time that reads as
+// the rung being slow to create.
+//
+// It also matters for teardown: a name returned twice is a name torn down
+// twice, which is harmless, and a rung that reported names it did not make is
+// a rung whose "created in" covers somebody else's work.
+func TestAWorkspaceIsMadeOnceAcrossRungs(t *testing.T) {
+	tenancy := newFakeTenancy(t)
+	target := testKcpTarget(t, tenancy)
+	ctx := context.Background()
+
+	first, err := target.Plan(4)
+	if err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	made, err := target.Create(ctx, first, 2)
+	if err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+	if len(made) != 1 {
+		t.Fatalf("made %v, want the one workspace four clusters fit in", made)
+	}
+
+	second, err := target.Plan(8)
+	if err != nil {
+		t.Fatalf("planning: %v", err)
+	}
+	again, err := target.Create(ctx, second, 2)
+	if err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+	if len(again) != 1 {
+		t.Errorf("the second rung reported %v, want only the workspace it added", again)
+	}
+	if len(tenancy.made) != 2 {
+		t.Errorf("the shard was asked for %v, want each workspace once", tenancy.made)
+	}
+}

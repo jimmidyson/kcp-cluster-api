@@ -202,14 +202,24 @@ func (k *KcpTarget) Create(ctx context.Context, fleet Fleet, concurrency int) ([
 	group.SetLimit(concurrency)
 	for _, ws := range fleet.Namespaces {
 		group.Go(func() error {
-			cl, err := k.Tenancy.Ensure(groupCtx, ws.Name)
-			if err != nil {
-				return fmt.Errorf("creating workspace %s: %w", ws.Name, err)
+			// A rung re-creates the whole fleet, so most of its workspaces
+			// already exist. Making one again is idempotent and not free: it
+			// re-binds every export in every existing workspace at every rung,
+			// which is the driver's own work showing up as the rung being slow
+			// to create. Only what this rung actually added is returned, so
+			// that a name is torn down once and a rung's timing is its own.
+			cl, known := k.tenant(ws.Name)
+			if !known {
+				made, err := k.Tenancy.Ensure(groupCtx, ws.Name)
+				if err != nil {
+					return fmt.Errorf("creating workspace %s: %w", ws.Name, err)
+				}
+				cl = made
+				mu.Lock()
+				created = append(created, ws.Name)
+				mu.Unlock()
+				k.remember(ws.Name, cl)
 			}
-			mu.Lock()
-			created = append(created, ws.Name)
-			mu.Unlock()
-			k.remember(ws.Name, cl)
 
 			// In dependency order, the class last, so that by the time it
 			// exists everything it refers to does.
@@ -325,6 +335,14 @@ func (k *KcpTarget) remember(name string, cl client.Client) {
 		k.tenants = map[string]client.Client{}
 	}
 	k.tenants[name] = cl
+}
+
+// tenant is the client for a workspace this run already made, if it did.
+func (k *KcpTarget) tenant(name string) (client.Client, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	cl, ok := k.tenants[name]
+	return cl, ok
 }
 
 func (k *KcpTarget) forget(name string) {
