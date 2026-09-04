@@ -182,6 +182,19 @@ type Options struct {
 	// stock side's three-member kubeadm store — see EtcdOptions.
 	Etcd EtcdOptions
 
+	// ShardReplicas is how many processes serve the shard. Zero or one is the
+	// local shape every deployed run so far has had; three is what the
+	// comparison against a kubeadm control plane needs, because that is three
+	// kube-apiservers behind a VIP and each of them holds a full watch cache.
+	//
+	// More than one adds leader election and anti-affinity — see
+	// LeaderElectionArgs and KcpDeployment — and needs an external store, since
+	// each replica's embedded etcd would be a store of its own.
+	ShardReplicas int32
+	// KcpNodeSelector pins the shard to the pool the comparison gives the
+	// control plane under test, as EtcdOptions.NodeSelector pins its store.
+	KcpNodeSelector map[string]string
+
 	// ManagerResources and KcpResources size the containers. A memory limit is
 	// load-bearing rather than hygiene: an OOMKill at a given fleet size is
 	// the capacity finding this whole measurement exists to produce, and a
@@ -259,6 +272,16 @@ func (o Options) validate() error {
 		if o.Images[c.Name] == "" {
 			errs = append(errs, fmt.Errorf("no image for %s: a missing image would measure a different build than the one asked for", c.Name))
 		}
+	}
+	// Several replicas need one store between them. kcp's default is an etcd
+	// embedded in its own process, so three replicas of it are three servers
+	// with three stores behind one Service: a fleet created through one would
+	// be invisible through the other two, and the run would look like a
+	// control plane losing a third of its objects rather than like a
+	// configuration mistake.
+	if o.shardReplicas() > 1 && !o.Etcd.Enabled() {
+		errs = append(errs, fmt.Errorf("%d shard replicas with no external etcd: each would start its own "+
+			"embedded store, so they would serve three different fleets behind one Service", o.shardReplicas()))
 	}
 	return errors.Join(errs...)
 }
@@ -404,20 +427,29 @@ func KcpArgs(baseURL, dataDir, credentialsDir string, port int, etcdServers []st
 // storage class — which is exactly the kind of assumption that works on the
 // cluster it was written against and fails on the next one.
 func (o Options) KcpDeployment() *appsv1.Deployment {
+	args := KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort, o.EtcdEndpoints())
+	if o.shardReplicas() > 1 {
+		args = append(args, LeaderElectionArgs()...)
+	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: KcpName, Namespace: o.Namespace, Labels: labels(KcpName)},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: ptr.To(o.shardReplicas()),
 			Selector: &metav1.LabelSelector{MatchLabels: labels(KcpName)},
+			// Recreate rather than rolling: a rolling update would serve two
+			// generations of the shard at once, and the samples either side of
+			// it would be two different processes reported as one series.
 			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(KcpName)},
 				Spec: corev1.PodSpec{
+					NodeSelector: o.KcpNodeSelector,
+					Affinity:     o.shardAffinity(),
 					Containers: []corev1.Container{{
 						Name:            KcpName,
 						Image:           o.KcpImage,
 						ImagePullPolicy: o.imagePullPolicy(),
-						Args:            KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort, o.EtcdEndpoints()),
+						Args:            args,
 						Env:             memoryLimitEnvFor(o.kcpResources()),
 						Ports:           []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
 						VolumeMounts: []corev1.VolumeMount{
@@ -449,6 +481,40 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 					},
 				},
 			},
+		},
+	}
+}
+
+// shardReplicas is how many kcp processes to run, defaulting to the one every
+// deployed run so far has had.
+func (o Options) shardReplicas() int32 {
+	if o.ShardReplicas < 1 {
+		return 1
+	}
+	return o.ShardReplicas
+}
+
+// shardAffinity keeps the replicas off each other's nodes, and only when there
+// is more than one of them.
+//
+// Required rather than preferred, for the reason the store's members are:
+// three replicas on one node is one machine's memory reported as a three-node
+// control plane, and the stock side it is compared against has one API server
+// per control plane node because kubeadm cannot put two there.
+//
+// Nil for a single replica: required anti-affinity against itself is
+// satisfiable, but adding it would change the shape every recorded local run
+// was taken in for no gain.
+func (o Options) shardAffinity() *corev1.Affinity {
+	if o.shardReplicas() < 2 {
+		return nil
+	}
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{MatchLabels: labels(KcpName)},
+				TopologyKey:   "kubernetes.io/hostname",
+			}},
 		},
 	}
 }
@@ -724,4 +790,26 @@ func memoryLimitEnvFor(r corev1.ResourceRequirements) []corev1.EnvVar {
 		return nil
 	}
 	return MemoryLimitEnv(limit)
+}
+
+// LeaderElectionArgs make several kcp processes one shard rather than several.
+//
+// kcp puts the API server and its controllers in one process, which is the
+// split Kubernetes makes between the API server and the controller manager. So
+// three replicas serve the API three ways over — which is the point, each
+// holding its own watch cache exactly as three kube-apiservers do — while
+// exactly one of them runs the shard's controllers, which is what this asks
+// for. Without it, three copies of every kcp controller reconcile the same
+// store.
+//
+// The lease's name and namespace are kcp's own defaults, stated rather than
+// inherited: they name a lease in the system:admin workspace, and a run that
+// left them implicit would be one flag's default away from two shards sharing
+// a lease.
+func LeaderElectionArgs() []string {
+	return []string{
+		"--enable-leader-election",
+		"--leader-election-name=kcp-controllers",
+		"--leader-election-namespace=kube-system",
+	}
 }

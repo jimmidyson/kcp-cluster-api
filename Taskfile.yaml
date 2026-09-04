@@ -16,6 +16,12 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # The store the deployed run gives kcp, and the one a local check of the
+  # three-replica shard runs against. The same version the deployed StatefulSet
+  # pulls (deployedscale.DefaultEtcdImage), which is the version Kubernetes
+  # 1.32 ships — so the store under kcp is the same software as the store under
+  # the stock API server.
+  ETCD_VERSION: v3.5.16
   # The container image builder for the deployed scale measurement. A Go
   # module, so it installs with the toolchain alone — no system package
   # manager on the critical path (Constitution, Environment and Tooling
@@ -609,7 +615,7 @@ tasks:
 
   tools:
     desc: Install pinned tooling into bin/
-    deps: [tools:kcp]
+    deps: [tools:kcp, tools:etcd]
 
   tools:clusterctl:
     desc: Download the pinned Cluster API CLI into bin/
@@ -659,6 +665,20 @@ tasks:
         curl -sSfL
         "https://github.com/kcp-dev/kcp/releases/download/{{.KCP_VERSION}}/kcp_{{trimPrefix "v" .KCP_VERSION}}_{{.GOOS_}}_{{.GOARCH_}}.tar.gz"
         | tar -xzf - -C {{.BIN}} --strip-components=1 bin/kcp
+
+  tools:etcd:
+    desc: Download the pinned etcd binary into bin/
+    status:
+      - test -x {{.BIN}}/etcd
+    cmds:
+      - mkdir -p {{.BIN}}
+      # For the local check that three kcp replicas serve one store
+      # (TestAThreeReplicaShardServesOneStore). Three replicas need one etcd
+      # between them, and the alternative to a binary here is a cluster.
+      - >-
+        curl -sSfL
+        "https://github.com/etcd-io/etcd/releases/download/{{.ETCD_VERSION}}/etcd-{{.ETCD_VERSION}}-{{.GOOS_}}-{{.GOARCH_}}.tar.gz"
+        | tar -xzf - -C {{.BIN}} --strip-components=1 etcd-{{.ETCD_VERSION}}-{{.GOOS_}}-{{.GOARCH_}}/etcd
 
   drift:
     desc: Report each fork's divergence from its base and check it against its record

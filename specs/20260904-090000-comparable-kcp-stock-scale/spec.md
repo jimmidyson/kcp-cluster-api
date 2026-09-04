@@ -79,6 +79,17 @@ figure appears. Everything else is either held or is the subject.
   same split Kubernetes makes between the API server and the controller
   manager, except that kcp puts both in one process. So three replicas serve
   the API and exactly one of them runs the shard's controllers.
+
+  **Measured, not read off the flags.** `TestAThreeReplicaShardServesOneStore`
+  in `test/integration/deployed` starts three kcp processes over one external
+  etcd with the flags the Deployment gives them, and checks the three things
+  that could each fail quietly: a workspace created through one replica leaves
+  Initializing (so leader election works rather than three copies of kcp's
+  controllers racing), the other two serve that workspace as the same logical
+  cluster (so the mounted credentials make them one shard rather than three
+  servers, despite each generating its own PKI into its own root directory),
+  and a write through the third is read back through the first. It needs the
+  kcp and etcd binaries and takes half a minute.
 - **R4a Every replica is sampled, on both sides.** The consequence of R4, and
   it is a change to the instrument rather than a note about it. What it
   replaced:

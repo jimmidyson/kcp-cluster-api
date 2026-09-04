@@ -29,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
@@ -121,10 +123,51 @@ func tail(s string, lines int) string {
 // reproduced this way in seconds after costing ten minutes each in kind.
 func startDeployedKcp(t *testing.T) (baseURL string, creds *deployedscale.Credentials) {
 	t.Helper()
+	requireBinary(t, "kcp")
+	creds = deployedCredentials(t)
+	return startKcp(t, creds, nil, false), creds
+}
 
-	if _, err := exec.LookPath("kcp"); err != nil {
-		t.Skipf("could not run: no kcp binary on PATH (%v); `task tools:kcp` installs it", err)
+// requireBinary skips rather than fails: a binary is a capability of the
+// machine, and a missing one is "could not run" rather than a defect in what
+// is under test.
+func requireBinary(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("could not run: no %s binary on PATH (%v); `task tools:%s` installs it", name, err, name)
 	}
+}
+
+// deployedCredentials mints what the Deployment mounts: one serving
+// certificate covering the Service names, and one token file.
+//
+// One set for every replica. That is the shape a Deployment has — one Secret,
+// mounted into each pod — and it is what makes three processes one shard to a
+// client rather than three servers with three identities.
+func deployedCredentials(t *testing.T) *deployedscale.Credentials {
+	t.Helper()
+	creds, err := deployedscale.NewCredentials(
+		deployedscale.ServiceNames(deployedscale.KcpName, "scale"), deployedscale.LoopbackIPs(), time.Hour)
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	return creds
+}
+
+// startKcp runs one kcp with exactly the flags the Deployment gives it, on this
+// machine, and returns the URL it serves on.
+//
+// No cluster and no container runtime: the flags, the certificate and the
+// identity are the deployed ones, which is enough to catch the failures that
+// come from those rather than from Kubernetes. Two whole-run failures were
+// reproduced this way in seconds after costing ten minutes each in kind.
+//
+// etcdServers empty leaves kcp on its embedded store, which is the local
+// default. leaderElection is what makes several of these one shard rather than
+// several: kcp's own controllers run inside it, and three copies of them
+// racing on one store is not the shape a Deployment of three replicas has.
+func startKcp(t *testing.T, creds *deployedscale.Credentials, etcdServers []string, leaderElection bool) string {
+	t.Helper()
 
 	dir := t.TempDir()
 	port := freePort(t)
@@ -132,13 +175,7 @@ func startDeployedKcp(t *testing.T) (baseURL string, creds *deployedscale.Creden
 	// Service; here it is a loopback name the certificate also covers, which
 	// is the point — what is under test is that kcp works when told to
 	// advertise a name rather than detect one.
-	baseURL = fmt.Sprintf("https://localhost:%d", port)
-
-	creds, err := deployedscale.NewCredentials(
-		deployedscale.ServiceNames(deployedscale.KcpName, "scale"), deployedscale.LoopbackIPs(), time.Hour)
-	if err != nil {
-		t.Fatalf("credentials: %v", err)
-	}
+	baseURL := fmt.Sprintf("https://localhost:%d", port)
 
 	credsDir := filepath.Join(dir, "credentials")
 	if err := os.MkdirAll(credsDir, 0o700); err != nil {
@@ -155,7 +192,10 @@ func startDeployedKcp(t *testing.T) (baseURL string, creds *deployedscale.Creden
 	}
 
 	// The same flags the Deployment passes, from the same function.
-	args := deployedscale.KcpArgs(baseURL, filepath.Join(dir, "data"), credsDir, port)
+	args := deployedscale.KcpArgs(baseURL, filepath.Join(dir, "data"), credsDir, port, etcdServers)
+	if leaderElection {
+		args = append(args, deployedscale.LeaderElectionArgs()...)
+	}
 	t.Logf("kcp %s", strings.Join(args, " "))
 
 	logPath := filepath.Join(dir, "kcp.log")
@@ -178,12 +218,63 @@ func startDeployedKcp(t *testing.T) (baseURL string, creds *deployedscale.Creden
 		_ = cmd.Wait()
 		if t.Failed() {
 			if out, err := os.ReadFile(logPath); err == nil { //nolint:gosec // a path this test made.
-				t.Logf("kcp log tail:\n%s", tail(string(out), 60))
+				t.Logf("kcp log tail (%s):\n%s", baseURL, tail(string(out), 60))
 			}
 		}
 	})
 
-	return baseURL, creds
+	return baseURL
+}
+
+// startEtcd runs one etcd member and returns its client URL.
+//
+// One member rather than three: what the replicas need from it here is a
+// single store they all write to, and three members would measure etcd's
+// quorum rather than kcp's leader election. The deployed run gets three, for
+// the reason EtcdOptions gives.
+func startEtcd(t *testing.T) string {
+	t.Helper()
+	requireBinary(t, "etcd")
+
+	dir := t.TempDir()
+	clientPort, peerPort := freePort(t), freePort(t)
+	client := fmt.Sprintf("http://127.0.0.1:%d", clientPort)
+	peer := fmt.Sprintf("http://127.0.0.1:%d", peerPort)
+
+	logPath := filepath.Join(dir, "etcd.log")
+	logFile, err := os.Create(logPath) //nolint:gosec // a path this test made.
+	if err != nil {
+		t.Fatalf("log file: %v", err)
+	}
+	t.Cleanup(func() { _ = logFile.Close() })
+
+	ctx, stop := context.WithCancel(t.Context())
+	cmd := exec.CommandContext(ctx, "etcd", //nolint:gosec // arguments this package builds.
+		"--name=one",
+		"--data-dir="+filepath.Join(dir, "data"),
+		"--listen-client-urls="+client,
+		"--advertise-client-urls="+client,
+		"--listen-peer-urls="+peer,
+		"--initial-advertise-peer-urls="+peer,
+		"--initial-cluster=one="+peer,
+		"--initial-cluster-state=new",
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		stop()
+		t.Fatalf("starting etcd: %v", err)
+	}
+	t.Cleanup(func() {
+		stop()
+		_ = cmd.Wait()
+		if t.Failed() {
+			if out, err := os.ReadFile(logPath); err == nil { //nolint:gosec // a path this test made.
+				t.Logf("etcd log tail:\n%s", tail(string(out), 30))
+			}
+		}
+	})
+	return client
 }
 
 // rootClientFor waits for kcp to answer and returns a client for its root
@@ -227,4 +318,104 @@ func clientForWorkspace(baseURL string, creds *deployedscale.Credentials, logica
 		TLSClientConfig: rest.TLSClientConfig{CAData: creds.CACertPEM},
 	}
 	return client.New(deployedscale.WorkspaceConfig(cfg, logical), client.Options{Scheme: scheme})
+}
+
+// TestAThreeReplicaShardServesOneStore is the check R4 of
+// specs/20260904-090000-comparable-kcp-stock-scale rests on.
+//
+// # Why it is worth a test rather than a reading of the flags
+//
+// The comparison gives kcp the same control plane the stock side has: three
+// processes serving one store, active/active. The stock side gets that from
+// kubeadm and nobody has to think about it. On the kcp side it is a shape this
+// project has never run — every deployed run so far has been one replica — and
+// three things could each make it not work, none of them loudly:
+//
+//   - kcp's own controllers run inside kcp, so three copies of them race on one
+//     store. --enable-leader-election is what stops that, and a flag that is
+//     accepted is not the same as a flag that works.
+//   - Each replica generates its PKI into its own root directory. If anything a
+//     client depends on is generated per process rather than mounted from the
+//     one Secret, two replicas are two servers and the third is a coin toss.
+//   - A workspace is initialized by controllers on the leader and served by all
+//     three. A replica that cannot serve what the leader created would show up
+//     as an intermittent fleet rather than as a broken control plane.
+//
+// Failing any of those, the honest thing is to find out here in a minute
+// rather than from figures taken against a control plane that was one process
+// pretending to be three.
+func TestAThreeReplicaShardServesOneStore(t *testing.T) {
+	requireBinary(t, "kcp")
+
+	ctx := t.Context()
+	store := startEtcd(t)
+	creds := deployedCredentials(t)
+	scheme := deployedScheme(t)
+
+	const replicas = 3
+	urls := make([]string, 0, replicas)
+	for range replicas {
+		urls = append(urls, startKcp(t, creds, []string{store}, true))
+	}
+
+	// Every replica answers as the same server, with the same identity.
+	clients := make([]client.Client, 0, len(urls))
+	for _, url := range urls {
+		clients = append(clients, rootClientFor(t, ctx, url, creds, scheme))
+	}
+
+	// Created through one of them, and initialized by whichever holds the
+	// lease. A workspace that never leaves Initializing here is leader
+	// election not working, which is the failure this exists to catch.
+	logical, err := kcpfixtures.EnsureWorkspace(ctx, clients[0], "hacheck", 3*time.Minute)
+	if err != nil {
+		t.Fatalf("a workspace created against one replica of a three-replica shard never became ready. "+
+			"Three copies of kcp's controllers on one store is what --enable-leader-election exists to "+
+			"prevent, and this is what it looks like when that does not hold: %v", err)
+	}
+	t.Logf("workspace became ready as logical cluster %s", logical)
+
+	// And served by the other two. The point of three replicas is that a
+	// client reaching any of them sees one control plane.
+	for i, cl := range clients[1:] {
+		var ws tenancyv1alpha1.Workspace
+		if err := cl.Get(ctx, client.ObjectKey{Name: "hacheck"}, &ws); err != nil {
+			t.Fatalf("replica %d does not serve the workspace the shard created: %v", i+1, err)
+		}
+		if ws.Spec.Cluster != logical {
+			t.Errorf("replica %d says the workspace is logical cluster %q, and the one that created it "+
+				"says %q: these are two servers rather than one shard", i+1, ws.Spec.Cluster, logical)
+		}
+	}
+
+	// Inside the workspace, through a third replica: what a fleet actually
+	// does. Serving the Workspace object from :root is the easier half — the
+	// logical cluster's own APIs are bound by the initializer and are what a
+	// manager and a driver talk to.
+	inside, err := clientForWorkspace(urls[len(urls)-1], creds, logical, scheme)
+	if err != nil {
+		t.Fatalf("building a client for %s through the last replica: %v", logical, err)
+	}
+	made := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "written-through-the-last-replica", Namespace: "default"},
+		Data:       map[string]string{"replicas": fmt.Sprint(replicas)},
+	}
+	if err := inside.Create(ctx, made); err != nil {
+		t.Fatalf("writing into %s through the last replica: %v", logical, err)
+	}
+
+	// Read back through the first, which is the whole claim: one store, three
+	// front ends.
+	readBack, err := clientForWorkspace(urls[0], creds, logical, scheme)
+	if err != nil {
+		t.Fatalf("building a client for %s through the first replica: %v", logical, err)
+	}
+	var got corev1.ConfigMap
+	if err := readBack.Get(ctx, client.ObjectKey{Namespace: "default", Name: made.Name}, &got); err != nil {
+		t.Fatalf("a write through one replica is not visible through another, so these are not one "+
+			"control plane: %v", err)
+	}
+	if got.Data["replicas"] != fmt.Sprint(replicas) {
+		t.Errorf("read back %v, want what was written", got.Data)
+	}
 }
