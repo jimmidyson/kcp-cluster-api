@@ -273,7 +273,7 @@ func TestClusterNameIsWorkspaceIndependent(t *testing.T) {
 // registers it under.
 func key(obj client.Object) string {
 	t := reflect.TypeOf(obj)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return fmt.Sprintf("%s/%s", t.Name(), obj.GetName())

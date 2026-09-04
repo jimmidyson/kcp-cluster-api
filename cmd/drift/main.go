@@ -131,7 +131,9 @@ func divergingPaths(upstream, base, fork, ref string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	// A temporary directory this function made; a failure to remove it is the
+	// operating system's problem and not this comparison's.
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	steps := [][]string{
 		{"init", "--quiet", "--bare", dir},

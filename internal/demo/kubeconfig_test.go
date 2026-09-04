@@ -84,11 +84,11 @@ func TestWriteWorkspaceKubeconfigScopesEachContextToItsWorkspace(t *testing.T) {
 		// The credential travels with the context: a generated kubeconfig
 		// that needs the original one beside it is no use to a UI that was
 		// handed only this file.
-		if string(cfg.TLSClientConfig.CertData) != "admin-cert" {
-			t.Errorf("context %q client certificate = %q, want the base context's", entry.Name, cfg.TLSClientConfig.CertData)
+		if string(cfg.CertData) != "admin-cert" {
+			t.Errorf("context %q client certificate = %q, want the base context's", entry.Name, cfg.CertData)
 		}
-		if string(cfg.TLSClientConfig.CAData) != "base-ca" {
-			t.Errorf("context %q CA = %q, want the base context's", entry.Name, cfg.TLSClientConfig.CAData)
+		if string(cfg.CAData) != "base-ca" {
+			t.Errorf("context %q CA = %q, want the base context's", entry.Name, cfg.CAData)
 		}
 		if cfg.Impersonate.UserName != "" {
 			t.Errorf("context %q impersonates %q, want nobody", entry.Name, cfg.Impersonate.UserName)
@@ -142,8 +142,8 @@ func TestWriteWorkspaceKubeconfigImpersonatesFromTheShardAdmin(t *testing.T) {
 	// addresses unless the impersonator is privileged, so a tenant context
 	// built on the ordinary admin credential is refused in every workspace
 	// the demo wants to show it working in. See ShardBaseContext.
-	if string(cfg.TLSClientConfig.CertData) != "shard-cert" {
-		t.Errorf("client certificate = %q, want the shard admin's", cfg.TLSClientConfig.CertData)
+	if string(cfg.CertData) != "shard-cert" {
+		t.Errorf("client certificate = %q, want the shard admin's", cfg.CertData)
 	}
 }
 

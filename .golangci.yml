@@ -1,0 +1,38 @@
+# Static analysis beyond `go vet`.
+#
+# The set is golangci-lint's standard one — errcheck, govet, ineffassign,
+# staticcheck, unused — rather than everything it can run. That is a deliberate
+# floor: these five find defects, and a linter that mostly produces style
+# opinions makes its own findings easier to ignore. Add one when it earns its
+# place by catching something real.
+#
+# Run it with `task lint`, which builds the pinned binary first. It cannot be a
+# downloaded release: golangci-lint refuses to analyse a module whose `go`
+# directive is newer than the Go it was built with, and this module tracks the
+# current toolchain — so it is compiled here, by that toolchain. See
+# `tools:golangci-lint`.
+version: "2"
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      # Writing a report to the terminal. These are the last thing a command
+      # does with what it found, and a failed write has nowhere left to be
+      # reported to — checking it would produce an error nobody could see.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+  exclusions:
+    rules:
+      # This project registers Cluster API's v1beta1 types on purpose: the
+      # conversion between v1beta1 and v1beta2 exists, and a manager whose
+      # scheme knows only the new version cannot serve a workspace holding the
+      # old one. The deprecation is upstream telling us the day is coming, and
+      # DRIFT.md is where that is tracked — not a finding to fix here, and not
+      # one worth repeating at every import.
+      - linters: [staticcheck]
+        text: "SA1019: sigs.k8s.io/cluster-api/(api/core|test/infrastructure/docker/api)/v1beta1 is deprecated"

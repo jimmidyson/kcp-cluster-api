@@ -22,6 +22,12 @@ vars:
   # 1.32 ships — so the store under kcp is the same software as the store under
   # the stock API server.
   ETCD_VERSION: v3.5.16
+  # Static analysis beyond `go vet`. Built from source rather than downloaded:
+  # golangci-lint refuses to analyse a module whose `go` directive is newer
+  # than the Go it was built with, and this module tracks the current
+  # toolchain — so the published binaries are behind it by construction. See
+  # tools:golangci-lint and .golangci.yml.
+  GOLANGCI_LINT_VERSION: v2.13.2
   # The container image builder for the deployed scale measurement. A Go
   # module, so it installs with the toolchain alone — no system package
   # manager on the critical path (Constitution, Environment and Tooling
@@ -90,10 +96,25 @@ tasks:
 
   lint:
     desc: Static analysis
+    deps: [tools:golangci-lint]
+    # go vet as well as golangci-lint, which runs it: vet is the floor that
+    # needs no tooling, and a tree that passes it is worth knowing about even
+    # when the linter cannot be built.
     cmds:
       - go vet ./...
       - for: {var: PROVIDER_MODULES}
         cmd: cd {{.ITEM}} && go vet ./...
+      # Under the integration tag, which is a superset rather than a second
+      # run: nothing in this repository is excluded by that tag, so one pass
+      # with it covers the tagged files as well as the rest. Those files are
+      # most of the measurement harness, and they are where an unused helper or
+      # a deprecated call would otherwise sit unread.
+      - '{{.BIN}}/golangci-lint run --timeout 15m --build-tags integration ./...'
+      # Each provider is its own module, so ./... at the root does not reach
+      # it. The configuration is found by searching upward, so all of them are
+      # linted the same way.
+      - for: {var: PROVIDER_MODULES}
+        cmd: cd {{.ITEM}} && {{.BIN}}/golangci-lint run --timeout 15m --build-tags integration ./...
 
   test:unit:
     desc: Unit tests
@@ -709,7 +730,7 @@ tasks:
 
   tools:
     desc: Install pinned tooling into bin/
-    deps: [tools:kcp, tools:etcd]
+    deps: [tools:kcp, tools:etcd, tools:golangci-lint]
 
   tools:clusterctl:
     desc: Download the pinned Cluster API CLI into bin/
@@ -745,6 +766,22 @@ tasks:
       - test -x {{.BIN}}/ko
     cmds:
       - GOBIN={{.BIN}} go install github.com/google/ko@{{.KO_VERSION}}
+
+  tools:golangci-lint:
+    desc: Build the pinned linter into bin/
+    status:
+      # By version rather than by existence: a bumped pin has to replace the
+      # binary, and `test -x` would keep whatever was installed first.
+      - '{{.BIN}}/golangci-lint version --short 2>/dev/null | grep -qx "{{trimPrefix "v" .GOLANGCI_LINT_VERSION}}"'
+    cmds:
+      - mkdir -p {{.BIN}}
+      # `go install` rather than the release archive the other tools use, and
+      # this is the whole point: it compiles with this repository's own
+      # toolchain. A downloaded binary is built with whatever Go was current
+      # when it was published, and golangci-lint refuses to analyse a module
+      # whose `go` directive is newer than that — which for a module tracking
+      # the current toolchain is most of the time.
+      - GOBIN={{.BIN}} go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
 
   tools:kcp:
     desc: Download the pinned kcp server binary into bin/

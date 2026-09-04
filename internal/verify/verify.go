@@ -149,7 +149,9 @@ func Run(w io.Writer, steps []Step) ([]Result, int) {
 		}
 
 		err := s.Run()
-		os.Unsetenv(EnvCapabilitiesAsserted)
+		// Unset either way: the next step asserts its own capabilities, and
+		// the only way this fails is a name no longer being a valid variable.
+		_ = os.Unsetenv(EnvCapabilitiesAsserted)
 
 		if err != nil {
 			results = append(results, Result{Step: s.Name, Outcome: OutcomeFail, Err: err})

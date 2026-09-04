@@ -306,6 +306,13 @@ func applyAll(ctx context.Context, cl client.Client, manifest string) ([]client.
 		if obj.GetKind() == "" {
 			continue
 		}
+		// client.Apply as a patch type is deprecated in favour of
+		// client.Client.Apply, which takes an apply configuration rather than
+		// an object — and what is being applied here is an unstructured
+		// document decoded from a manifest. Migrating it is a change to how
+		// the CNI is installed, which only a run against a real cluster can
+		// check, so it is carried with its reason rather than done blind.
+		//nolint:staticcheck // SA1019: see above.
 		if err := cl.Patch(ctx, obj, client.Apply,
 			client.FieldOwner(cniFieldOwner), client.ForceOwnership); err != nil {
 			return nil, fmt.Errorf("applying %s %s: %w", obj.GetKind(), obj.GetName(), err)

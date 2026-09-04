@@ -387,6 +387,7 @@ func (o Options) validate() error {
 		return errors.New("BaseConfig is required")
 	}
 	if o.Workspaces < 1 {
+		//nolint:staticcheck // ST1005: the message names the field as written, which is what a caller reads.
 		return fmt.Errorf("Workspaces = %d, want at least 1", o.Workspaces)
 	}
 	if o.ClustersPerWorkspace < 1 {
@@ -1230,16 +1231,6 @@ func waitForReady(ctx context.Context, opts Options, workspaces []Workspace) (Re
 	}
 }
 
-func provisionedCount(statuses []ClusterStatus) int {
-	n := 0
-	for _, s := range statuses {
-		if s.Provisioned {
-			n++
-		}
-	}
-	return n
-}
-
 func readyCount(statuses []ClusterStatus) int {
 	n := 0
 	for _, s := range statuses {
@@ -1315,26 +1306,6 @@ func SnapshotControlPlanes(ctx context.Context, workspaces []Workspace, clusters
 func expectedMachines(opts Options) int {
 	perCluster := opts.ControlPlaneMachines + opts.WorkerMachines
 	return opts.Workspaces * opts.ClustersPerWorkspace * perCluster
-}
-
-func initializedCount(statuses []ControlPlaneStatus) int {
-	n := 0
-	for _, s := range statuses {
-		if s.Initialized {
-			n++
-		}
-	}
-	return n
-}
-
-func bootstrappedCount(statuses []MachineStatus) int {
-	n := 0
-	for _, s := range statuses {
-		if s.Bootstrapped {
-			n++
-		}
-	}
-	return n
 }
 
 func controlPlanesReadyCount(statuses []ControlPlaneStatus) int {

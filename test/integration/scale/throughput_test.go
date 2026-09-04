@@ -346,15 +346,6 @@ func touchAll(ctx context.Context, c client.Client, svc capiservice.Service, obj
 	return nil
 }
 
-func mustRootClient(t *testing.T, cfg *rest.Config, scheme *runtime.Scheme) client.Client {
-	t.Helper()
-	c, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatalf("root client: %v", err)
-	}
-	return c
-}
-
 // startThroughputManager wires one controller per workspace at the worker count
 // under test, with a reconciler that takes a stated amount of time.
 //

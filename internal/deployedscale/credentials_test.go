@@ -113,10 +113,10 @@ func TestKubeconfigAddressesTheGivenServerAndTrustsTheCA(t *testing.T) {
 		if cfg.BearerToken != creds.Token {
 			t.Error("the kubeconfig does not carry the token kcp was given")
 		}
-		if len(cfg.TLSClientConfig.CAData) == 0 {
+		if len(cfg.CAData) == 0 {
 			t.Error("the kubeconfig trusts no CA, so it would not verify kcp")
 		}
-		if cfg.TLSClientConfig.Insecure {
+		if cfg.Insecure {
 			t.Error("the kubeconfig skips TLS verification")
 		}
 	}

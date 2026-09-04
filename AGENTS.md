@@ -146,6 +146,13 @@ A step that could not run is **never** a pass; report it as its own outcome.
 Never weaken an assertion to get a green run — if the original assertion
 cannot be met, that is the finding to report.
 
+The same rule covers the linter. `task lint` runs `go vet` and then
+golangci-lint's standard set, and a finding is silenced only where the code is
+deliberate and the reason is written down beside it — an inline
+`//nolint:<linter> // why`, or a rule in [`.golangci.yml`](.golangci.yml)
+carrying the same explanation. Disabling a linter to clear a list is the same
+defect as weakening an assertion.
+
 ## Documentation ships with the change
 
 New code and user-visible behaviour ship with matching docs in `docs/site/`,

@@ -190,21 +190,14 @@ var (
 	configMaps = Resource{Resource: "configmaps"}
 
 	clusters           = Resource{Group: "cluster.x-k8s.io", Resource: "clusters"}
-	clusterClasses     = Resource{Group: "cluster.x-k8s.io", Resource: "clusterclasses"}
 	machines           = Resource{Group: "cluster.x-k8s.io", Resource: "machines"}
 	machineSets        = Resource{Group: "cluster.x-k8s.io", Resource: "machinesets"}
 	machineDeployments = Resource{Group: "cluster.x-k8s.io", Resource: "machinedeployments"}
 
-	kubeadmConfigs         = Resource{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigs"}
-	kubeadmConfigTemplates = Resource{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigtemplates"}
-
-	kubeadmControlPlanes         = Resource{Group: "controlplane.cluster.x-k8s.io", Resource: "kubeadmcontrolplanes"}
-	kubeadmControlPlaneTemplates = Resource{Group: "controlplane.cluster.x-k8s.io", Resource: "kubeadmcontrolplanetemplates"}
-
-	devClusters         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devclusters"}
-	devClusterTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devclustertemplates"}
-	devMachines         = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachines"}
-	devMachineTemplates = Resource{Group: "infrastructure.cluster.x-k8s.io", Resource: "devmachinetemplates"}
+	// A provider's own published types are not listed here. They were, one
+	// name per type, until claims on them became DiscoveredClaims — "whatever
+	// a Cluster points at", resolved from the exports installed rather than
+	// enumerated in this file. See Core.
 
 	// What the workspace onboarding export claims. All three are types kcp
 	// serves in every workspace rather than types an export publishes.

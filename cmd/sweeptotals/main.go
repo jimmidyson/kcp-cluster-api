@@ -104,9 +104,7 @@ func run(dir, out string, required []string) error {
 	}
 
 	t := totals{Conditions: map[string]string{}}
-	for _, d := range found {
-		t.Deployments = append(t.Deployments, d)
-	}
+	t.Deployments = append(t.Deployments, found...)
 	sort.Slice(t.Deployments, func(i, j int) bool { return t.Deployments[i].Name < t.Deployments[j].Name })
 
 	byName := map[string]bool{}

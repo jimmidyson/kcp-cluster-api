@@ -60,7 +60,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `verify` | The done-condition: build, lint, unit tests, integration tests, resource sweep |
 | `check` | The inner-loop subset: everything needing no container runtime |
 | `build` | Compile all binaries |
-| `lint` | Static analysis (`go vet`) |
+| `lint` | Static analysis (`go vet`, then golangci-lint) |
 | `test:unit` | Unit tests |
 | `test:integration` | Integration tests against a real kcp server |
 | `test:integration:kcp` | The subset needing only a kcp server, no container runtime |
@@ -74,7 +74,7 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:capi:scale` | Climb stock Cluster API on a Kubernetes cluster until something gives |
 | `test:kcp:scale` | Climb this project's Cluster API on a kcp shard, with the same ladder |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
-| `tools` | Install pinned tooling (the kcp and etcd binaries) into `bin/` |
+| `tools` | Install pinned tooling (the kcp and etcd binaries, and the linter) into `bin/` |
 | `docs:build` | Build the documentation site |
 | `clean` | Remove `bin/` |
 
