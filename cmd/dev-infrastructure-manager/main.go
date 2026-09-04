@@ -81,6 +81,7 @@ var (
 	webhookCertDir          string
 	healthAddr              string
 	metricsAddr             string
+	profilerAddr            string
 	maxConcurrentReconciles int
 
 	logOptions = logs.NewOptions()
@@ -118,6 +119,8 @@ func initFlags(fs *pflag.FlagSet) {
 			"measurement reconcilable with an in-process one.")
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultFleetMaxConcurrentReconciles,
 		"Worker goroutines per controller. One pool for the process, shared by every workspace it serves.")
+
+	managermetrics.RegisterProfilerFlag(fs, &profilerAddr)
 
 	// This project's defaults, set before the flag is defined so that
 	// --feature-gates overrides them rather than the other way round. See
@@ -174,6 +177,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		Metrics:                managermetrics.Options(metricsAddr),
+		PprofBindAddress:       profilerAddr,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:    webhookPort,
 			CertDir: webhookCertDir,

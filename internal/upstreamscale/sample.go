@@ -37,9 +37,15 @@ import (
 )
 
 // ProfilerPort is where every controller serves pprof, set by
-// cmd/capiscale-prepare. Bound on all interfaces rather than localhost, because
-// samples come through the API server's pod proxy, which reaches the pod IP.
-const ProfilerPort = 6060
+// cmd/capiscale-prepare on the stock side and by Options.ProfilerPort on the
+// kcp side. Bound on all interfaces rather than localhost, because samples come
+// through the API server's pod proxy, which reaches the pod IP.
+//
+// One constant for both sides rather than two that agree today: this sampler
+// reads either side by port and path, and a port that differed would take a
+// whole side's managers out of a measurement without taking them out of the
+// fleet.
+const ProfilerPort = deployedscale.ProfilerPort
 
 // Sampler takes one sample of every controller.
 //

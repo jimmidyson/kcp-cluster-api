@@ -77,6 +77,7 @@ var (
 	endpointSliceName           string
 	healthAddr                  string
 	metricsAddr                 string
+	profilerAddr                string
 	etcdDialTimeout             time.Duration
 	etcdCallTimeout             time.Duration
 	remoteConditionsGracePeriod time.Duration
@@ -118,6 +119,8 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultFleetMaxConcurrentReconciles,
 		"Worker goroutines for the KubeadmControlPlane controller. One pool for the process, shared by every "+
 			"workspace it serves.")
+
+	managermetrics.RegisterProfilerFlag(fs, &profilerAddr)
 
 	// This project's defaults, set before the flag is defined so that
 	// --feature-gates overrides them rather than the other way round. See
@@ -174,6 +177,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		Metrics:                managermetrics.Options(metricsAddr),
+		PprofBindAddress:       profilerAddr,
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")

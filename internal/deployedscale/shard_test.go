@@ -17,6 +17,7 @@ limitations under the License.
 package deployedscale
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -171,5 +172,47 @@ func TestSeveralReplicasWithoutAStoreIsRefused(t *testing.T) {
 	o.Etcd = EtcdOptions{Members: 3, QuotaBytes: 1}
 	if err := o.validate(); err != nil {
 		t.Errorf("three replicas over an external store was refused: %v", err)
+	}
+}
+
+// TestTheManagersCanBeReadWithTheSameInstrumentAsTheStockOnes.
+//
+// The stock side's managers are sampled through pprof with gc=1, which forces a
+// collection and so reports the retained set. This side's are scraped from
+// /metrics, where the same field is a point on the collector's sawtooth. Those
+// are different quantities, and subtracting one from the other is the mistake
+// this whole comparison exists to stop — so the managers can be told to serve
+// pprof, on the port the stock side's serve it on.
+func TestTheManagersCanBeReadWithTheSameInstrumentAsTheStockOnes(t *testing.T) {
+	o := testOptions()
+	o.ProfilerPort = ProfilerPort
+
+	for _, c := range o.components() {
+		container := o.ManagerDeployment(c).Spec.Template.Spec.Containers[0]
+		args := strings.Join(container.Args, " ")
+		if !strings.Contains(args, fmt.Sprintf("--profiler-address=:%d", ProfilerPort)) {
+			t.Errorf("%s cannot be read the way the stock side's managers are: %q", c.Name, args)
+		}
+		var named bool
+		for _, p := range container.Ports {
+			if p.ContainerPort == ProfilerPort {
+				named = true
+			}
+		}
+		if !named {
+			t.Errorf("%s does not name the port it serves pprof on: %+v", c.Name, container.Ports)
+		}
+	}
+}
+
+// TestProfilingIsOffUnlessAsked, so that a run taken without it is the shape
+// every recorded deployed run was taken in.
+func TestProfilingIsOffUnlessAsked(t *testing.T) {
+	o := testOptions()
+	for _, c := range o.components() {
+		args := strings.Join(o.ManagerDeployment(c).Spec.Template.Spec.Containers[0].Args, " ")
+		if strings.Contains(args, "profiler") {
+			t.Errorf("%s serves pprof without being asked: %q", c.Name, args)
+		}
 	}
 }

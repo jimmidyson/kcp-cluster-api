@@ -89,6 +89,7 @@ var (
 	webhookKeyName     string
 	healthAddr         string
 	metricsAddr        string
+	profilerAddr       string
 
 	maxConcurrentReconciles int
 
@@ -138,6 +139,8 @@ func initFlags(fs *pflag.FlagSet) {
 		"The address the metrics endpoint binds to. \"0\" disables it. The endpoint serves the Go runtime "+
 			"and process collectors as well as controller-runtime's own, which is what makes a deployed "+
 			"measurement reconcilable with an in-process one.")
+
+	managermetrics.RegisterProfilerFlag(fs, &profilerAddr)
 
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultMaxConcurrentReconciles,
 		"Worker goroutines per controller, per workspace. This is paid once for every engaged workspace, "+
@@ -226,6 +229,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		Metrics:                managermetrics.Options(metricsAddr),
+		PprofBindAddress:       profilerAddr,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:     webhookPort,
 			CertDir:  webhookCertDir,

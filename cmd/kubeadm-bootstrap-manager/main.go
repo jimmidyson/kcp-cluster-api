@@ -81,6 +81,7 @@ var (
 	endpointSliceName       string
 	healthAddr              string
 	metricsAddr             string
+	profilerAddr            string
 	tokenTTL                time.Duration
 	maxConcurrentReconciles int
 
@@ -114,6 +115,8 @@ func initFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", coremanager.DefaultFleetMaxConcurrentReconciles,
 		"Worker goroutines for the KubeadmConfig controller. One pool for the process, shared by every "+
 			"workspace it serves, rather than one per workspace.")
+
+	managermetrics.RegisterProfilerFlag(fs, &profilerAddr)
 
 	// The core reconcilers this provider shares watches with are gated the
 	// same way core-manager's are; see its equivalent comment.
@@ -172,6 +175,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthAddr,
 		Metrics:                managermetrics.Options(metricsAddr),
+		PprofBindAddress:       profilerAddr,
 	})
 	if err != nil {
 		setupLog.Error(err, "Unable to set up multicluster manager")

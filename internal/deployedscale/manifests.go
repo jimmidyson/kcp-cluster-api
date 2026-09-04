@@ -73,6 +73,12 @@ const (
 	MetricsPortName = "metrics"
 	HealthPort      = 9440
 
+	// ProfilerPort is where a manager serves pprof when a run asks it to. The
+	// port the stock side's managers serve it on, so that one sampler reads
+	// either side without being told which it is looking at.
+	ProfilerPort     = 6060
+	ProfilerPortName = "pprof"
+
 	// CredentialsMountPath is where kcp finds its serving certificate and
 	// token file; KubeconfigMountPath is where a manager finds its kubeconfig.
 	CredentialsMountPath = "/etc/kcp-credentials"
@@ -194,6 +200,13 @@ type Options struct {
 	// KcpNodeSelector pins the shard to the pool the comparison gives the
 	// control plane under test, as EtcdOptions.NodeSelector pins its store.
 	KcpNodeSelector map[string]string
+
+	// ProfilerPort makes the managers serve pprof, which is how the stock side
+	// of the comparison is sampled: a heap profile taken with gc=1 is the
+	// retained set, while the same field scraped from /metrics is a point on
+	// the collector's sawtooth. Zero leaves it off, which is the shape every
+	// deployed run recorded so far was taken in.
+	ProfilerPort int32
 
 	// ManagerResources and KcpResources size the containers. A memory limit is
 	// load-bearing rather than hygiene: an OOMKill at a given fleet size is
@@ -519,6 +532,28 @@ func (o Options) shardAffinity() *corev1.Affinity {
 	}
 }
 
+// profilerArgs and profilerPorts turn pprof on when a run asks for it.
+//
+// The address binds every interface rather than localhost, for the reason the
+// stock side's does: the samples come through the API server's pod proxy, which
+// reaches the pod IP, and a driver outside the cluster can read nothing from a
+// profiler bound to the loopback.
+func (o Options) profilerArgs() []string {
+	if o.ProfilerPort <= 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("--profiler-address=:%d", o.ProfilerPort)}
+}
+
+func (o Options) profilerPorts() []corev1.ContainerPort {
+	if o.ProfilerPort <= 0 {
+		return nil
+	}
+	return []corev1.ContainerPort{
+		{Name: ProfilerPortName, ContainerPort: o.ProfilerPort, Protocol: corev1.ProtocolTCP},
+	}
+}
+
 func (o Options) imagePullPolicy() corev1.PullPolicy {
 	if o.ImagePullPolicy == "" {
 		return DefaultImagePullPolicy
@@ -573,16 +608,16 @@ func (o Options) ManagerDeployment(c Component) *appsv1.Deployment {
 			Name:            c.Name,
 			Image:           o.Images[c.Name],
 			ImagePullPolicy: o.imagePullPolicy(),
-			Args: []string{
+			Args: append([]string{
 				"--endpoint-slice-name=" + c.ExportName,
 				fmt.Sprintf("--health-addr=:%d", HealthPort),
 				fmt.Sprintf("--metrics-bind-address=:%d", MetricsPort),
-			},
+			}, o.profilerArgs()...),
 			Env: env,
-			Ports: []corev1.ContainerPort{
+			Ports: append([]corev1.ContainerPort{
 				{Name: MetricsPortName, ContainerPort: MetricsPort, Protocol: corev1.ProtocolTCP},
 				{Name: "health", ContainerPort: HealthPort, Protocol: corev1.ProtocolTCP},
-			},
+			}, o.profilerPorts()...),
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "kubeconfig", MountPath: KubeconfigMountPath, ReadOnly: true},
 			},
