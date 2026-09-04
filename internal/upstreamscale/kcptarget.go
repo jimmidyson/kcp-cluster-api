@@ -45,6 +45,10 @@ import (
 // Behind this interface, the rest of the kcp side is ordinary code: it creates
 // the same objects the stock side creates, counts them the same way, and is
 // tested the same way.
+//
+// Ensure is called from several goroutines at once — a rung's workspaces are
+// made concurrently — so an implementation that keeps state has to say so to
+// itself.
 type Tenancy interface {
 	// Preflight checks the shard can serve what the run is about to create,
 	// before anything is created. The kcp analogue of asking a cluster whether

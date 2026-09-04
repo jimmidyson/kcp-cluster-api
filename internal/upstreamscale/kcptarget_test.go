@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,9 @@ import (
 // fakeTenancy is workspaces without a kcp: each one a client of its own, which
 // is the only thing about a workspace this target depends on.
 type fakeTenancy struct {
+	// mu because Create makes several tenants at once, which is the shape a
+	// real Tenancy is called in — see the interface.
+	mu      sync.Mutex
 	failAt  int
 	made    []string
 	removed []string
@@ -52,6 +56,8 @@ func newFakeTenancy(t *testing.T) *fakeTenancy {
 }
 
 func (f *fakeTenancy) Ensure(_ context.Context, name string) (client.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.failAt != 0 && len(f.made) == f.failAt {
 		return nil, errors.New("the shard said no")
 	}
@@ -70,12 +76,16 @@ func (f *fakeTenancy) Ensure(_ context.Context, name string) (client.Client, err
 }
 
 func (f *fakeTenancy) Remove(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.removed = append(f.removed, name)
 	delete(f.clients, name)
 	return nil
 }
 
 func (f *fakeTenancy) Gone(_ context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	_, still := f.clients[name]
 	return !still, nil
 }
