@@ -459,6 +459,99 @@ tasks:
         -capi-create-concurrency={{.CREATE_CONCURRENCY}}
         -capi-client-qps={{.CLIENT_QPS}}
 
+  test:kcp:scale:
+    desc: Climb this project's Cluster API on a kcp shard, with the same ladder the stock run climbs
+    deps: [tools]
+    # The other half of specs/20260904-090000-comparable-kcp-stock-scale: the
+    # same driver, the same ladder and the same instrument as test:capi:scale,
+    # against a kcp shard instead of a Kubernetes API server. The two reports
+    # are meant to be read side by side, so the knobs below are deliberately
+    # the same knobs, with the same defaults.
+    #
+    # Outside `verify` and `check`, like every other scale measurement: with no
+    # cluster reachable the run skips, which is distinct from failing.
+    vars:
+      KUBECONFIG_PATH: '{{.KUBECONFIG_PATH | default ""}}'
+      KUBECONTEXT: '{{.KUBECONTEXT | default ""}}'
+      NAMESPACE: '{{.NAMESPACE | default "kcp-scale"}}'
+      IMAGE_TAG: '{{.IMAGE_TAG | default "latest"}}'
+      IMAGE_PULL_POLICY: '{{.IMAGE_PULL_POLICY | default "IfNotPresent"}}'
+      # The same ladder as test:capi:scale, knob for knob.
+      START_CLUSTERS: '{{.START_CLUSTERS | default "25"}}'
+      MAX_CLUSTERS: '{{.MAX_CLUSTERS | default "400"}}'
+      NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "10"}}'
+      CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "3"}}'
+      # Per workspace here, per namespace there. Same number, or the two runs
+      # are not the same fleet.
+      CLUSTERS_PER_WORKSPACE: '{{.CLUSTERS_PER_WORKSPACE | default "10"}}'
+      STEP_TIMEOUT: '{{.STEP_TIMEOUT | default "45m"}}'
+      SOAK: '{{.SOAK | default "30m"}}'
+      TEARDOWN_TIMEOUT: '{{.TEARDOWN_TIMEOUT | default "30m"}}'
+      SETTLE_TIMEOUT: '{{.SETTLE_TIMEOUT | default "5m"}}'
+      SHARD_HEAP_SAMPLES: '{{.SHARD_HEAP_SAMPLES | default "5"}}'
+      CREATE_CONCURRENCY: '{{.CREATE_CONCURRENCY | default "16"}}'
+      CLIENT_QPS: '{{.CLIENT_QPS | default "200"}}'
+      OUT_NAME: '{{.OUT_NAME | default "kcp-scale"}}'
+      KEEP: '{{.KEEP | default "false"}}'
+      # Three processes and three etcd members, because the stock side is three
+      # kube-apiservers behind a VIP over kubeadm's three-member store. One
+      # replica against three is a comparison of one process with three.
+      SHARD_REPLICAS: '{{.SHARD_REPLICAS | default "3"}}'
+      ETCD_MEMBERS: '{{.ETCD_MEMBERS | default "3"}}'
+      # A PersistentVolume per member: a member that loses its data directory
+      # cannot rejoin, so the store quietly becomes two members and a crash
+      # loop. Empty takes the cluster's default class, which on a cluster with
+      # none leaves every member Pending.
+      ETCD_STORAGE_CLASS: '{{.ETCD_STORAGE_CLASS | default ""}}'
+      ETCD_STORAGE_SIZE: '{{.ETCD_STORAGE_SIZE | default "100Gi"}}'
+      # 8 GiB, the stock side's quota. A different one is a different ceiling.
+      ETCD_QUOTA_BYTES: '{{.ETCD_QUOTA_BYTES | default "8589934592"}}'
+      # key=value pinning the shard and its store to the nodes the comparison
+      # gives the control plane under test. Empty leaves them to the scheduler,
+      # which is not the same budget the stock side's control plane gets.
+      CONTROL_PLANE_NODE_SELECTOR: '{{.CONTROL_PLANE_NODE_SELECTOR | default ""}}'
+      KCP_MEMORY: '{{.KCP_MEMORY | default ""}}'
+      MANAGER_MEMORY: '{{.MANAGER_MEMORY | default ""}}'
+    requires:
+      vars: [MANAGER_IMAGE]
+    cmds:
+      # One test in this package, by name: the others in it are the deployed
+      # harness and the local kcp checks, and this task is one measurement.
+      - >-
+        PATH="{{.BIN}}:$PATH" go test -tags integration -count 1 -v -timeout 24h
+        ./test/integration/deployed/... -run TestKcpClusterApiClimbsUntilSomethingGives
+        -args
+        -deployed-kcp-image={{.KCP_IMAGE | default (printf "ghcr.io/kcp-dev/kcp:%s" .KCP_VERSION)}}
+        -deployed-manager-image={{.MANAGER_IMAGE}}
+        -deployed-image-tag={{.IMAGE_TAG}}
+        -deployed-image-pull-policy={{.IMAGE_PULL_POLICY}}
+        -deployed-namespace={{.NAMESPACE}}
+        -deployed-kubeconfig={{.KUBECONFIG_PATH}}
+        -deployed-context={{.KUBECONTEXT}}
+        -deployed-kcp-memory-limit={{.KCP_MEMORY}}
+        -deployed-manager-memory-limit={{.MANAGER_MEMORY}}
+        -comparable-start-clusters={{.START_CLUSTERS}}
+        -comparable-max-clusters={{.MAX_CLUSTERS}}
+        -comparable-nodes-per-cluster={{.NODES_PER_CLUSTER}}
+        -comparable-control-plane-nodes={{.CONTROL_PLANE_NODES}}
+        -comparable-clusters-per-workspace={{.CLUSTERS_PER_WORKSPACE}}
+        -comparable-shard-replicas={{.SHARD_REPLICAS}}
+        -comparable-etcd-members={{.ETCD_MEMBERS}}
+        -comparable-etcd-storage-class={{.ETCD_STORAGE_CLASS}}
+        -comparable-etcd-storage-size={{.ETCD_STORAGE_SIZE}}
+        -comparable-etcd-quota-bytes={{.ETCD_QUOTA_BYTES}}
+        -comparable-control-plane-node-selector={{.CONTROL_PLANE_NODE_SELECTOR}}
+        -comparable-step-timeout={{.STEP_TIMEOUT}}
+        -comparable-soak={{.SOAK}}
+        -comparable-teardown-timeout={{.TEARDOWN_TIMEOUT}}
+        -comparable-settle-timeout={{.SETTLE_TIMEOUT}}
+        -comparable-shard-heap-samples={{.SHARD_HEAP_SAMPLES}}
+        -comparable-create-concurrency={{.CREATE_CONCURRENCY}}
+        -comparable-client-qps={{.CLIENT_QPS}}
+        -comparable-out={{.BIN}}
+        -comparable-out-name={{.OUT_NAME}}
+        -comparable-keep={{.KEEP}}
+
   test:capi:cluster:
     desc: Prepare a cluster for the stock Cluster API scale test — set KUBECONFIG to the cluster under test
     # Stock upstream Cluster API on an ordinary Kubernetes cluster, with the

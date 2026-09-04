@@ -71,8 +71,10 @@ and nothing else — so anything CI does is reproducible locally by name.
 | `test:scale:kind` | Scale a fleet on a throwaway local kind cluster — creates it, builds the images, runs |
 | `test:scale:cluster` | Scale a fleet on a Kubernetes cluster, one Deployment per manager |
 | `test:scale:images` | Build the manager images a cluster run deploys |
+| `test:capi:scale` | Climb stock Cluster API on a Kubernetes cluster until something gives |
+| `test:kcp:scale` | Climb this project's Cluster API on a kcp shard, with the same ladder |
 | `drift` | Check the fork's divergence from its base against `DRIFT.md` |
-| `tools` | Install pinned tooling (the kcp server binary) into `bin/` |
+| `tools` | Install pinned tooling (the kcp and etcd binaries) into `bin/` |
 | `docs:build` | Build the documentation site |
 | `clean` | Remove `bin/` |
 

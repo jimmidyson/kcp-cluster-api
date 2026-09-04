@@ -4,8 +4,8 @@
 
 **Created**: 2026-09-04
 
-**Status**: Draft — the shared runner, the `Target` seam and per-replica
-sampling (R4a) are built; the kcp `Target` and the flag wiring are not.
+**Status**: Draft — built and runnable from one command a side; not yet run
+against the cluster, so nothing here is measured except where it says so.
 
 ## Purpose
 
@@ -153,6 +153,28 @@ figure appears. Everything else is either held or is the subject.
   controller leadership.
 - **S5** Both sides soaked at the largest fleet that converged, with the
   peak-aware drift check.
+
+## Running it
+
+Two commands, one per side, against the same cluster:
+
+```sh
+task test:capi:scale KUBECONFIG_PATH=bin/capi-scale.kubeconfig
+task test:kcp:scale  MANAGER_IMAGE=<registry/prefix> KUBECONTEXT=<the same cluster> \
+  ETCD_STORAGE_CLASS=<a Nutanix CSI class> CONTROL_PLANE_NODE_SELECTOR=<key=value>
+```
+
+The knobs are deliberately the same knobs with the same defaults —
+`START_CLUSTERS`, `MAX_CLUSTERS`, `NODES_PER_CLUSTER`, `CONTROL_PLANE_NODES`,
+`SOAK`, `CREATE_CONCURRENCY`, `CLIENT_QPS` — and the one that differs in name
+means the same thing: `CLUSTERS_PER_NAMESPACE` on the stock side and
+`CLUSTERS_PER_WORKSPACE` on the kcp side. Two runs whose knobs disagree are two
+fleets, and the reports would be diffable without being comparable.
+
+`ETCD_STORAGE_CLASS` empty takes the cluster's default class, which on a cluster
+with none leaves every member `Pending` rather than failing; and
+`CONTROL_PLANE_NODE_SELECTOR` empty leaves the shard and its store to the
+scheduler, which is not the budget R5 asks for.
 
 ## Open questions, to be answered with measurements
 

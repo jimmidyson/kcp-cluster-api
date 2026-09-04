@@ -16,6 +16,26 @@ having to reconstruct the answer from the commit log.
 
 ## Next
 
+- **The comparison between stock Cluster API and this project can now be run,
+  and has not been.** One driver climbs one ladder against either side —
+  `task test:capi:scale` for stock Cluster API on a Kubernetes API server,
+  `task test:kcp:scale` for this project's on a kcp shard — on the same cluster,
+  with the same fleet, the same instrument and the same report. Taking the two
+  runs is dispatchable now and needs a cluster with a CSI storage class and
+  three nodes to give the control plane under test; each is hours of wall clock,
+  so neither is anybody's pull request gate. What they would settle is the
+  question this project exists to answer and has never measured end to end: what
+  a cluster costs on each side, per component and in total, at the same fleet
+  sizes on the same hardware. Commit both runs under the feature's `evidence/`,
+  per AGENTS.md's rule that a scalability claim is measured. Specified in
+  [`specs/20260904-090000-comparable-kcp-stock-scale`](../specs/20260904-090000-comparable-kcp-stock-scale/spec.md);
+  design note in
+  [One scale test, two control planes](site/content/en/docs/design/comparable-scale-runs.md).
+  The stock side's own ceiling run is already committed — 1600 clusters and
+  16,000 Machines, in
+  [`specs/20260903-140000-upstream-capi-scale/evidence`](../specs/20260903-140000-upstream-capi-scale/evidence/README.md)
+  — and it is a floor rather than a ceiling: nothing had run out when it stopped.
+
 - **The 200-cluster run has an instrument and no figure yet.**
   `task test:scale:local` drives a stated fleet — 200 clusters of 50 nodes, at
   two spreads over workspaces — to its end state and reports what it cost.
