@@ -30,26 +30,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
-	"golang.org/x/sync/errgroup"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-
-	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 	"github.com/jimmidyson/kcp-cluster-api/internal/upstreamscale"
 )
 
@@ -131,371 +123,77 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 
 	ctx := ctrl.SetupSignalHandler()
 
-	// Preflight before anything is created. This is the one risk no test of
-	// this code can find: the objects come from this repository's fork and the
-	// CRDs from whatever clusterctl installed.
-	if err := preflight(ctx, cfg); err != nil {
-		t.Fatalf("this cluster cannot serve what the run creates:\n%v", err)
-	}
-
-	shape := upstreamscale.FleetShape{
-		ClustersPerNamespace: *perNamespace,
-		ControlPlaneMachines: *controlPlanes,
-		WorkerMachines:       *nodesPer - *controlPlanes,
-	}
-	report := &deployedscale.Report{Title: fmt.Sprintf(
-		"Stock Cluster API: climbing from %d clusters at %d nodes each",
-		*startClusters, *nodesPer)}
-	report.AddFact("clusterApi", "stock upstream, installed by clusterctl")
-	report.AddFact("devClusterBackend", "inMemory")
-	report.AddFact("nodesPerCluster", fmt.Sprint(*nodesPer))
-	report.AddFact("clustersPerNamespace", fmt.Sprint(*perNamespace))
-	report.AddFact("endState", "every control plane ready and every Machine Ready")
-	report.AddFact("driver", fmt.Sprintf("creates %d namespaces' objects at once, at %g QPS "+
-		"(burst %d): client-go's default is 5 QPS, which times the driver rather than the cluster",
-		*createConcurrency, *clientQPS, *clientBurst))
-	report.AddFact("heapSample", "every controller's is read through pprof with gc=1, so live heap is "+
-		"the retained set; the API server's line says for itself, since the collection it needs is a "+
-		"separate best-effort request")
-
 	sampler, err := upstreamscale.NewSampler(cfg)
 	if err != nil {
 		t.Fatalf("building a sampler: %v", err)
 	}
-	controllers := upstreamscale.Controllers()
-	defragmenter := upstreamscale.NewDefragmenter(cfg, mustRESTClient(t, cfg))
 
-	// Everything this run creates, torn down at the end unless asked not to.
+	target := &upstreamscale.StockTarget{
+		Client:  cl,
+		Config:  cfg,
+		Sampler: sampler,
+		Shape: upstreamscale.FleetShape{
+			ClustersPerNamespace: *perNamespace,
+			ControlPlaneMachines: *controlPlanes,
+			WorkerMachines:       *nodesPer - *controlPlanes,
+		},
+		NodesPerCluster: *nodesPer,
+	}
+
+	runner := &upstreamscale.Runner{
+		Target:       target,
+		Host:         cl,
+		Sampler:      sampler,
+		Defragmenter: upstreamscale.NewDefragmenter(cfg, mustRESTClient(t, cfg)),
+		Logf:         t.Logf,
+		Options: upstreamscale.RunOptions{
+			StartClusters:     *startClusters,
+			MaxClusters:       *maxClusters,
+			NodesPerCluster:   *nodesPer,
+			CreateConcurrency: *createConcurrency,
+			SettleTolerance:   *settleTolerance,
+			SettleTimeout:     *settleTimeout,
+			StepTimeout:       *stepTimeout,
+			PollInterval:      *pollInterval,
+			Soak:              *soak,
+			SoakInterval:      *soakInterval,
+			TeardownTimeout:   *teardownTimeout,
+			APIHeapSamples:    *apiHeapSamples,
+			APIHeapGap:        *apiHeapGap,
+			DriverFact: fmt.Sprintf("creates %d namespaces' objects at once, at %g QPS "+
+				"(burst %d): client-go's default is 5 QPS, which times the driver rather than "+
+				"the cluster", *createConcurrency, *clientQPS, *clientBurst),
+		},
+	}
+
+	// Everything the run creates, torn down at the end unless asked not to.
 	//
-	// Clusters first, then namespaces, and never the other way round: stock
-	// Cluster API cannot finish deleting a namespace whose objects were all
-	// stamped at once. The first run left every namespace Terminating that
-	// way. See upstreamscale.Teardown. A teardown that does not finish is a
-	// failure of the run, after the report is written: what it leaves behind
-	// is what the next run would measure as its baseline.
-	var created []string
+	// Registered before the run so that a half-built rung is removed too: what
+	// a failed run leaves behind is what the next one measures as its baseline.
 	t.Cleanup(func() {
 		if *keep {
-			t.Logf("NOTE: leaving %d namespaces behind (--capi-keep)", len(created))
+			t.Logf("NOTE: leaving %d namespaces behind (--capi-keep)", len(runner.Created))
 			return
 		}
-		if err := upstreamscale.Teardown(context.Background(), cl, created, *teardownTimeout, *pollInterval, t.Logf); err != nil {
+		if err := runner.Teardown(context.Background()); err != nil {
 			t.Errorf("teardown did not finish: %v", err)
 		}
 	})
 
-	sample := func(label string, clusters, machines int) {
-		components, throttling, err := sampler.Sample(ctx, cl, controllers)
-		if err != nil {
-			t.Logf("NOTE: could not sample the controllers at %s: %v", label, err)
-			return
+	report, ceiling, runErr := runner.Run(ctx)
+	if report != nil {
+		if err := report.Write(*outDir, *outName); err != nil {
+			t.Errorf("writing the report: %v", err)
 		}
-		if api, err := sampler.APIServer(ctx, *apiHeapSamples, *apiHeapGap); err == nil {
-			components = append(components, deployedscale.ComponentSample{
-				Component: "kube-apiserver",
-				Process:   api.Process,
-				Pod:       deployedscale.PodFacts{Name: "kube-apiserver", Ready: true},
-			})
-			report.AddFact("apiserver@"+label, api.Describe())
-		} else {
-			t.Logf("NOTE: could not sample the API server at %s: %v", label, err)
-		}
-		if etcd, pod, err := sampler.Etcd(ctx, cl); err == nil {
-			report.AddFact("etcd@"+label, etcd.Describe())
-			if etcd.NearQuota() {
-				t.Logf("WARNING at %s: %s", label, etcd.Describe())
-			}
-		} else {
-			t.Logf("NOTE: could not sample etcd (%s) at %s: %v", pod, label, err)
-		}
-		for name, th := range throttling {
-			if th.Significant() {
-				report.AddFact("throttling@"+label+"/"+name, th.Describe())
-			}
-		}
-		report.Add(deployedscale.Sample{
-			Label: label, Workspaces: clusters, Clusters: clusters, Nodes: machines,
-			Components: components,
-		})
+		t.Logf("report written to %s", filepath.Join(*outDir, *outName+".md"))
 	}
-
-	// Wait for the controllers to finish starting before the baseline.
-	//
-	// A manager does not reach its resting size when its pod goes Running: the
-	// 25x1 run caught the kubeadm control plane manager at 35 goroutines with
-	// no fleet, and three minutes later, still with no fleet, it reported 375.
-	// The baseline is the zero point of every figure in the report, so a
-	// baseline of a starting manager inflates every slope measured from it —
-	// that run reported half again the per-rung cost the settled runs did.
-	//
-	// Reported either way rather than fatal: a moving baseline is a caveat on
-	// the numbers, and is worth more than no run.
-	if settle, err := upstreamscale.WaitForSettled(ctx, sampler, cl, controllers,
-		*settleTolerance, *settleTimeout, *pollInterval); err != nil {
-		t.Logf("NOTE: could not wait for the controllers to settle: %v", err)
-	} else {
-		report.AddFact("baseline", settle.Describe())
-		t.Logf("%s", settle.Describe())
-	}
-
-	// Defragment before the baseline, not only between rungs.
-	//
-	// The quota counts the backend file rather than the live data in it, so a
-	// store carrying a previous run's free pages makes the baseline and the
-	// first rung incomparable with every rung after the first defrag. The
-	// second real run showed exactly that: etcd at 32.6 MiB holding two
-	// clusters and 14.1 MiB holding four, which reads as a store shrinking as
-	// the fleet grows. Before the baseline is not inside a rung, so R6a's rule
-	// holds — and a run whose etcd column is not comparable across its own
-	// rungs has no etcd column.
-	if results, err := defragmenter.All(ctx, cl, sampler); err == nil {
-		report.AddFact("defrag@baseline", upstreamscale.DescribeDefrag(results))
-		t.Logf("%s", upstreamscale.DescribeDefrag(results))
-	} else {
-		t.Logf("NOTE: could not defragment before the baseline: %v", err)
-	}
-
-	// The baseline, before any fleet exists. Every slope this run reports is a
-	// difference between two large numbers, and without this the smaller of
-	// them is still a fleet.
-	sample("baseline (no clusters)", 0, 0)
-
-	var rungs []upstreamscale.RungResult
-	held := 0
-	for i, clusters := range upstreamscale.Ladder(*startClusters, *maxClusters) {
-		shape.Clusters = clusters
-		if err := shape.Validate(); err != nil {
-			t.Fatalf("rung of %d clusters: %v", clusters, err)
-		}
-		fleet := upstreamscale.PlanFleet(shape)
-		machines := fleet.Machines()
-
-		// Between rungs, never inside one: a defrag is a stop-the-world
-		// rewrite on the member, and the quota counts the file rather than the
-		// live data in it. See upstreamscale.Defragmenter.
-		if i > 0 {
-			if results, err := defragmenter.All(ctx, cl, sampler); err == nil {
-				report.AddFact(fmt.Sprintf("defrag@%d", clusters), upstreamscale.DescribeDefrag(results))
-				t.Logf("%s", upstreamscale.DescribeDefrag(results))
-			} else {
-				t.Logf("NOTE: could not defragment before %d clusters: %v", clusters, err)
-			}
-		}
-
-		t.Logf("=== rung: %d clusters, %d Machines", clusters, machines)
-
-		// Creation is timed apart from convergence, because the driver
-		// applying a rung's objects through one client is itself work and the
-		// spec names it as a candidate bottleneck. A total that cannot be
-		// split is not a measurement of Cluster API. See RungResult.
-		startedCreate := time.Now()
-		madeNamespaces, err := create(ctx, cl, fleet, *createConcurrency)
-		created = append(created, madeNamespaces...)
-		if err != nil {
-			rungs = append(rungs, upstreamscale.RungResult{
-				Clusters: clusters, Machines: machines, Added: clusters - held,
-				CreatedIn: time.Since(startedCreate),
-				Failure:   "the fleet could not be created: " + err.Error(),
-			})
-			break
-		}
-		createdIn := time.Since(startedCreate)
-		t.Logf("    created in %s", createdIn.Round(time.Second))
-
-		startedWait := time.Now()
-		converged, why := wait(ctx, t, cl, sampler, controllers, clusters, machines)
-		// Added, not held: this rung kept whatever the one below it left
-		// converged, so its wait is the increment's and so is its pace.
-		rung := upstreamscale.RungResult{
-			Clusters: clusters, Machines: machines, Added: clusters - held,
-			Converged: converged,
-			CreatedIn: createdIn, WaitedFor: time.Since(startedWait),
-		}
-		held = clusters
-		label := fmt.Sprintf("%d clusters", clusters)
-		if !converged {
-			rung.Failure = why
-			label += " (did not converge)"
-		}
-		sample(label, clusters, machines)
-		report.AddFact(fmt.Sprintf("rung@%d", clusters), rung.Timing())
-		t.Logf("    %s", rung.Timing())
-		rungs = append(rungs, rung)
-		if !converged {
-			break
-		}
-	}
-
-	ceiling := upstreamscale.Summarise(rungs)
-	report.AddFact("ceiling", ceiling.Describe())
-	t.Logf("%s", ceiling.Describe())
-
-	// Then hold it. Reaching a fleet and holding it are different questions.
-	if ceiling.LastGood != nil && *soak > 0 {
-		holdAndReport(ctx, t, cl, report, sample, ceiling, *soak, *soakInterval)
-	}
-
-	if err := report.Write(*outDir, *outName); err != nil {
-		t.Errorf("writing the report: %v", err)
-	}
-	t.Logf("report written to %s", filepath.Join(*outDir, *outName+".md"))
 
 	// A climb that measured nothing is a failure; one that found a ceiling is
 	// a result, whichever rung it stopped at.
-	if ceiling.LastGood == nil {
-		t.Fatalf("measured nothing: %s", ceiling.Describe())
+	if runErr != nil {
+		t.Fatalf("%v", runErr)
 	}
-}
-
-// create applies one rung's blueprint and Clusters, several namespaces at once.
-//
-// # Why this is concurrent
-//
-// It was not, and the first ceiling run spent 7m52s creating 400 clusters —
-// against 1m29s for the 200 the ladder added at its top rung, which is more
-// than twice the time for twice the objects. Serial creation through one client
-// makes the driver's own throughput part of every rung's wall time, and the
-// spec named that as the risk that would stop this measuring Cluster API.
-//
-// Namespaces run in parallel and each namespace's objects stay in order, since
-// a Cluster names a ClusterClass in its own namespace and the class has to
-// exist first.
-//
-// The namespaces created are returned even when one fails, so that teardown
-// removes what a half-built rung left behind.
-func create(ctx context.Context, cl client.Client, fleet upstreamscale.Fleet, concurrency int) ([]string, error) {
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	var (
-		mu      sync.Mutex
-		created []string
-	)
-
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(concurrency)
-	for _, ns := range fleet.Namespaces {
-		group.Go(func() error {
-			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns.Name}}
-			if err := cl.Create(groupCtx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("creating namespace %s: %w", ns.Name, err)
-			}
-			mu.Lock()
-			created = append(created, ns.Name)
-			mu.Unlock()
-
-			// The blueprint in dependency order, the class last, so that by
-			// the time it exists everything it refers to does.
-			for _, obj := range upstreamscale.Blueprint(ns.Name) {
-				if err := cl.Create(groupCtx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating %T in %s: %w", obj, ns.Name, err)
-				}
-			}
-			for _, cluster := range upstreamscale.Clusters(ns.Name, ns.Clusters, fleet.Shape) {
-				if err := cl.Create(groupCtx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating cluster %s/%s: %w", ns.Name, cluster.Name, err)
-				}
-			}
-			return nil
-		})
-	}
-	return created, group.Wait()
-}
-
-// wait polls until the rung reaches the end state, or a component dies, or time
-// runs out — and says which.
-func wait(ctx context.Context, t *testing.T, cl client.Client, sampler *upstreamscale.Sampler,
-	controllers []upstreamscale.Controller, clusters, machines int,
-) (bool, string) {
-	deadline := time.Now().Add(*stepTimeout)
-	var last upstreamscale.Convergence
-
-	for {
-		var clusterList clusterv1.ClusterList
-		var machineList clusterv1.MachineList
-		if err := cl.List(ctx, &clusterList); err != nil {
-			return false, "listing clusters: " + err.Error()
-		}
-		if err := cl.List(ctx, &machineList); err != nil {
-			return false, "listing machines: " + err.Error()
-		}
-		last = upstreamscale.Converged(clusterList.Items, machineList.Items, clusters, machines)
-		if last.Done {
-			return true, ""
-		}
-
-		// A component that died is why the fleet has not arrived, rather than
-		// a second thing that went wrong. Checked every poll so that a kill is
-		// reported promptly rather than after the step timeout.
-		if components, _, err := sampler.Sample(ctx, cl, controllers); err == nil {
-			if why := upstreamscale.Classify(components, false); why != "" {
-				return false, why
-			}
-		}
-
-		if time.Now().After(deadline) {
-			return false, fmt.Sprintf("%s (%s)",
-				upstreamscale.Classify(nil, true), last.Describe())
-		}
-		t.Logf("    %s", last.Describe())
-		select {
-		case <-ctx.Done():
-			return false, "interrupted: " + last.Describe()
-		case <-time.After(*pollInterval):
-		}
-	}
-}
-
-// holdAndReport soaks the largest fleet that converged.
-func holdAndReport(ctx context.Context, t *testing.T, cl client.Client, report *deployedscale.Report,
-	sample func(string, int, int), ceiling upstreamscale.Ceiling, duration, interval time.Duration,
-) {
-	t.Logf("=== soak: holding %d clusters for %s", ceiling.LastGood.Clusters, duration)
-	before := len(report.Samples)
-	deadline := time.Now().Add(duration)
-	for n := 0; ; n++ {
-		sample(fmt.Sprintf("soak %s", time.Duration(n)*interval), ceiling.LastGood.Clusters,
-			ceiling.LastGood.Machines)
-		if time.Now().After(deadline) {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Log("NOTE: the soak was interrupted")
-			return
-		case <-time.After(interval):
-		}
-	}
-
-	// Ready at the end, which no process metric shows.
-	ready := 0
-	var clusterList clusterv1.ClusterList
-	if err := cl.List(ctx, &clusterList); err == nil {
-		for i := range clusterList.Items {
-			c := upstreamscale.Converged(clusterList.Items[i:i+1], nil, 1, 0)
-			ready += c.ControlPlanesReady
-		}
-	}
-	drift := upstreamscale.Drift(report.Samples[before:], ceiling.LastGood.Clusters, ready)
-	report.AddFact("soak", drift.Describe())
-	t.Logf("%s", drift.Describe())
-}
-
-func preflight(ctx context.Context, cfg *rest.Config) error {
-	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("building a discovery client: %w", err)
-	}
-	served := map[string][]string{}
-	for _, gv := range upstreamscale.NeededGroupVersions() {
-		list, err := dc.ServerResourcesForGroupVersion(gv)
-		if err != nil {
-			continue
-		}
-		served[gv] = upstreamscale.IndexResources([]*metav1.APIResourceList{list})[gv]
-	}
-	_ = ctx
-	return upstreamscale.Preflight(served)
+	_ = ceiling
 }
 
 func restConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
