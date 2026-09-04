@@ -156,6 +156,15 @@ replica and one member each, which is the shape kubeadm gives the stock side;
 node with the shard it is driving makes the shard's figures a measurement of
 both.
 
+The labels come from the cluster's own topology — `CONTROL_PLANE_POOL_WORKERS`
+splits the generated worker pool into two labelled MachineDeployments — so a
+node that is replaced comes back labelled. The domain is the mechanism: Cluster
+API syncs only `node-role.kubernetes.io`, `node-restriction.kubernetes.io` and
+`node.cluster.x-k8s.io` labels from a Machine to its Node, because the kubelet
+cannot self-assign anything else. A label outside those domains reaches the
+Machine and stops, and the failure is silent — unlabelled nodes, unschedulable
+pods, no explanation.
+
 The specification has the commands.
 
 Neither has been run yet at the time of writing: this describes the instrument,

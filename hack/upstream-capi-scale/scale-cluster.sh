@@ -123,6 +123,10 @@ WORKER_COUNT="${WORKER_COUNT:-4}"
 # so a cluster that will host both needs a provisioner. Off by default, because
 # the recorded stock figures were taken without it.
 KEEP_CSI="${KEEP_CSI:-false}"
+# Split the worker pool so the kcp side's shard and store get nodes of their
+# own, labelled by the topology rather than by hand. Carved out of WORKER_COUNT,
+# not added to it. Zero leaves the single pool the recorded stock runs used.
+CONTROL_PLANE_POOL_WORKERS="${CONTROL_PLANE_POOL_WORKERS:-0}"
 
 CONTROL_PLANE_VCPUS="${CONTROL_PLANE_VCPUS:-16}"
 CONTROL_PLANE_MEMORY="${CONTROL_PLANE_MEMORY:-32Gi}"
@@ -160,6 +164,7 @@ Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
 Cluster API under test   ${CAPI_VERSION}
 etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
+  control plane pool       ${CONTROL_PLANE_POOL_WORKERS} of ${WORKER_COUNT} workers (0 = one unlabelled pool)
 CONFIG
 }
 
@@ -359,6 +364,7 @@ create() {
     | go run "${REPO_ROOT}/cmd/capiscale-template" \
         --workers "${WORKER_COUNT}" \
         --keep-csi="${KEEP_CSI}" \
+        --control-plane-pool-workers="${CONTROL_PLANE_POOL_WORKERS}" \
         --control-plane-vcpus "${CONTROL_PLANE_VCPUS}" \
         --control-plane-memory "${CONTROL_PLANE_MEMORY}" \
         --control-plane-disk "${CONTROL_PLANE_DISK}" \

@@ -234,24 +234,55 @@ done
 Scale them back before the next stock run. Their CRDs and webhooks can stay:
 the kcp side creates no Cluster API object in the hosting cluster.
 
-**Three: the two pools have to be named.** R5 wants the control plane under test
-on its own nodes, and on this cluster that is three of the four workers holding
-one shard replica and one etcd member each — which is exactly the shape kubeadm
-gives the stock side, an API server and an etcd member per control plane node.
-The fourth worker takes the managers, and it takes them because it is asked to:
+**Three: the two pools have to be named, and the cluster names them.** R5 wants
+the control plane under test on its own nodes, and on this cluster that is three
+of the four workers holding one shard replica and one etcd member each — which
+is exactly the shape kubeadm gives the stock side, an API server and an etcd
+member per control plane node. The fourth worker takes the managers, and it
+takes them because it is asked to.
+
+The labels come from the topology rather than from `kubectl label node`:
 
 ```sh
-kubectl label node <worker-1> <worker-2> <worker-3> scale-role=control-plane
-kubectl label node <worker-4> scale-role=managers
-
-task test:kcp:scale MANAGER_IMAGE=... \
-  CONTROL_PLANE_NODE_SELECTOR=scale-role=control-plane \
-  MANAGER_NODE_SELECTOR=scale-role=managers
+CONTROL_PLANE_POOL_WORKERS=3 WORKER_COUNT=4 ./scale-cluster.sh cluster
 ```
 
-Without the second label the managers are scheduled wherever there is room,
+which splits the generated worker pool into two labelled MachineDeployments,
+and the label travels MachineDeployment → MachineSet → Machine → Node. A node
+that is replaced comes back labelled, which a hand-run `kubectl label` does not
+survive — and this is a cluster whose whole purpose is to be pushed until
+something breaks.
+
+**The label's domain is the mechanism, not a naming choice.** Cluster API does
+not copy arbitrary Machine labels to a Node: the kubelet cannot self-assign
+labels outside the NodeRestriction domains, so the Machine controller syncs only
+what `util/labels.GetManagedLabels` admits — `node-role.kubernetes.io`,
+`node-restriction.kubernetes.io` and `node.cluster.x-k8s.io`, each with their
+subdomains, plus anything matching the core manager's
+`--additional-sync-machine-labels`. A pool labelled `scale-role=control-plane`
+would reach the MachineDeployment, the MachineSet and the Machine and stop
+there, silently: the nodes come up unlabelled, the shard's pods are
+unschedulable, and nothing says why. So the label is
+`node.cluster.x-k8s.io/scale-role`, which propagates without asking anything of
+the management cluster's own flags, and a unit test ties that constant to
+upstream's so a rename there fails here rather than in a run.
+
+The run then selects on it:
+
+```sh
+task test:kcp:scale MANAGER_IMAGE=... \
+  CONTROL_PLANE_NODE_SELECTOR=node.cluster.x-k8s.io/scale-role=control-plane \
+  MANAGER_NODE_SELECTOR=node.cluster.x-k8s.io/scale-role=managers
+```
+
+Without the second selector the managers are scheduled wherever there is room,
 which is the three nodes the shard is pinned to — and a manager sharing a node
 with the shard it is driving makes the shard's figures a measurement of both.
+
+On a cluster that already exists, the same labels can be added to its topology
+in place: Cluster API propagates a MachineDeployment's template metadata down to
+existing Machines without a rollout, so relabelling costs nothing but a
+reconcile.
 
 **What each run leaves for the other.** Both tear down what they created and
 wait for it to go, which is R8 and is where the stock side's own numbers were

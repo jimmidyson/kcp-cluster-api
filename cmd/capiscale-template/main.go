@@ -38,9 +38,17 @@ import (
 func main() {
 	fs := flag.NewFlagSet("capiscale-template", flag.ExitOnError)
 	sizing := upstreamscale.Sizing{}
-	fs.IntVar(&sizing.Workers, "workers", 4, "Replicas for every worker pool, replacing the autoscaler "+
-		"annotations CAREN's example sizes them with. A scale test cannot have its own management "+
-		"cluster resizing underneath it.")
+	fs.IntVar(&sizing.Workers, "workers", 4, "How many worker nodes the cluster has in total, replacing "+
+		"the autoscaler annotations CAREN's example sizes them with. A scale test cannot have its own "+
+		"management cluster resizing underneath it.")
+	// The comparison gives the control plane under test its own nodes, and the
+	// labels have to come from the topology rather than from somebody
+	// remembering to run kubectl: a node that is replaced comes back with
+	// whatever the MachineDeployment says and nothing else.
+	fs.IntVar(&sizing.ControlPlanePoolWorkers, "control-plane-pool-workers", 0,
+		"Split the workers into two labelled pools, this many of them for the control plane under test "+
+			"and the rest for everything else. Carved out of -workers rather than added to it. Zero "+
+			"leaves the single pool the stock runs were taken on.")
 	// CAREN's example builds every node at 2 vCPU and 4 GiB. That is a sensible
 	// quick start and a sixth of the memory the sizing document asks the
 	// control plane for — and nothing in a run would report it as wrong: the

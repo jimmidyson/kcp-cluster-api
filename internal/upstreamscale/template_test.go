@@ -19,6 +19,11 @@ package upstreamscale
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 // generated is the shape clusterctl produces from CAREN's own quick-start
@@ -289,4 +294,165 @@ func TestCsiStaysWhenTheStoreNeedsIt(t *testing.T) {
 	if strings.Contains(without, "csi") {
 		t.Error("CSI is on by default now, which changes the stock run under it")
 	}
+}
+
+// TestTheNodePoolLabelIsOneClusterApiActuallyPropagates.
+//
+// This is the whole mechanism in one assertion. Cluster API does not copy
+// arbitrary Machine labels to a Node — the kubelet cannot self-assign labels
+// outside the NodeRestriction domains, so the Machine controller syncs only
+// what util/labels.GetManagedLabels admits: node-role.kubernetes.io,
+// node-restriction.kubernetes.io, and node.cluster.x-k8s.io, each with their
+// subdomains.
+//
+// A pool labelled `scale-role=control-plane` would therefore reach the
+// MachineDeployment, the MachineSet and the Machine, and stop there — and the
+// failure is silent: the nodes come up unlabelled, the shard's pods are
+// unschedulable, and nothing says why. Tying this constant to upstream's own
+// means a rename upstream fails here rather than in a run.
+func TestTheNodePoolLabelIsOneClusterApiActuallyPropagates(t *testing.T) {
+	domain, _, ok := strings.Cut(NodePoolLabel, "/")
+	if !ok {
+		t.Fatalf("%q has no domain, so nothing propagates it", NodePoolLabel)
+	}
+	if domain != clusterv1.ManagedNodeLabelDomain &&
+		!strings.HasSuffix(domain, "."+clusterv1.ManagedNodeLabelDomain) {
+		t.Errorf("the pool label's domain is %q, which Cluster API does not sync to Nodes; "+
+			"it syncs %q and its subdomains", domain, clusterv1.ManagedNodeLabelDomain)
+	}
+}
+
+// TestTheWorkerPoolSplitsIntoTwo, so that the control plane under test can be
+// given its own nodes and the managers kept off them (R5). Carved out of the
+// worker count rather than added to it: WORKER_COUNT is how many workers the
+// cluster has, and a flag that quietly bought three more machines would be a
+// bill nobody asked for.
+func TestTheWorkerPoolSplitsIntoTwo(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4, ControlPlanePoolWorkers: 3})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+
+	pools := workerPools(t, out)
+	if len(pools) != 2 {
+		t.Fatalf("%d pools, want the control plane's and the managers'", len(pools))
+	}
+
+	byLabel := map[string]map[string]any{}
+	for _, pool := range pools {
+		metadata, _ := pool["metadata"].(map[string]any)
+		labels, _ := metadata["labels"].(map[string]any)
+		role, _ := labels[NodePoolLabel].(string)
+		if role == "" {
+			t.Fatalf("a pool carries no %s label, so its nodes are indistinguishable: %v", NodePoolLabel, pool)
+		}
+		byLabel[role] = pool
+	}
+
+	cp, ok := byLabel[NodePoolControlPlane]
+	if !ok {
+		t.Fatalf("no %s pool: %v", NodePoolControlPlane, byLabel)
+	}
+	if got := replicasOf(t, cp); got != 3 {
+		t.Errorf("the control plane pool has %d nodes, want 3", got)
+	}
+	managers, ok := byLabel[NodePoolManagers]
+	if !ok {
+		t.Fatalf("no %s pool: %v", NodePoolManagers, byLabel)
+	}
+	if got := replicasOf(t, managers); got != 1 {
+		t.Errorf("the managers' pool has %d nodes, want the remaining 1", got)
+	}
+
+	// Same class, different names: two pools of one class is ordinary, and two
+	// entries sharing a name is a topology Cluster API refuses.
+	if cp["class"] != managers["class"] {
+		t.Errorf("the two pools are of different classes: %v and %v", cp["class"], managers["class"])
+	}
+	if cp["name"] == managers["name"] {
+		t.Errorf("both pools are called %v", cp["name"])
+	}
+}
+
+// TestOnePoolStaysOnePool, so the cluster the recorded stock runs were taken on
+// is still what this produces when nothing asks for a split.
+func TestOnePoolStaysOnePool(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	pools := workerPools(t, out)
+	if len(pools) != 1 {
+		t.Fatalf("%d pools, want the one the template has", len(pools))
+	}
+	if metadata, ok := pools[0]["metadata"].(map[string]any); ok {
+		if _, labelled := metadata["labels"]; labelled {
+			t.Errorf("an unsplit pool was labelled: %v", metadata)
+		}
+	}
+	if got := replicasOf(t, pools[0]); got != 4 {
+		t.Errorf("replicas = %d, want 4", got)
+	}
+}
+
+// TestAPoolSplitThatLeavesNoRoomIsRefused. Three of three workers given to the
+// control plane leaves the managers nowhere to run, and the failure would be
+// four pods Pending on a cluster that looks correctly sized.
+func TestAPoolSplitThatLeavesNoRoomIsRefused(t *testing.T) {
+	for _, sizing := range []Sizing{
+		{Workers: 3, ControlPlanePoolWorkers: 3},
+		{Workers: 3, ControlPlanePoolWorkers: 4},
+	} {
+		if _, err := TrimForScale(generated, sizing); err == nil {
+			t.Errorf("a split of %d from %d workers was accepted",
+				sizing.ControlPlanePoolWorkers, sizing.Workers)
+		}
+	}
+}
+
+// replicasOf reads a pool's count whatever numeric type the YAML round trip
+// left it as.
+func replicasOf(t *testing.T, pool map[string]any) int {
+	t.Helper()
+	switch n := pool["replicas"].(type) {
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		t.Fatalf("replicas is %T (%v)", pool["replicas"], pool["replicas"])
+		return 0
+	}
+}
+
+func workerPools(t *testing.T, manifest string) []map[string]any {
+	t.Helper()
+	var cluster map[string]any
+	for _, doc := range strings.Split(manifest, "\n---\n") {
+		var obj map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			continue
+		}
+		if kind, _ := obj["kind"].(string); kind == "Cluster" {
+			cluster = obj
+		}
+	}
+	if cluster == nil {
+		t.Fatal("no Cluster in the manifest")
+	}
+	raw, found, err := unstructured.NestedSlice(cluster, "spec", "topology", "workers", "machineDeployments")
+	if err != nil || !found {
+		t.Fatalf("reading the pools: %v (found %v)", err, found)
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, p := range raw {
+		pool, ok := p.(map[string]any)
+		if !ok {
+			t.Fatalf("a pool is %T", p)
+		}
+		out = append(out, pool)
+	}
+	return out
 }

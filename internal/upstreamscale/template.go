@@ -25,8 +25,11 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 // autoscalerAnnotations size a MachineDeployment when the cluster autoscaler
@@ -44,6 +47,27 @@ var unwantedAddons = []string{csiAddon, "cosi", "clusterAutoscaler", "serviceLoa
 // csiAddon is named because it is the one of the five that a run can ask to
 // keep. See Sizing.KeepCSI.
 const csiAddon = "csi"
+
+// NodePoolLabel marks which pool a node belongs to, and its domain is the
+// mechanism rather than a naming choice.
+//
+// Cluster API does not copy arbitrary Machine labels to a Node. The kubelet
+// cannot self-assign labels outside the NodeRestriction domains, so the Machine
+// controller syncs only what `util/labels.GetManagedLabels` admits:
+// node-role.kubernetes.io, node-restriction.kubernetes.io, and
+// node.cluster.x-k8s.io, each with their subdomains — plus anything matching a
+// regex given to the core manager's --additional-sync-machine-labels.
+//
+// A pool labelled `scale-role=control-plane` would reach the
+// MachineDeployment, the MachineSet and the Machine, and stop there. The nodes
+// would come up unlabelled, the shard's pods would be unschedulable, and
+// nothing would say why — so the label lives in a domain that propagates
+// without asking anything of the management cluster's own flags.
+const (
+	NodePoolLabel        = clusterv1.ManagedNodeLabelDomain + "/scale-role"
+	NodePoolControlPlane = "control-plane"
+	NodePoolManagers     = "managers"
+)
 
 // TrimForScale takes the manifest clusterctl generated from CAREN's own
 // quick-start example and makes it a management cluster for a scale test.
@@ -76,8 +100,32 @@ const csiAddon = "csi"
 // A zero field means "leave the template's own value alone", so the trimmer
 // stays usable on a template whose sizes are already right.
 type Sizing struct {
-	// Workers is the replica count for every worker pool.
+	// Workers is how many worker nodes the cluster has in total.
 	Workers int
+
+	// ControlPlanePoolWorkers splits those workers into two pools, so that the
+	// control plane under test can be given nodes of its own.
+	//
+	// # Why the cluster does this rather than a person
+	//
+	// R5 gives the kcp side's shard and store their own nodes, and the managers
+	// have to be kept off them: a manager sharing a node with the shard it is
+	// driving makes the shard's figures a measurement of both. That needs the
+	// nodes labelled, and labelling them by hand is a step that has to be
+	// remembered, and redone every time a node is replaced — on a cluster whose
+	// whole purpose is to be pushed until something breaks.
+	//
+	// Through the topology it is a property of the cluster instead: the label
+	// travels MachineDeployment → MachineSet → Machine → Node, so a node that
+	// is rolled comes back labelled. See NodePoolLabel for what makes it reach
+	// the Node at all.
+	//
+	// Carved out of Workers rather than added to it: WORKER_COUNT is how many
+	// workers the cluster has, and a flag that quietly bought three more
+	// machines would be a bill nobody asked for. Zero leaves the template's
+	// single pool exactly as it was, which is the cluster the recorded stock
+	// runs were taken on.
+	ControlPlanePoolWorkers int
 
 	// KeepCSI leaves the CSI addon on.
 	//
@@ -182,6 +230,12 @@ func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
 				}
 			}
 			pool["replicas"] = int64(sizing.Workers)
+		}
+		if sizing.ControlPlanePoolWorkers > 0 {
+			pools, err = splitPool(pools, sizing)
+			if err != nil {
+				return err
+			}
 		}
 		if err := unstructured.SetNestedSlice(doc.Object,
 			pools, "spec", "topology", "workers", "machineDeployments"); err != nil {
@@ -297,4 +351,69 @@ func split(manifest string) ([]*unstructured.Unstructured, error) {
 		docs = append(docs, &unstructured.Unstructured{Object: object})
 	}
 	return docs, nil
+}
+
+// splitPool turns the template's single worker pool into two labelled ones: the
+// nodes the control plane under test is given, and the nodes everything else
+// runs on.
+//
+// The first pool is the one copied, because CAREN's example has exactly one and
+// a class is what a copy has to share. Both come out labelled, so that each
+// side of the comparison has something to select on rather than one being
+// "wherever the other is not".
+func splitPool(pools []any, sizing Sizing) ([]any, error) {
+	if sizing.ControlPlanePoolWorkers >= sizing.Workers {
+		return nil, fmt.Errorf("%d of %d workers given to the control plane leaves the managers nowhere "+
+			"to run: they would sit Pending on a cluster that looks correctly sized",
+			sizing.ControlPlanePoolWorkers, sizing.Workers)
+	}
+	if len(pools) == 0 {
+		return nil, errors.New("no worker pool to split: this manifest has none")
+	}
+	if len(pools) > 1 {
+		return nil, fmt.Errorf("this manifest has %d worker pools and the split assumes one: "+
+			"which of them the control plane should get is a question this cannot answer", len(pools))
+	}
+
+	first, ok := pools[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("the worker pool is %T", pools[0])
+	}
+	name, _ := first["name"].(string)
+
+	controlPlane := deepCopyPool(first)
+	controlPlane["name"] = name + "-" + NodePoolControlPlane
+	controlPlane["replicas"] = int64(sizing.ControlPlanePoolWorkers)
+	labelPool(controlPlane, NodePoolControlPlane)
+
+	managers := deepCopyPool(first)
+	managers["name"] = name + "-" + NodePoolManagers
+	managers["replicas"] = int64(sizing.Workers - sizing.ControlPlanePoolWorkers)
+	labelPool(managers, NodePoolManagers)
+
+	return []any{controlPlane, managers}, nil
+}
+
+// labelPool sets the pool's role, which the topology copies onto the
+// MachineDeployment and its template and which reaches the Node from there.
+func labelPool(pool map[string]any, role string) {
+	metadata, ok := pool["metadata"].(map[string]any)
+	if !ok {
+		metadata = map[string]any{}
+		pool["metadata"] = metadata
+	}
+	labels, ok := metadata["labels"].(map[string]any)
+	if !ok {
+		labels = map[string]any{}
+		metadata["labels"] = labels
+	}
+	labels[NodePoolLabel] = role
+}
+
+// deepCopyPool copies a pool so the two do not share the maps inside it, which
+// a shallow copy would — leaving both pools with whichever label was set last.
+func deepCopyPool(pool map[string]any) map[string]any {
+	out := runtime.DeepCopyJSON(map[string]any{"pool": pool})
+	copied, _ := out["pool"].(map[string]any)
+	return copied
 }
