@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -88,6 +89,42 @@ func TestWaitForDeploymentReturnsWhenAvailable(t *testing.T) {
 	})
 	if err := WaitForDeployment(context.Background(), cl, "scale", ComponentCore, time.Second, 10*time.Millisecond); err != nil {
 		t.Errorf("an available deployment was not seen as available: %v", err)
+	}
+}
+
+// TestASetOfReplicasIsNotUpUntilAllOfThemAre.
+//
+// The shard runs three replicas in a comparable run, and taking the first one
+// as "up" starts the measurement while the other two are still opening their
+// caches: the baseline is a third of a control plane plus two processes paying
+// a cost they are about to stop paying, and every slope measured from it is
+// wrong in a direction nothing downstream can detect.
+func TestASetOfReplicasIsNotUpUntilAllOfThemAre(t *testing.T) {
+	cl := fakeClient(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "scale", Name: KcpName},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(3))},
+		Status:     appsv1.DeploymentStatus{Replicas: 3, AvailableReplicas: 1},
+	})
+	err := WaitForDeployment(context.Background(), cl, "scale", KcpName,
+		100*time.Millisecond, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("one replica of three was reported as the deployment being up")
+	}
+	if !strings.Contains(err.Error(), "1/3 available") {
+		t.Errorf("the timeout does not say what it saw: %v", err)
+	}
+}
+
+// TestEveryReplicaAvailableIsUp, so the wait is a wait rather than a refusal.
+func TestEveryReplicaAvailableIsUp(t *testing.T) {
+	cl := fakeClient(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "scale", Name: KcpName},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(3))},
+		Status:     appsv1.DeploymentStatus{Replicas: 3, AvailableReplicas: 3},
+	})
+	if err := WaitForDeployment(context.Background(), cl, "scale", KcpName,
+		time.Second, 10*time.Millisecond); err != nil {
+		t.Errorf("a fully available deployment was not seen as available: %v", err)
 	}
 }
 

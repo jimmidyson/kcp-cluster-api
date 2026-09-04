@@ -160,6 +160,21 @@ func TeardownAndWait(ctx context.Context, cl client.Client, namespace string, ti
 	}
 }
 
+// wantedReplicas is how many the Deployment asks for, defaulting as Kubernetes
+// does.
+//
+// Every replica, not the first. A shard runs three in a comparable run, and
+// taking the first as "up" starts the measurement while the other two are still
+// opening their caches — so the baseline is a third of a control plane plus two
+// processes paying a cost they are about to stop paying, and every slope
+// measured from it is wrong in a direction nothing downstream can detect.
+func wantedReplicas(d *appsv1.Deployment) int32 {
+	if d.Spec.Replicas == nil {
+		return 1
+	}
+	return *d.Spec.Replicas
+}
+
 // WaitForDeployment waits until a Deployment reports an available replica.
 func WaitForDeployment(ctx context.Context, cl client.Client, namespace, name string, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -171,10 +186,14 @@ func WaitForDeployment(ctx context.Context, cl client.Client, namespace, name st
 		switch {
 		case err != nil:
 			last = err.Error()
-		case d.Status.AvailableReplicas > 0:
+		case d.Status.AvailableReplicas >= wantedReplicas(&d):
 			return nil
 		default:
-			last = fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas)
+			// Against what was asked for rather than against what exists: a
+			// Deployment whose replicas have not been created yet reports
+			// Status.Replicas short, and comparing to that would call a set of
+			// three up when one of them is running.
+			last = fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, wantedReplicas(&d))
 			// What the cluster already knows about why. Without this a wait
 			// reports only a replica count, which is the one thing that does
 			// not say what to fix.
