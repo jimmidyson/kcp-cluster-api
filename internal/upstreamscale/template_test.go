@@ -253,3 +253,40 @@ func TestTheClusterIsPointedAtThePatchedClass(t *testing.T) {
 		t.Error("an unset class name changed the template's own")
 	}
 }
+
+// TestCsiStaysWhenTheStoreNeedsIt.
+//
+// The trimmer removes CSI on the reasoning that nothing in the stock run asks
+// for a PersistentVolume, which was true of the stock run. The kcp side of the
+// comparison asks for three: its etcd members each take a volume, because a
+// member that loses its data directory cannot rejoin the quorum. The two sides
+// share one cluster, so the cluster needs CSI, so the trimmer needs to be able
+// to keep it.
+//
+// A knob rather than a change of default: the stock figures already recorded
+// were taken on a cluster without CSI, and flipping the default would silently
+// make the next stock run incomparable with them.
+func TestCsiStaysWhenTheStoreNeedsIt(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4, KeepCSI: true})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if !strings.Contains(out, "csi") {
+		t.Error("CSI was removed from a cluster whose store needs volumes")
+	}
+	// Everything else this run does not use still goes.
+	for _, addon := range []string{"cosi", "clusterAutoscaler", "serviceLoadBalancer", "nfd"} {
+		if strings.Contains(out, addon) {
+			t.Errorf("%s survived: keeping CSI is not keeping everything", addon)
+		}
+	}
+
+	// And the default is unchanged, so the stock run measures what it measured.
+	without, err := TrimForScale(generated, Sizing{Workers: 4})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if strings.Contains(without, "csi") {
+		t.Error("CSI is on by default now, which changes the stock run under it")
+	}
+}

@@ -52,6 +52,13 @@ func main() {
 	fs.StringVar(&sizing.ControlPlaneDisk, "control-plane-disk", "200Gi", "System disk per control plane "+
 		"node. Larger than the example's 40Gi because etcd's revisions between compactions are what a "+
 		"climbing fleet fills a disk with.")
+	// The kcp side of the comparison gives its etcd a volume per member, so a
+	// cluster hosting both sides needs a provisioner. Off by default so the
+	// stock run keeps measuring what the recorded stock figures measured.
+	fs.BoolVar(&sizing.KeepCSI, "keep-csi", false, "Leave the CSI addon on. Needed by the kcp side of "+
+		"the comparison, whose etcd members each take a PersistentVolume; off for a stock-only cluster, "+
+		"where nothing asks for one and every addon is another controller against the API server "+
+		"under test.")
 	fs.IntVar(&sizing.WorkerVCPUs, "worker-vcpus", 16, "vCPUs per worker node.")
 	fs.StringVar(&sizing.WorkerMemory, "worker-memory", "32Gi", "Memory per worker node.")
 	fs.StringVar(&sizing.WorkerDisk, "worker-disk", "100Gi", "System disk per worker node.")

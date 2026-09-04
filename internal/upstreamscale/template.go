@@ -39,7 +39,11 @@ var autoscalerAnnotations = []string{
 // unwantedAddons are the ones this measurement does not use. Everything left on
 // is another controller reconciling against the API server whose cost is the
 // subject of the run.
-var unwantedAddons = []string{"csi", "cosi", "clusterAutoscaler", "serviceLoadBalancer", "nfd"}
+var unwantedAddons = []string{csiAddon, "cosi", "clusterAutoscaler", "serviceLoadBalancer", "nfd"}
+
+// csiAddon is named because it is the one of the five that a run can ask to
+// keep. See Sizing.KeepCSI.
+const csiAddon = "csi"
 
 // TrimForScale takes the manifest clusterctl generated from CAREN's own
 // quick-start example and makes it a management cluster for a scale test.
@@ -74,6 +78,20 @@ var unwantedAddons = []string{"csi", "cosi", "clusterAutoscaler", "serviceLoadBa
 type Sizing struct {
 	// Workers is the replica count for every worker pool.
 	Workers int
+
+	// KeepCSI leaves the CSI addon on.
+	//
+	// Off by default, because the stock run asks for no PersistentVolume and
+	// every addon left on is another controller reconciling against the API
+	// server whose cost is the subject. The kcp side of the comparison asks
+	// for three volumes — one per etcd member, because a member that loses its
+	// data directory cannot rejoin the quorum — and both sides share one
+	// cluster, so that cluster needs a provisioner.
+	//
+	// A knob rather than a new default: the stock figures already recorded
+	// were taken without CSI, and flipping the default would make the next
+	// stock run quietly incomparable with them.
+	KeepCSI bool
 
 	// ClusterClass is the class the Cluster should name.
 	//
@@ -190,6 +208,9 @@ func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
 		}
 		if addons, ok := value["addons"].(map[string]any); ok {
 			for _, name := range unwantedAddons {
+				if name == csiAddon && sizing.KeepCSI {
+					continue
+				}
 				delete(addons, name)
 			}
 		}
