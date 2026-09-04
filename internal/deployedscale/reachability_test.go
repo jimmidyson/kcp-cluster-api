@@ -53,7 +53,7 @@ func TestKcpCanReachTheAddressItAdvertises(t *testing.T) {
 
 	// And the address kcp is told to advertise is that Service, so the two
 	// cannot drift apart.
-	args := strings.Join(KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort), " ")
+	args := strings.Join(KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort, nil), " ")
 	if !strings.Contains(args, "--shard-base-url="+o.KcpBaseURL()) {
 		t.Errorf("kcp is not told to advertise %s", o.KcpBaseURL())
 	}

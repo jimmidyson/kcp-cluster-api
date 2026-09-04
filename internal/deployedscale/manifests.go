@@ -41,6 +41,7 @@ package deployedscale
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -175,6 +176,11 @@ type Options struct {
 	// unschedulable — which is a worse first experience than a labelled
 	// co-located run.
 	SpreadAcrossNodes bool
+
+	// Etcd is the store kcp is given. Zero members leaves kcp on its own
+	// embedded one, which is right for a laptop and not comparable with the
+	// stock side's three-member kubeadm store — see EtcdOptions.
+	Etcd EtcdOptions
 
 	// ManagerResources and KcpResources size the containers. A memory limit is
 	// load-bearing rather than hygiene: an OOMKill at a given fleet size is
@@ -364,8 +370,8 @@ func (o Options) KcpService() *corev1.Service {
 // baseURL is what kcp advertises itself as. dataDir and credentialsDir are
 // where it keeps its state and finds its serving certificate and token file,
 // which differ between a container and a local process.
-func KcpArgs(baseURL, dataDir, credentialsDir string, port int) []string {
-	return []string{
+func KcpArgs(baseURL, dataDir, credentialsDir string, port int, etcdServers []string) []string {
+	args := []string{
 		"start",
 		"--root-directory=" + dataDir,
 		fmt.Sprintf("--secure-port=%d", port),
@@ -383,6 +389,12 @@ func KcpArgs(baseURL, dataDir, credentialsDir string, port int) []string {
 		"--shard-external-url=" + baseURL,
 		"--audit-log-path=-",
 	}
+	// Only when there is one. kcp's default for this flag is the literal
+	// "embedded", so passing it empty would be worse than not passing it.
+	if len(etcdServers) > 0 {
+		args = append(args, "--etcd-servers="+strings.Join(etcdServers, ","))
+	}
+	return args
 }
 
 // KcpDeployment runs the server the whole fleet talks to.
@@ -405,7 +417,7 @@ func (o Options) KcpDeployment() *appsv1.Deployment {
 						Name:            KcpName,
 						Image:           o.KcpImage,
 						ImagePullPolicy: o.imagePullPolicy(),
-						Args:            KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort),
+						Args:            KcpArgs(o.KcpBaseURL(), "/data", CredentialsMountPath, KcpPort, o.EtcdEndpoints()),
 						Env:             memoryLimitEnvFor(o.kcpResources()),
 						Ports:           []corev1.ContainerPort{{Name: "https", ContainerPort: KcpPort, Protocol: corev1.ProtocolTCP}},
 						VolumeMounts: []corev1.VolumeMount{
@@ -578,13 +590,20 @@ func (o Options) InfrastructureObjects(creds *Credentials) ([]client.Object, err
 	}
 	kcp := o.KcpDeployment()
 	annotateCredentials(&kcp.Spec.Template, creds)
-	return []client.Object{
+
+	objects := []client.Object{
 		o.NamespaceObject(),
 		o.CredentialsSecret(creds),
 		kubeconfig,
-		o.KcpService(),
-		kcp,
-	}, nil
+		o.EtcdService(),
+	}
+	// Before the shard, because kcp exits when it cannot reach its store and a
+	// CrashLoopBackOff that resolves itself reads in the report as a shard that
+	// restarted — which disqualifies its samples rather than delaying them.
+	if o.Etcd.Enabled() {
+		objects = append(objects, o.EtcdStatefulSet())
+	}
+	return append(objects, o.KcpService(), kcp), nil
 }
 
 // CredentialsAnnotation carries a fingerprint of the credentials a pod was
