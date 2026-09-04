@@ -88,9 +88,7 @@ etcd holds **82.7 keys per cluster** at ten nodes (R² = 0.9997, with a 289-key
 offset). The sweep's two-point fit predicted 86.9 — exact at the small rungs
 and 5% high at 400, so the sublinearity is real but small.
 
-For scale, and labelled as an **indication rather than a comparison**, since
-this is a different version and a different instrument from the kcp runs: those
-measured 51.7 goroutines per workspace, against 58.75 per cluster here.
+See "Against the kcp runs" below for how this sits beside the kcp figures.
 
 ### What is actually large
 
@@ -323,6 +321,68 @@ doing immediately before the run whose absolutes are meant to be quoted.
 Until that patch has rolled, use the API server's **goroutines and resident**,
 which are monotonic and reproducible within a run, and not its heap.
 
+## Against the kcp runs
+
+The kcp harness (`test/integration/deployed`, `task test:scale:cluster`) measured
+the same end state — *every control plane ready and every Machine Ready* — with
+the same in-memory DevCluster backend. That makes a comparison possible, with
+the caveats below, and the closest shape it ran is
+`../../20260831-210000-deployed-fleet-scale/evidence/deployed-all-20x10.json`:
+200 clusters at **ten clusters per workspace**, which is the tenancy ratio the
+stock runs used per namespace.
+
+**Goroutines per cluster.** kcp fitted over 50→200 clusters, stock over 25→400:
+
+| Controller | kcp | stock | ratio |
+|---|--:|--:|--:|
+| core | 15.21 | 14.84 | **1.03x** |
+| kubeadm bootstrap | 13.10 | 1.97 | 6.65x |
+| kubeadm control plane | 46.10 | 27.99 | 1.65x |
+| dev / capd infrastructure | 29.09 | 13.95 | 2.09x |
+| **total** | **103.51** | **58.75** | **1.76x** |
+
+The workspace-aware fleet costs about **1.76x the controller goroutines per
+cluster**. What is striking is where it does not: **core is the same to within
+3%**, and the whole difference sits in the other three providers, most sharply in
+the kubeadm bootstrap manager.
+
+**Both instruments independently found goroutines flat in node count.** The kcp
+runs at 1, 5 and 10 nodes per cluster recorded core at 17.0, 17.0, 17.0
+goroutines per cluster, the control plane manager at 47.0, 47.0, 47.0, and the
+shard at 52.2, 52.1, 52.0. That is S2's finding, reproduced by a different
+codebase, a different harness and a different cluster — which is a stronger
+corroboration than either run could give alone.
+
+**The control plane is where the numbers diverge, and where the comparison is
+weakest.** The kcp shard cost 63.7 MB resident and 27.7 MB of live heap per
+cluster; the stock API server's own share is 6.7 MB resident per cluster. That
+is nearly ten to one — but the shard was only ever sampled in a **50x1** run,
+one cluster per workspace, so every workspace's fixed cost is charged to a
+single cluster. The stock figure amortises over ten clusters per namespace. The
+fair comparison does not exist in the data: `deployed-all-20x10.json` did not
+sample the shard at all.
+
+### What is not comparable, and why
+
+- **Different Cluster API.** Stock v1.14.1 against this project's fork,
+  v1.15.0-kcp.12.
+- **Different hardware.** The kcp runs are on single-node kind; the stock runs
+  on three 32 GiB control plane nodes and four 32 GiB workers.
+- **Different ranges.** kcp reached 200 clusters, stock 1600. Per-cluster slopes
+  are the only thing that survives that gap, which is why nothing above is an
+  absolute.
+- **The kcp harness has the same client throttle** this run found and fixed:
+  `internal/deployedscale` never sets `QPS` or `Burst` either, so it inherits
+  client-go's 5 QPS. Its memory and goroutine figures are unaffected — its
+  timings are not.
+
+A previous version of this file compared stock's 58.75 against "51.7 goroutines
+per workspace" from the kcp side. **That was wrong twice over**: 51.7 was a
+core-manager-only, in-process figure at 8 workspaces, and it was the *before*
+number in `20260815-211812-workspace-wiring-scale`, which that work then reduced
+to 2.0 per workspace. It was neither a fleet total nor current. The table above
+replaces it.
+
 ## What to run next
 
 1. ~~Smoke, retention probe, cold restart, node sweep, the ladder~~ — done.
@@ -389,6 +449,20 @@ which are monotonic and reproducible within a run, and not its heap.
    without it — it only makes the run's *absolute* baseline honest.
 4. **A third node count** — 3 nodes at 25 clusters — to put the per-Machine
    half of the etcd fit on three points and off the 1-node structural cliff.
+5. **The kcp side at the stock shape**, which is the only thing that would make
+   the control plane comparison above honest: ten clusters per workspace, ten
+   nodes each, with the shard sampled, climbing as far as it goes.
+
+   ```sh
+   task test:scale:cluster MANAGER_IMAGE=... CLUSTERS=200 CLUSTERS_PER_WORKSPACE=10 \
+     NODES_PER_CLUSTER=10 CHECKPOINTS=25,50,100
+   ```
+
+   It is a different harness — the tenancy unit is a Workspace, not a Namespace,
+   so `test/integration/capiscale` cannot be pointed at kcp. What is worth
+   porting across is the instrument work: the settle wait before the baseline,
+   the peak-aware drift check, the client rate limits, and the stored-object
+   split.
 
 A prediction, stated as one: the controllers will not be the ceiling. At 25
 clusters and 250 Machines the largest is capd at 42 MB of live heap against a
