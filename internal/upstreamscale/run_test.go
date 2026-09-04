@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
@@ -60,7 +61,7 @@ func (f *fakeTarget) Prepare(context.Context) error { return nil }
 func (f *fakeTarget) Controllers() []Controller     { return nil }
 func (f *fakeTarget) Store() StoreLocation          { return StoreLocation{Namespace: "nowhere"} }
 
-func (f *fakeTarget) ControlPlane(context.Context, int, time.Duration,
+func (f *fakeTarget) ControlPlane(context.Context, client.Client, int, time.Duration,
 ) ([]deployedscale.ComponentSample, string, error) {
 	return []deployedscale.ComponentSample{{Component: f.name + "-control-plane"}}, "a control plane", nil
 }

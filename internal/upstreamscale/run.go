@@ -95,7 +95,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			r.logf("NOTE: could not sample the controllers at %s: %v", label, err)
 			return
 		}
-		if cp, described, err := r.Target.ControlPlane(ctx, opts.APIHeapSamples, opts.APIHeapGap); err == nil {
+		if cp, described, err := r.Target.ControlPlane(ctx, r.Host, opts.APIHeapSamples, opts.APIHeapGap); err == nil {
 			components = append(components, cp...)
 			report.AddFact("controlPlane@"+label, described)
 		} else {

@@ -4,7 +4,8 @@
 
 **Created**: 2026-09-04
 
-**Status**: Draft — design agreed, nothing built.
+**Status**: Draft — the shared runner, the `Target` seam and per-replica
+sampling (R4a) are built; the kcp `Target` and the flag wiring are not.
 
 ## Purpose
 
@@ -79,19 +80,37 @@ figure appears. Everything else is either held or is the subject.
   manager, except that kcp puts both in one process. So three replicas serve
   the API and exactly one of them runs the shard's controllers.
 - **R4a Every replica is sampled, on both sides.** The consequence of R4, and
-  it is a change to the instrument rather than a note about it:
-  - The API server sample is taken through the cluster's own kubeconfig, which
-    addresses the VIP, so **consecutive scrapes may land on different API
-    servers**. Every stock figure recorded so far is therefore one arbitrary
-    instance per sample, and the five-read heap floor is a floor across up to
-    three processes rather than across one process's sawtooth.
-  - `runningPodOf` returns the first running pod matching a deployment's name
-    and its comment says a second would mean a rollout. With three shard
-    replicas that is no longer true, and it would silently report one replica
-    as "the shard".
-  Both sides must therefore report **per process and summed**, because the two
-  answer different questions: per process is what a single instance costs and
-  bounds the node it sits on, and the sum is what the control plane costs.
+  it is a change to the instrument rather than a note about it. What it
+  replaced:
+  - The API server sample was taken through the cluster's own kubeconfig, which
+    addresses the VIP, so **consecutive scrapes could land on different API
+    servers**. Every stock figure recorded before this is therefore one
+    arbitrary instance per sample, and its five-read heap floor is a floor
+    across up to three processes rather than across one process's sawtooth.
+  - `runningPodOf` returned the first running pod whose name began with a
+    deployment's, its comment reasoning that a second would mean a rollout.
+    With three shard replicas that is no longer true, and it would silently
+    report one replica as "the shard".
+  Both sides report **per process and summed**, because the two answer
+  different questions: per process is what a single instance costs and bounds
+  the node it sits on, and the sum is what the control plane costs.
+
+  **Built** (`internal/upstreamscale/replicas.go`, `sample.go`): replicas are
+  found through a Deployment's own selector rather than by name — four managers
+  built from one stem is a prefix test away from summing two under one name —
+  and each is sampled and named apart, one keeping the bare component name so
+  the figures already recorded still line up. A control plane is read instance
+  by instance through the pod proxy, with the heap floor applied per process,
+  since the lowest of five reads spread over three processes is the smallest of
+  three unrelated sawtooths rather than a floor of anything.
+
+  **One caveat travels with the numbers.** The pod proxy forwards a request
+  without the caller's credentials, so an API server that refuses anonymous
+  requests to `/metrics` cannot be read instance by instance. That case falls
+  back to the endpoint — one arbitrary instance, exactly as before — and says so
+  in the line the report carries, rather than in a log line nobody reads beside
+  the figure. Which of the two a given cluster does is not yet known: it has not
+  been run against the real one.
 - **R5 The control plane under test gets the same budget either way**: three
   nodes of the same size, with the shard and the etcd members pinned to them and
   spread one per node. A control plane that fits on fewer resources than the

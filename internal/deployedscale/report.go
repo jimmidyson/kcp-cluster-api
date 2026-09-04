@@ -403,10 +403,17 @@ func (r *Report) Components() []string {
 			delete(seen, c.Name)
 		}
 	}
+	// Whatever is left is not a manager — a control plane's instances, sampled
+	// one process at a time. Sorted rather than emitted in map order, which is
+	// randomised per process: two runs of the same fleet would otherwise
+	// produce reports whose rows are in different orders, and a reader diffing
+	// them would be reading noise before reading the numbers.
+	rest := make([]string, 0, len(seen))
 	for name := range seen {
-		out = append(out, name)
+		rest = append(rest, name)
 	}
-	return out
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // Write renders the report to dir as name.md and name.json, as the sweeps do.

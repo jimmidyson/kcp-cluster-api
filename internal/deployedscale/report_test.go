@@ -593,3 +593,34 @@ func nodesSample(label string, clusters, nodesPer, goroutines int) Sample {
 	s.Nodes = clusters * nodesPer
 	return s
 }
+
+// TestComponentsOutsideTheManagerListAreStillInAStableOrder.
+//
+// A control plane is sampled instance by instance, so a report now carries
+// several components that are not managers — kube-apiserver#1 and its
+// siblings. They were emitted in map order, which is randomised per process:
+// two runs of the same fleet would produce reports whose rows are in different
+// orders, and a reader diffing them would be reading noise before reading the
+// numbers.
+func TestComponentsOutsideTheManagerListAreStillInAStableOrder(t *testing.T) {
+	r := &Report{Title: "t"}
+	r.Add(Sample{Label: "baseline", Components: []ComponentSample{
+		{Component: "kube-apiserver#3"},
+		{Component: "kube-apiserver#1"},
+		{Component: ComponentCore},
+		{Component: "kube-apiserver#2"},
+	}})
+
+	got := r.Components()
+	if len(got) != 4 {
+		t.Fatalf("components = %v", got)
+	}
+	if got[0] != ComponentCore {
+		t.Errorf("the managers no longer come first: %v", got)
+	}
+	for i, want := range []string{"kube-apiserver#1", "kube-apiserver#2", "kube-apiserver#3"} {
+		if got[i+1] != want {
+			t.Fatalf("components = %v, want the instances in order", got)
+		}
+	}
+}

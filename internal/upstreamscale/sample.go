@@ -21,11 +21,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -163,55 +166,94 @@ func (s *Sampler) Sample(ctx context.Context, cl client.Client, controllers []Co
 	throttling := map[string]Throttling{}
 
 	for _, c := range controllers {
-		var pods corev1.PodList
-		if err := cl.List(ctx, &pods, client.InNamespace(c.Namespace)); err != nil {
-			return nil, nil, fmt.Errorf("listing pods in %s: %w", c.Namespace, err)
-		}
-		pod := runningPodOf(pods.Items, c.Deployment)
-		if pod == nil {
-			return nil, nil, fmt.Errorf("%s has no running pod in %s: a sample without it would "+
-				"report a fleet missing a provider", c.Name, c.Namespace)
-		}
-
-		process, err := s.Process(ctx, c.Namespace, pod.Name)
+		replicas, err := ReplicasOf(ctx, cl, c.Namespace, c.Deployment)
 		if err != nil {
 			return nil, nil, err
 		}
-		// The kubelet's own accounting, which serves the resident figure, the
-		// CPU time and the throttling from one scrape. metrics.k8s.io is the
-		// fallback rather than the source: the cluster under test carries no
-		// addon it does not need, so it has no metrics-server, and the first
-		// two runs reported every controller's resident memory as zero.
-		if usage, err := s.Usage(ctx, pod.Spec.NodeName, c.Namespace, pod.Name); err == nil {
-			process.ResidentBytes = usage.WorkingSetBytes
-			process.CPUSeconds = usage.CPUSeconds
-			throttling[c.Deployment] = usage.Throttling
-		} else {
-			process.ResidentBytes = s.Resident(ctx, c.Namespace, pod.Name)
+		if len(replicas) == 0 {
+			return nil, nil, fmt.Errorf("%s has no running pod in %s: a sample without it would "+
+				"report a fleet missing a provider", c.Name, c.Namespace)
 		}
+		// Every replica, each under its own name. A manager runs one pod today
+		// and the naming is what keeps that from being an assumption baked into
+		// the instrument — see ReplicaNames.
+		labels := ReplicaNames(c.Deployment, len(replicas))
 
-		samples = append(samples, deployedscale.ComponentSample{
-			Component: c.Deployment,
-			Process:   process,
-			Pod:       c.PodFacts(pod),
-		})
+		for i := range replicas {
+			pod := &replicas[i]
+			process, err := s.Process(ctx, c.Namespace, pod.Name)
+			if err != nil {
+				return nil, nil, err
+			}
+			// The kubelet's own accounting, which serves the resident figure,
+			// the CPU time and the throttling from one scrape. metrics.k8s.io
+			// is the fallback rather than the source: the cluster under test
+			// carries no addon it does not need, so it has no metrics-server,
+			// and the first two runs reported every controller's resident
+			// memory as zero.
+			if usage, err := s.Usage(ctx, pod.Spec.NodeName, c.Namespace, pod.Name); err == nil {
+				process.ResidentBytes = usage.WorkingSetBytes
+				process.CPUSeconds = usage.CPUSeconds
+				throttling[labels[i]] = usage.Throttling
+			} else {
+				process.ResidentBytes = s.Resident(ctx, c.Namespace, pod.Name)
+			}
+
+			samples = append(samples, deployedscale.ComponentSample{
+				Component: labels[i],
+				Process:   process,
+				Pod:       c.PodFacts(pod),
+			})
+		}
 	}
 	return samples, throttling, nil
 }
 
-// runningPodOf picks the deployment's pod, and only one: a second would mean
-// the deployment was rolling, whose metrics belong to two different processes.
-func runningPodOf(pods []corev1.Pod, deployment string) *corev1.Pod {
+// RunningPodsOf keeps the pods that are actually serving, in name order.
+//
+// Every replica rather than the first. The sampler used to take one pod per
+// deployment, reasoning that a second would mean a rollout whose metrics belong
+// to two different processes. That is true of a manager running one replica and
+// false of a control plane running three, where taking the first reports a
+// third of the cost as the whole of it.
+//
+// Ordered so that replica #1 is the same process from one sample to the next: a
+// series whose members swap places between samples cannot be plotted.
+func RunningPodsOf(pods []corev1.Pod) []corev1.Pod {
+	var running []corev1.Pod
 	for i := range pods {
-		pod := &pods[i]
-		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		if len(pod.Name) > len(deployment) && pod.Name[:len(deployment)] == deployment {
-			return pod
+		if pods[i].DeletionTimestamp == nil && pods[i].Status.Phase == corev1.PodRunning {
+			running = append(running, pods[i])
 		}
 	}
-	return nil
+	sort.Slice(running, func(i, j int) bool { return running[i].Name < running[j].Name })
+	return running
+}
+
+// ReplicasOf is a Deployment's running pods, found through its own selector.
+//
+// By the selector rather than by the pod's name. A pod is named
+// <deployment>-<replicaset hash>-<suffix>, so a name test looks sound until two
+// deployments share a prefix — and clusterctl installs four managers whose
+// names are built from the same stem. Matching by prefix would sum two
+// managers' processes under one name, which is wrong in a direction nothing
+// downstream could detect: the total would still look like a plausible
+// controller.
+func ReplicasOf(ctx context.Context, cl client.Client, namespace, deployment string) ([]corev1.Pod, error) {
+	var d appsv1.Deployment
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: namespace, Name: deployment}, &d); err != nil {
+		return nil, fmt.Errorf("reading deployment %s/%s: %w", namespace, deployment, err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
+	if err != nil {
+		return nil, fmt.Errorf("the selector of %s/%s: %w", namespace, deployment, err)
+	}
+	var pods corev1.PodList
+	if err := cl.List(ctx, &pods, client.InNamespace(namespace),
+		client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("listing the pods of %s/%s: %w", namespace, deployment, err)
+	}
+	return RunningPodsOf(pods.Items), nil
 }
 
 // EtcdMetricsPort is where etcd serves metrics. kubeadm points
@@ -270,6 +312,119 @@ func (s *Sampler) apiServerOnce(ctx context.Context) (APIServer, error) {
 	return sample, nil
 }
 
+// ControlPlanes samples every instance of a control plane, one process at a
+// time.
+//
+// # Why not one read
+//
+// Both sides run the process a fleet's objects live in more than once — three
+// kube-apiservers behind a VIP, three shard replicas — and each holds its own
+// watch cache, so each pays for the fleet in full. Reading through the client's
+// own endpoint lands on whichever one the load balancer picked: every stock
+// figure recorded before this was one arbitrary instance per sample, and on a
+// three-instance control plane that is a third of the answer.
+//
+// The heap floor is applied per instance rather than across them (see
+// LowestHeap): the lowest of five reads spread over three processes is not a
+// floor of anything, it is the smallest of three unrelated sawtooths.
+//
+// # The fallback, and why it is in the report rather than a log
+//
+// The per-instance read goes through the API server's pod proxy, which forwards
+// the request without the caller's credentials — so a kube-apiserver that
+// refuses anonymous requests to /metrics returns 403 and no instance can be
+// read apart. That case falls back to the endpoint and says so in the line the
+// report carries, because a run that fell back quietly would be reproducing the
+// old one-arbitrary-instance figure under a heading claiming otherwise.
+func (s *Sampler) ControlPlanes(ctx context.Context, cl client.Client, loc ControlPlaneLocation,
+	samples int, gap time.Duration,
+) (ControlPlaneReading, error) {
+	if samples < 1 {
+		samples = 1
+	}
+	pods, err := ControlPlanePods(ctx, cl, loc)
+	if err != nil {
+		return s.controlPlaneViaEndpoint(ctx, samples, gap, err.Error())
+	}
+
+	reads := make([][]APIServer, len(pods))
+	var firstErr error
+	for round := range samples {
+		if round > 0 {
+			select {
+			case <-ctx.Done():
+				return ControlPlaneReading{}, ctx.Err()
+			case <-time.After(gap):
+			}
+		}
+		for i := range pods {
+			read, err := s.controlPlaneOnce(ctx, loc, pods[i].Name)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			reads[i] = append(reads[i], read)
+		}
+	}
+
+	var out ControlPlaneReading
+	for i := range pods {
+		if len(reads[i]) == 0 {
+			out.Missing++
+			continue
+		}
+		out.Instances = append(out.Instances, LowestHeap(reads[i]))
+		out.Pods = append(out.Pods, pods[i].Name)
+	}
+	if len(out.Instances) == 0 {
+		return s.controlPlaneViaEndpoint(ctx, samples, gap, firstErr.Error())
+	}
+	if out.Missing > 0 {
+		out.Why = firstErr.Error()
+	}
+	return out, nil
+}
+
+// controlPlaneOnce is one read of one instance, through the pod proxy.
+func (s *Sampler) controlPlaneOnce(ctx context.Context, loc ControlPlaneLocation, pod string) (APIServer, error) {
+	proxy := s.clientset.CoreV1().Pods(loc.Namespace)
+	port := strconv.Itoa(loc.Port)
+
+	// Best effort, as it is through the endpoint: a control plane with
+	// profiling disabled still has metrics worth reading, and whether the
+	// collection landed travels with the sample.
+	_, collectErr := proxy.ProxyGet(loc.Scheme, pod, port, "/debug/pprof/heap",
+		map[string]string{"gc": "1", "debug": "1"}).DoRaw(ctx)
+
+	raw, err := proxy.ProxyGet(loc.Scheme, pod, port, "/metrics", nil).DoRaw(ctx)
+	if err != nil {
+		return APIServer{}, fmt.Errorf("reading %s/%s: %w", loc.Namespace, pod, err)
+	}
+	sample, err := ParseAPIServer(bytes.NewReader(raw))
+	if err != nil {
+		return sample, fmt.Errorf("%s/%s: %w", loc.Namespace, pod, err)
+	}
+	sample.HeapCollected = collectErr == nil
+	return sample, nil
+}
+
+// controlPlaneViaEndpoint is the fallback: one arbitrary instance, marked.
+func (s *Sampler) controlPlaneViaEndpoint(ctx context.Context, samples int, gap time.Duration, why string,
+) (ControlPlaneReading, error) {
+	one, err := s.APIServer(ctx, samples, gap)
+	if err != nil {
+		return ControlPlaneReading{}, err
+	}
+	return ControlPlaneReading{
+		Instances:   []APIServer{one},
+		Pods:        []string{"whichever instance the endpoint resolved to"},
+		ViaEndpoint: true,
+		Why:         why,
+	}, nil
+}
+
 // Etcd samples one etcd member through the API server's pod proxy.
 //
 // The member rather than the cluster: kubeadm runs one static pod per control
@@ -312,13 +467,4 @@ func (s *Sampler) etcdMemberAt(ctx context.Context, store StoreLocation, pod str
 		return Etcd{}, err
 	}
 	return ParseEtcd(bytes.NewReader(raw))
-}
-
-func firstRunning(pods []corev1.Pod) *corev1.Pod {
-	for i := range pods {
-		if pods[i].DeletionTimestamp == nil && pods[i].Status.Phase == corev1.PodRunning {
-			return &pods[i]
-		}
-	}
-	return nil
 }

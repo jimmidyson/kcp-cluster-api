@@ -105,24 +105,22 @@ func (s *StockTarget) Controllers() []Controller { return Controllers() }
 
 func (s *StockTarget) Store() StoreLocation { return KubeadmStore() }
 
-// ControlPlane samples the API server.
+// ControlPlane samples every API server by name.
 //
-// One sample, and this is a known gap rather than a choice: the read goes
-// through the cluster's own kubeconfig, which addresses the VIP, so it lands on
-// whichever of the three API servers the load balancer picked. Every stock
-// figure recorded so far is one arbitrary instance per sample. Sampling all
-// three by name is what the comparison needs and is not done here yet.
-func (s *StockTarget) ControlPlane(ctx context.Context, heapSamples int, heapGap time.Duration,
+// kubeadm's static pods, one per control plane node, rather than one read
+// through the cluster's own kubeconfig: that addresses the VIP and lands on
+// whichever instance the load balancer picked, which is what every stock figure
+// recorded before this was. Where the pod proxy cannot reach them the reading
+// falls back to the endpoint and carries the caveat — see Sampler.ControlPlanes.
+func (s *StockTarget) ControlPlane(ctx context.Context, host client.Client,
+	heapSamples int, heapGap time.Duration,
 ) ([]deployedscale.ComponentSample, string, error) {
-	api, err := s.Sampler.APIServer(ctx, heapSamples, heapGap)
+	loc := KubeAPIServers()
+	reading, err := s.Sampler.ControlPlanes(ctx, host, loc, heapSamples, heapGap)
 	if err != nil {
 		return nil, "", err
 	}
-	return []deployedscale.ComponentSample{{
-		Component: "kube-apiserver",
-		Process:   api.Process,
-		Pod:       deployedscale.PodFacts{Name: "kube-apiserver", Ready: true},
-	}}, api.Describe(), nil
+	return reading.Samples(loc.Component), reading.Describe(), nil
 }
 
 func (s *StockTarget) Plan(clusters int) (Fleet, error) {

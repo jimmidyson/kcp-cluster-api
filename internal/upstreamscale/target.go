@@ -20,6 +20,8 @@ import (
 	"context"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
@@ -74,8 +76,14 @@ type Target interface {
 	//
 	// Every replica, not one: the stock side runs three API servers behind a
 	// VIP and the kcp side runs three shard replicas, so a figure from one
-	// process is a third of a control plane and says so.
-	ControlPlane(ctx context.Context, heapSamples int, heapGap time.Duration,
+	// process is a third of a control plane and says so. See
+	// Sampler.ControlPlanes.
+	//
+	// host is the cluster those processes are pods on, which is the Runner's
+	// client rather than the Target's: this is the one place a Target needs the
+	// hosting side, because only it knows where its own control plane lives and
+	// only the Runner knows how to reach a pod.
+	ControlPlane(ctx context.Context, host client.Client, heapSamples int, heapGap time.Duration,
 	) ([]deployedscale.ComponentSample, string, error)
 
 	// Store is where this side's etcd is, for sampling and defragmenting.
