@@ -345,12 +345,33 @@ func (s *Sampler) apiServerOnce(ctx context.Context) (APIServer, error) {
 func (s *Sampler) ControlPlanes(ctx context.Context, cl client.Client, loc ControlPlaneLocation,
 	samples int, gap time.Duration,
 ) (ControlPlaneReading, error) {
+	reading, err := s.ControlPlanesVia(ctx, cl, loc, s.podProxy(loc), samples, gap)
+	if err != nil {
+		return s.controlPlaneViaEndpoint(ctx, samples, gap, err.Error())
+	}
+	return reading, nil
+}
+
+// ControlPlanesVia is ControlPlanes with the reading itself supplied.
+//
+// The kcp side needs this. Its shard serves its metrics to an authenticated
+// caller on its own secure port, which the pod proxy cannot be — the API server
+// strips the caller's credentials before forwarding — so reaching each replica
+// is the driver's problem there, and how it reaches them is not this package's
+// business. What is this package's business is that whatever answers is read,
+// floored and summarised identically on both sides.
+//
+// An error rather than a fallback: only the caller knows whether there is
+// anything else to try.
+func (s *Sampler) ControlPlanesVia(ctx context.Context, cl client.Client, loc ControlPlaneLocation,
+	scraper ControlPlaneScraper, samples int, gap time.Duration,
+) (ControlPlaneReading, error) {
 	if samples < 1 {
 		samples = 1
 	}
 	pods, err := ControlPlanePods(ctx, cl, loc)
 	if err != nil {
-		return s.controlPlaneViaEndpoint(ctx, samples, gap, err.Error())
+		return ControlPlaneReading{}, err
 	}
 
 	reads := make([][]APIServer, len(pods))
@@ -364,7 +385,7 @@ func (s *Sampler) ControlPlanes(ctx context.Context, cl client.Client, loc Contr
 			}
 		}
 		for i := range pods {
-			read, err := s.controlPlaneOnce(ctx, loc, pods[i].Name)
+			read, err := controlPlaneOnce(ctx, scraper, pods[i].Name)
 			if err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -385,7 +406,8 @@ func (s *Sampler) ControlPlanes(ctx context.Context, cl client.Client, loc Contr
 		out.Pods = append(out.Pods, pods[i].Name)
 	}
 	if len(out.Instances) == 0 {
-		return s.controlPlaneViaEndpoint(ctx, samples, gap, firstErr.Error())
+		return ControlPlaneReading{}, fmt.Errorf("no instance of %v in %s could be read: %w",
+			loc.Labels, loc.Namespace, firstErr)
 	}
 	if out.Missing > 0 {
 		out.Why = firstErr.Error()
@@ -393,24 +415,57 @@ func (s *Sampler) ControlPlanes(ctx context.Context, cl client.Client, loc Contr
 	return out, nil
 }
 
-// controlPlaneOnce is one read of one instance, through the pod proxy.
-func (s *Sampler) controlPlaneOnce(ctx context.Context, loc ControlPlaneLocation, pod string) (APIServer, error) {
-	proxy := s.clientset.CoreV1().Pods(loc.Namespace)
-	port := strconv.Itoa(loc.Port)
+// ControlPlaneScraper reads one control-plane instance.
+//
+// Two calls rather than one because they are two different things: the metrics
+// are the sample, and the collection is a request to make the heap in them the
+// retained set rather than a point on a sawtooth. Whether the second worked
+// travels with the sample — see APIServer.HeapCollected.
+type ControlPlaneScraper interface {
+	Metrics(ctx context.Context, pod string) ([]byte, error)
+	ForceCollection(ctx context.Context, pod string) error
+}
 
-	// Best effort, as it is through the endpoint: a control plane with
-	// profiling disabled still has metrics worth reading, and whether the
-	// collection landed travels with the sample.
-	_, collectErr := proxy.ProxyGet(loc.Scheme, pod, port, "/debug/pprof/heap",
-		map[string]string{"gc": "1", "debug": "1"}).DoRaw(ctx)
+// podProxy reads an instance through the API server's pod proxy.
+//
+// It is the stock side's path, and it has a known limit: the API server strips
+// the caller's credentials before forwarding, so an instance that refuses
+// anonymous requests to /metrics cannot be read this way. See
+// Sampler.ControlPlanes for what happens then.
+func (s *Sampler) podProxy(loc ControlPlaneLocation) ControlPlaneScraper {
+	return &podProxyScraper{clientset: s.clientset, loc: loc}
+}
 
-	raw, err := proxy.ProxyGet(loc.Scheme, pod, port, "/metrics", nil).DoRaw(ctx)
+type podProxyScraper struct {
+	clientset kubernetes.Interface
+	loc       ControlPlaneLocation
+}
+
+func (p *podProxyScraper) Metrics(ctx context.Context, pod string) ([]byte, error) {
+	return p.clientset.CoreV1().Pods(p.loc.Namespace).
+		ProxyGet(p.loc.Scheme, pod, strconv.Itoa(p.loc.Port), "/metrics", nil).DoRaw(ctx)
+}
+
+func (p *podProxyScraper) ForceCollection(ctx context.Context, pod string) error {
+	_, err := p.clientset.CoreV1().Pods(p.loc.Namespace).
+		ProxyGet(p.loc.Scheme, pod, strconv.Itoa(p.loc.Port), "/debug/pprof/heap",
+			map[string]string{"gc": "1", "debug": "1"}).DoRaw(ctx)
+	return err
+}
+
+// controlPlaneOnce is one read of one instance.
+func controlPlaneOnce(ctx context.Context, scraper ControlPlaneScraper, pod string) (APIServer, error) {
+	// Best effort: a control plane with profiling disabled still has metrics
+	// worth reading, and whether the collection landed travels with the sample.
+	collectErr := scraper.ForceCollection(ctx, pod)
+
+	raw, err := scraper.Metrics(ctx, pod)
 	if err != nil {
-		return APIServer{}, fmt.Errorf("reading %s/%s: %w", loc.Namespace, pod, err)
+		return APIServer{}, fmt.Errorf("reading %s: %w", pod, err)
 	}
 	sample, err := ParseAPIServer(bytes.NewReader(raw))
 	if err != nil {
-		return sample, fmt.Errorf("%s/%s: %w", loc.Namespace, pod, err)
+		return sample, fmt.Errorf("%s: %w", pod, err)
 	}
 	sample.HeapCollected = collectErr == nil
 	return sample, nil

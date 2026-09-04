@@ -71,11 +71,14 @@ func (s *StockTarget) Title(startClusters, nodes int) string {
 
 func (s *StockTarget) Facts() map[string]string {
 	return map[string]string{
-		"side":                 "stock Cluster API on its own Kubernetes API server",
-		"clusterApi":           "stock upstream, installed by clusterctl",
-		"devClusterBackend":    "inMemory",
-		"tenancy":              "Namespace",
-		"clustersPerNamespace": fmt.Sprint(s.Shape.ClustersPerNamespace),
+		"side":              "stock Cluster API on its own Kubernetes API server",
+		"clusterApi":        "stock upstream, installed by clusterctl",
+		"devClusterBackend": "inMemory",
+		"tenancy":           "Namespace",
+		// Per tenant rather than per namespace, in the same words the kcp side
+		// uses for its workspaces: a fact one side reports and the other does
+		// not is a fact a reader cannot diff the two reports on.
+		"clustersPerTenant": fmt.Sprint(s.Shape.ClustersPerNamespace),
 	}
 }
 
