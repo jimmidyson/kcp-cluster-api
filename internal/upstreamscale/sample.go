@@ -278,33 +278,36 @@ func (s *Sampler) apiServerOnce(ctx context.Context) (APIServer, error) {
 // every member, and the disk latencies are per member, which is what a reader
 // wants when one node's disk is the slow one.
 func (s *Sampler) Etcd(ctx context.Context, cl client.Client) (Etcd, string, error) {
-	var pods corev1.PodList
-	if err := cl.List(ctx, &pods, client.InNamespace("kube-system"),
-		client.MatchingLabels{"component": "etcd"}); err != nil {
-		return Etcd{}, "", fmt.Errorf("listing etcd pods: %w", err)
-	}
-	pod := firstRunning(pods.Items)
-	if pod == nil {
-		return Etcd{}, "", fmt.Errorf("no running etcd pod in kube-system: a managed control plane " +
-			"does not expose one, and this measurement needs a cluster whose etcd it can reach")
-	}
+	return s.EtcdAt(ctx, cl, KubeadmStore())
+}
 
-	raw, err := s.clientset.CoreV1().Pods("kube-system").
-		ProxyGet("http", pod.Name, strconv.Itoa(EtcdMetricsPort), "/metrics", nil).DoRaw(ctx)
+// EtcdAt samples one member of a named store. See StoreLocation: the two sides
+// of the comparison keep their etcd in different places and this is how one
+// sampler reads either.
+func (s *Sampler) EtcdAt(ctx context.Context, cl client.Client, store StoreLocation) (Etcd, string, error) {
+	members, err := StorePods(ctx, cl, store)
+	if err != nil {
+		return Etcd{}, "", err
+	}
+	// The first by name, deterministically: the backend size and the quota are
+	// the same on every member, and a run that read a different one each time
+	// would attribute their disk latencies to each other.
+	pod := &members[0]
+
+	sample, err := s.etcdMemberAt(ctx, store, pod.Name)
 	if err != nil {
 		return Etcd{}, pod.Name, fmt.Errorf("reading etcd's metrics from %s: %w "+
-			"(kubeadm points --listen-metrics-urls at 127.0.0.1; the ClusterClass patch opens it)",
-			pod.Name, err)
+			"(kubeadm points --listen-metrics-urls at 127.0.0.1; the ClusterClass patch opens it, "+
+			"and the deployed store is started with it open)", pod.Name, err)
 	}
-	sample, err := ParseEtcd(bytes.NewReader(raw))
-	return sample, pod.Name, err
+	return sample, pod.Name, nil
 }
 
 // etcdOf reads one named member, which is what a defragmentation needs either
 // side of itself to say what it reclaimed.
-func (s *Sampler) etcdOf(ctx context.Context, pod string) (Etcd, error) {
-	raw, err := s.clientset.CoreV1().Pods("kube-system").
-		ProxyGet("http", pod, strconv.Itoa(EtcdMetricsPort), "/metrics", nil).DoRaw(ctx)
+func (s *Sampler) etcdMemberAt(ctx context.Context, store StoreLocation, pod string) (Etcd, error) {
+	raw, err := s.clientset.CoreV1().Pods(store.Namespace).
+		ProxyGet("http", pod, strconv.Itoa(store.MetricsPort), "/metrics", nil).DoRaw(ctx)
 	if err != nil {
 		return Etcd{}, err
 	}

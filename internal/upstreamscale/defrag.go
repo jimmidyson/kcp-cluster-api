@@ -19,6 +19,7 @@ package upstreamscale
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
 // etcdctlDefrag is run inside each etcd static pod, against that member only.
@@ -68,6 +71,68 @@ type Defragmenter struct {
 	client rest.Interface
 }
 
+// StoreLocation is where a run's etcd is and how its metrics are reached.
+//
+// There are two stores in this exercise and they live in different places. The
+// stock side's is kubeadm's static pods, in kube-system, labelled
+// component=etcd. kcp's is a StatefulSet in the run's own namespace. Both the
+// sampler and the defragmenter looked only for the first, so against kcp they
+// would have found nothing and said so in a log line — leaving its etcd column
+// exactly the thing that defragmenting before the baseline was added to fix.
+type StoreLocation struct {
+	Namespace string
+	Labels    map[string]string
+	// MetricsPort is where the member serves /metrics. The same on both sides,
+	// or the two etcd columns are read differently and are not comparable.
+	MetricsPort int
+}
+
+// KubeadmStore is the stock side's: kubeadm's static pods, whose metrics port
+// the ClusterClass patch opens.
+func KubeadmStore() StoreLocation {
+	return StoreLocation{
+		Namespace:   "kube-system",
+		Labels:      map[string]string{"component": "etcd"},
+		MetricsPort: EtcdMetricsPort,
+	}
+}
+
+// DeployedStore is the kcp side's: the StatefulSet a run deploys into its own
+// namespace, labelled the way everything else that run creates is labelled.
+func DeployedStore(namespace string) StoreLocation {
+	return StoreLocation{
+		Namespace:   namespace,
+		Labels:      map[string]string{deployedscale.ComponentLabel: deployedscale.EtcdName},
+		MetricsPort: EtcdMetricsPort,
+	}
+}
+
+// StorePods is the running members of a store, in name order.
+//
+// Ordered because a defragmentation walks them one at a time and a run that
+// takes them in whatever order the API server listed them is a run whose
+// "reclaimed" figures cannot be lined up against the previous one's.
+func StorePods(ctx context.Context, cl client.Client, store StoreLocation) ([]corev1.Pod, error) {
+	var pods corev1.PodList
+	if err := cl.List(ctx, &pods, client.InNamespace(store.Namespace),
+		client.MatchingLabels(store.Labels)); err != nil {
+		return nil, fmt.Errorf("listing etcd pods in %s: %w", store.Namespace, err)
+	}
+	var running []corev1.Pod
+	for i := range pods.Items {
+		if pods.Items[i].DeletionTimestamp == nil && pods.Items[i].Status.Phase == corev1.PodRunning {
+			running = append(running, pods.Items[i])
+		}
+	}
+	if len(running) == 0 {
+		return nil, fmt.Errorf("no running etcd pods matching %v in %s: nothing to read or defragment, "+
+			"and a managed control plane is not a cluster this measurement can see the store of",
+			store.Labels, store.Namespace)
+	}
+	sort.Slice(running, func(i, j int) bool { return running[i].Name < running[j].Name })
+	return running, nil
+}
+
 // NewDefragmenter builds one from the cluster's config.
 func NewDefragmenter(cfg *rest.Config, restClient rest.Interface) *Defragmenter {
 	return &Defragmenter{cfg: cfg, client: restClient}
@@ -99,24 +164,23 @@ func (d DefragResult) Reclaimed() uint64 {
 // worth knowing about — it is the one whose file will reach the quota first —
 // but it is not a reason to abandon a climb that is otherwise going well.
 func (d *Defragmenter) All(ctx context.Context, cl client.Client, sampler *Sampler) ([]DefragResult, error) {
-	var pods corev1.PodList
-	if err := cl.List(ctx, &pods, client.InNamespace("kube-system"),
-		client.MatchingLabels{"component": "etcd"}); err != nil {
-		return nil, fmt.Errorf("listing etcd pods: %w", err)
-	}
-	if len(pods.Items) == 0 {
-		return nil, fmt.Errorf("no etcd pods in kube-system: nothing to defragment, and a managed " +
-			"control plane is not a cluster this measurement can see the store of")
+	return d.AllAt(ctx, cl, sampler, KubeadmStore())
+}
+
+// AllAt defragments the members of one named store. See StoreLocation.
+func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sampler,
+	store StoreLocation,
+) ([]DefragResult, error) {
+	members, err := StorePods(ctx, cl, store)
+	if err != nil {
+		return nil, err
 	}
 
 	var out []DefragResult
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		if pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
+	for i := range members {
+		pod := &members[i]
 		result := DefragResult{Pod: pod.Name}
-		if before, err := sampler.etcdOf(ctx, pod.Name); err == nil {
+		if before, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
 			result.BeforeBytes = before.DBTotalBytes
 		}
 		if err := d.exec(ctx, pod.Namespace, pod.Name); err != nil {
@@ -124,7 +188,7 @@ func (d *Defragmenter) All(ctx context.Context, cl client.Client, sampler *Sampl
 			out = append(out, result)
 			continue
 		}
-		if after, err := sampler.etcdOf(ctx, pod.Name); err == nil {
+		if after, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
 			result.AfterBytes = after.DBTotalBytes
 		}
 		out = append(out, result)
