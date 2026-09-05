@@ -17,6 +17,7 @@ limitations under the License.
 package deployedscale
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -128,5 +129,71 @@ func TestPodFactsFromAnUnscheduledPod(t *testing.T) {
 	got := PodFactsFrom(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pending"}}, ComponentCore)
 	if got.Node != "" || got.Ready {
 		t.Errorf("an unscheduled pod reported placement or readiness: %+v", got)
+	}
+}
+
+// TestASigkillWithoutTheOomFlagIsNotCalledAnOom.
+//
+// This is the case a stock run actually produced: a kube-apiserver whose last
+// state read `Exit Code: 137, Reason: Error`, on a container kubeadm gives no
+// memory limit. Reading 137 as an OOM sends an operator to buy memory for a
+// process that ran out of responsiveness, not out of memory — and the run whose
+// ceiling that was is the one that would have been mis-explained.
+func TestASigkillWithoutTheOomFlagIsNotCalledAnOom(t *testing.T) {
+	facts := PodFacts{
+		Name:         "kube-apiserver-capi-scale-nl882",
+		RestartCount: 1,
+		LastExitCode: 137,
+		LastReason:   "Error",
+	}
+	got := facts.WhyItDied()
+
+	if strings.Contains(got, "OOM") && !strings.Contains(got, "not flagged OOMKilled") {
+		t.Errorf("a kubelet kill was described as an OOM: %q", got)
+	}
+	if !strings.Contains(got, "kubelet") {
+		t.Errorf("the line does not say who did the killing: %q", got)
+	}
+	if !strings.Contains(got, "no memory limit is set on it") {
+		t.Errorf("the line does not say there was no limit to have exceeded: %q", got)
+	}
+}
+
+// TestARealOomSaysWhatItWasAgainst, because "it exceeded its memory limit" is
+// not actionable without the limit — the next run has to be given a number.
+func TestARealOomSaysWhatItWasAgainst(t *testing.T) {
+	facts := PodFacts{
+		Name:             "kcp-0",
+		RestartCount:     1,
+		LastExitCode:     137,
+		LastReason:       ReasonOOMKilled,
+		OOMKilled:        true,
+		MemoryLimitBytes: 4 << 30,
+	}
+	got := facts.WhyItDied()
+	if !strings.Contains(got, "OOM killed") {
+		t.Errorf("a real OOM does not read as one: %q", got)
+	}
+	if !strings.Contains(got, "4.0 GiB") {
+		t.Errorf("the limit it was killed against is missing: %q", got)
+	}
+}
+
+// TestAnOomWithNoLimitIsNodePressure. There is no limit to raise, so a line
+// telling an operator to raise one would send them looking for a field that
+// does not exist.
+func TestAnOomWithNoLimitIsNodePressure(t *testing.T) {
+	facts := PodFacts{RestartCount: 1, LastReason: ReasonOOMKilled, OOMKilled: true}
+	if got := facts.WhyItDied(); !strings.Contains(got, "node memory pressure") {
+		t.Errorf("an OOM against no limit reads as a limit to raise: %q", got)
+	}
+}
+
+// TestAnExitOfOneIsSentToTheProcessOwnLog. A manager that loses its leader
+// election exits 1, and the kubelet knows nothing about why.
+func TestAnExitOfOneIsSentToTheProcessOwnLog(t *testing.T) {
+	facts := PodFacts{RestartCount: 1, LastExitCode: 1, LastReason: "Error"}
+	if got := facts.WhyItDied(); !strings.Contains(got, "own log") {
+		t.Errorf("an exit 1 does not point at the process's own log: %q", got)
 	}
 }

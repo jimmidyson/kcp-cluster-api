@@ -276,6 +276,23 @@ The default 2 GiB quota is a cliff. The database itself is not large at these
 object counts; the revisions between compactions during a climb are what fill
 it.
 
+Worth checking on a cluster that already exists rather than assuming, because a
+cluster provisioned before the patch went in, or one whose ClusterClass edit did
+not roll the control plane, comes up on the default and says nothing about it
+until a rung reaches 2 GiB — at which point etcd raises a NOSPACE alarm, the
+store goes read-only, and every controller in the fleet stops at once. That
+failure is indistinguishable from a management cluster that ran out of capacity,
+and it is not one:
+
+```sh
+kubectl -n kube-system get pod -l component=etcd \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].command}{"\n"}{end}' \
+  | tr ' ' '\n' | grep -E 'etcd-|quota-backend'
+```
+
+All three members, because a quota is per member and a rolled control plane
+picks them up one at a time.
+
 ## Changing the ClusterClass on a cluster that already exists
 
 The etcd patches live in the ClusterClass copy, and the Cluster names that copy.
@@ -455,6 +472,43 @@ on:
 kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
+
+### A container that exited 137 was not necessarily OOM killed
+
+`Exit Code: 137` is SIGKILL and reads like a memory kill. It often is not, and
+the two send you to opposite places.
+
+The kubelet records `Reason: OOMKilled` when the kernel kills a container for
+memory. A last state of `Exit Code: 137, Reason: Error` is therefore the
+kubelet's own kill: SIGTERM first, then SIGKILL when the process did not finish
+shutting down inside its termination grace period. On a kubeadm control plane
+the usual cause is a liveness probe that stopped being answered — `/livez` at a
+15s timeout, 10s period and a failure threshold of 8, so about eighty seconds of
+an API server too busy to reply.
+
+Two things confirm it rather than leaving it a guess. `kube-apiserver` has no
+memory limit under kubeadm — only a CPU request — so a cgroup OOM was not
+available to it at all:
+
+```sh
+kubectl -n kube-system get pod "kube-apiserver-$node" \
+  -o jsonpath='{.spec.containers[0].resources}{"\n"}'
+```
+
+And an OOM kill leaves no shutdown in the log, because SIGKILL cannot be caught.
+Lines like `client-ca controller shutting down` in the previous container's log
+mean the process was asked to stop and was trying to:
+
+```sh
+kubectl -n kube-system logs "kube-apiserver-$node" --previous | tail -40
+```
+
+On a scale run this distinction is the result rather than an obstacle to it. A
+control plane killed for memory says buy memory. A control plane killed by its
+own kubelet for not answering says the fleet outran it, which is what the run is
+measuring. The report says which: `PodFacts.WhyItDied` reads the exit code, the
+OOM flag and the memory limit together, so a failed rung is classified as one or
+the other instead of as `(Error)`.
 
 ## The API server's profiling cannot be turned on here, and trying broke a node
 

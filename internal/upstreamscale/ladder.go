@@ -155,22 +155,25 @@ func (r RungResult) Timing() string {
 // which is the only one of the three that is about Cluster API rather than
 // about the box it was given.
 //
+// The first two are not as far apart as they look, which is why the line comes
+// from PodFacts.WhyItDied rather than from the reason string: a container
+// killed with SIGKILL and no OOMKilled flag was killed by the kubelet, and
+// that is a component that stopped answering under the fleet — a Cluster API
+// finding wearing a capacity finding's exit code.
+//
 // A death outranks a timeout, because a component that died is why the fleet
 // did not arrive rather than a second thing that happened to go wrong.
 func Classify(components []deployedscale.ComponentSample, timedOut bool) string {
 	for _, c := range components {
 		if c.Pod.OOMKilled {
-			return fmt.Sprintf("%s was OOM killed: it exceeded its memory limit", c.Component)
+			return fmt.Sprintf("%s was %s", c.Component, c.Pod.WhyItDied())
 		}
 	}
 	for _, c := range components {
 		if c.Pod.RestartCount > 0 {
-			reason := c.Pod.LastReason
-			if reason == "" {
-				reason = "unknown reason"
-			}
-			return fmt.Sprintf("%s restarted %d time(s) (%s), so its samples are not comparable "+
-				"with the rungs below it", c.Component, c.Pod.RestartCount, reason)
+			return fmt.Sprintf("%s restarted %d time(s) — %s — so its samples are not "+
+				"comparable with the rungs below it",
+				c.Component, c.Pod.RestartCount, c.Pod.WhyItDied())
 		}
 	}
 	if timedOut {

@@ -17,6 +17,8 @@ limitations under the License.
 package deployedscale
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -99,3 +101,65 @@ func PodFactsFrom(pod *corev1.Pod, container string) PodFacts {
 // resets when the process does, so a container that has restarted reports a
 // small heap and a low goroutine count that look like a cheaper fleet.
 func (f PodFacts) Comparable() bool { return f.RestartCount == 0 }
+
+// WhyItDied describes a container's last termination in the terms the next
+// action differs on.
+//
+// # Why an exit code is not enough on its own
+//
+// A stock run reached its ceiling with a kube-apiserver whose status read
+// `Exit Code: 137, Reason: Error`. 137 is SIGKILL, and reading it as "the
+// kernel killed it for memory" is the obvious mistake and the wrong one: the
+// kubelet records ReasonOOMKilled when the kernel does that, and kubeadm gives
+// kube-apiserver no memory limit at all, so a cgroup OOM was not available to
+// it. What actually happened was a graceful shutdown that did not finish
+// inside the termination grace period — the kubelet's own SIGTERM, then its
+// SIGKILL, after /livez went unanswered for long enough to fail the liveness
+// probe.
+//
+// Those two readings send an operator to opposite places: one says buy memory,
+// the other says the process stopped answering under load, which on a scale run
+// is the finding rather than an obstacle to it. The facts that separate them
+// are already recorded here, so the line says which it was rather than leaving
+// "(Error)" for a reader to go and work out by hand — which is what it cost the
+// first time.
+func (f PodFacts) WhyItDied() string {
+	against := "no memory limit is set on it"
+	if f.MemoryLimitBytes > 0 {
+		against = "its memory limit is " + humanBytes(uint64(f.MemoryLimitBytes))
+	}
+
+	switch {
+	case f.OOMKilled && f.MemoryLimitBytes > 0:
+		return "OOM killed: it exceeded its memory limit of " +
+			humanBytes(uint64(f.MemoryLimitBytes))
+	case f.OOMKilled:
+		// No limit to have exceeded, so the kernel was choosing between
+		// this container and the node's other work.
+		return "OOM killed with no memory limit set on it, so this was node memory pressure " +
+			"rather than a limit to raise"
+	case f.LastExitCode == exitSIGKILL:
+		return "killed with SIGKILL (137) but not flagged OOMKilled, and " + against +
+			": the kubelet killed it rather than the kernel, which is what a graceful " +
+			"shutdown that overran its termination grace period looks like — usually a " +
+			"liveness probe that stopped being answered under load, not memory"
+	case f.LastExitCode == exitSIGTERM:
+		return "terminated on SIGTERM (143) and did not come back on its own, so something " +
+			"outside the process asked it to stop"
+	case f.LastExitCode == 1:
+		return "exited 1 of its own accord, so the reason is in its own log rather than in " +
+			"the kubelet's — a manager that loses its leader election exits this way"
+	case f.LastReason != "":
+		return fmt.Sprintf("terminated: %s (exit %d), and %s",
+			f.LastReason, f.LastExitCode, against)
+	default:
+		return fmt.Sprintf("restarted with no termination recorded against it, and %s", against)
+	}
+}
+
+// The two signal exits a container is killed with. 128+n is the shell's
+// convention for "died on signal n" and the kubelet reports the same.
+const (
+	exitSIGTERM = 143
+	exitSIGKILL = 137
+)

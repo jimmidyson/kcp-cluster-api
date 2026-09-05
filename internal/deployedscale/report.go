@@ -469,11 +469,8 @@ func (r *Report) Markdown() string {
 				continue
 			}
 			seen[c.Component] = true
-			reason := c.Pod.LastReason
-			if reason == "" {
-				reason = "unknown reason"
-			}
-			fmt.Fprintf(&b, "> - `%s` restarted %d time(s), last: %s\n", c.Component, c.Pod.RestartCount, reason)
+			fmt.Fprintf(&b, "> - `%s` restarted %d time(s), last: %s\n",
+				c.Component, c.Pod.RestartCount, c.Pod.WhyItDied())
 		}
 		b.WriteString("\n")
 	}
