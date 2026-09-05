@@ -55,6 +55,14 @@ type Runner struct {
 	// through before the climb began, so that the health check reports what
 	// this run did rather than what the cluster remembers.
 	controlPlaneAtStart map[string]deployedscale.PodFacts
+
+	// etcdAtStart is the same for the store, and for the same reason: every
+	// counter here is cumulative over a member's process life, so on a
+	// long-lived cluster the raw numbers are mostly other runs.
+	etcdAtStart map[string]Etcd
+	// store is where that etcd is, kept so a failure can be diagnosed from
+	// wherever it is noticed rather than only where the ladder can see it.
+	store StoreLocation
 }
 
 func (r *Runner) logf(format string, args ...any) {
@@ -161,6 +169,16 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	r.defragment(ctx, report, store, "baseline")
 
+	// After the defragmentation, so that the rewrite it just did is not
+	// counted as strain the climb caused.
+	r.store = store
+	if members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, store); err == nil {
+		r.etcdAtStart = members
+	} else {
+		r.logf("NOTE: could not read etcd's counters (%v), so a store that stalls under the "+
+			"fleet will not be reported as the reason", err)
+	}
+
 	// The baseline, before any fleet exists. Every slope this run reports is a
 	// difference between two large numbers, and without this the smaller of
 	// them is still a fleet.
@@ -204,6 +222,9 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			failure := "the fleet could not be created: " + err.Error()
 			if why := r.died(ctx, controllers); why != "" {
 				failure += " — and " + why
+			}
+			if strain := r.strain(ctx); strain != "" {
+				failure += " — " + strain
 			}
 			rungs = append(rungs, RungResult{
 				Clusters: clusters, Machines: machines, Added: clusters - held,
@@ -297,6 +318,28 @@ func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 	return ""
 }
 
+// strain reports what the store did while the run was climbing, or "" when it
+// did nothing worth saying.
+//
+// Attached to a failure rather than checked as one. A leader change is not by
+// itself a reason to stop a climb — etcd elects a new leader and carries on —
+// but a rung that failed while the store was electing leaders and stalling
+// commits has its answer there, and the alternative is what happened the first
+// time: the counters were in the report and the run said "restarted (Error)".
+//
+// Errors are swallowed for the same reason they are in died: this is a
+// diagnosis attached to a failure that has already happened.
+func (r *Runner) strain(ctx context.Context) string {
+	if r.etcdAtStart == nil {
+		return ""
+	}
+	members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, r.store)
+	if err != nil {
+		return ""
+	}
+	return EtcdSince(r.etcdAtStart, members)
+}
+
 // wait polls until the rung reaches the end state, or a component dies, or
 // time runs out — and says which.
 func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int) (bool, string) {
@@ -321,7 +364,11 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		}
 
 		if time.Now().After(deadline) {
-			return false, fmt.Sprintf("%s (%s)", Classify(nil, true), last.Describe())
+			why := fmt.Sprintf("%s (%s)", Classify(nil, true), last.Describe())
+			if strain := r.strain(ctx); strain != "" {
+				why += " — " + strain
+			}
+			return false, why
 		}
 		r.logf("    %s", last.Describe())
 		select {

@@ -473,6 +473,42 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### When the store is the ceiling, the managers report it as their own death
+
+The manager log to recognise:
+
+```
+leaderelection.go:454 "Failed to update lease optimistically, falling back to
+slow path" err="etcdserver: request timed out"
+leaderelection.go:461 "Error retrieving lease lock" err="... context deadline exceeded"
+leaderelection.go:304 "Failed to renew lease" err="context deadline exceeded"
+main.go:415 "Problem running manager" err="leader election lost"
+```
+
+A leader lease is the smallest write a cluster makes. `etcdserver: request timed
+out` on one is the store failing to commit, and the manager exiting is a
+consequence rather than the fault. Raising `-leader-elect-renew-deadline`
+further does not fix it — a manager that already tolerated half a minute of an
+unavailable store and still lost the lease is not short of patience.
+
+It is also why an API server gets killed by its own kubelet: `/livez` cannot be
+answered while etcd is not committing. Both failures on one cluster, minutes
+apart, are one failure.
+
+The run now says so. `EtcdSince` in `internal/upstreamscale/etcdstrain.go`
+diffs every member's counters against a baseline taken after the opening
+defragmentation, and any rung failure carries the result: leader changes and
+slow applies during the run, the backend-commit and WAL-fsync means over the run
+rather than over the member's life, whether a member restarted, and whether the
+backend is approaching the quota. No thresholds are invented — a leader change
+and a slow apply are etcd's own judgements, and the latencies are printed beside
+their baselines rather than being called bad.
+
+If a run reports this, the fleet is not the thing to change. Check the disk
+first: etcd's fsync latency is what `sizing.md` warns turns a scale test into a
+latency test, and a WAL fsync mean in the hundreds of milliseconds is a disk
+that cannot host an etcd, whatever the CPU and memory figures say.
+
 ### A rung refused at its first Cluster is not a ceiling
 
 The rejection to know by sight:
