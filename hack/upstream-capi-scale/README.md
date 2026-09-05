@@ -369,28 +369,61 @@ anyway is the failure above. It fails the run, after the report is written,
 because whatever it leaves behind is what the next run would take as its
 baseline.
 
-### Recovering a namespace the first run left Terminating
+### Recovering a fleet left Terminating
 
 A namespace stuck this way stays stuck: nothing in stock Cluster API will ever
 release those DevMachines. Their in-memory state went with the DevCluster's
-resource group, so releasing them by hand loses nothing:
+resource group, so releasing them by hand loses nothing.
 
-`kubectl patch` takes no `--all` — that flag is `delete`, `label` and
-`annotate` only — so the objects are named one at a time:
+Start by finding out whether anything is still working on it. A run interrupted
+at scale can leave the provider OOM killed, in which case no finalizer is coming
+off on its own:
 
 ```sh
 export KUBECONFIG=../../bin/capi-scale.kubeconfig
-for ns in $(kubectl get namespaces -o name | grep '^namespace/capi-scale-' | cut -d/ -f2); do
-  for dm in $(kubectl -n "$ns" get devmachines -o name); do
-    kubectl -n "$ns" patch "$dm" --type=merge -p '{"metadata":{"finalizers":null}}'
-  done
-done
+kubectl -n capd-system get pods
+kubectl get ns -o name | grep -c '^namespace/capi-scale-'
+kubectl get devmachines -A --no-headers --chunk-size=500 | wc -l
+```
+
+Then release the DevMachines. `kubectl patch` takes no `--all` — that flag is
+`delete`, `label` and `annotate` only — so each object is named, and at a fleet
+of thousands that has to be done in parallel rather than one at a time:
+
+```sh
+kubectl get devmachines -A --chunk-size=500 --no-headers \
+    -o custom-columns=NS:.metadata.namespace,N:.metadata.name \
+  | awk '$1 ~ /^capi-scale-/ {print $1, $2}' \
+  | xargs -P 32 -n 2 sh -c 'kubectl -n "$1" patch devmachine "$2" \
+      --type=merge -p "{\"metadata\":{\"finalizers\":null}}"' _
+
 kubectl get namespaces | grep capi-scale    # until none remain
 ```
 
+The `awk` filter is not decoration: without it this reaches every DevMachine on
+the cluster rather than the ones this harness created.
+
 Once the DevMachines go, every Machine finishes, then every Cluster, then the
-namespace. Check that the list is empty before the next run: a run that starts
-over a terminating fleet measures both.
+namespace. If something is still there after that, run the same pipeline for
+`devclusters`, then `machines`, then `clusters` — in that order, so that each
+one is only stripped if the layer below it did not free it. Check the list is
+empty before the next run: a run that starts over a terminating fleet measures
+both.
+
+### Do not delete the namespaces to tear a fleet down
+
+It is the fastest-looking way to clean up and it is what produces the state
+above. A namespace deletion stamps every object in it at once, with no order,
+and the failure is the one this section exists to recover from.
+
+Delete the Clusters and let the Cluster controller order its own descendants,
+which is what `upstreamscale.Teardown` does and what upstream's own tests rely
+on:
+
+```sh
+kubectl delete clusters -A --all --wait=false
+# wait until none remain, and only then remove the namespaces
+```
 
 ## The API server's profiling cannot be turned on here, and trying broke a node
 
