@@ -186,11 +186,35 @@ func series(line string) (name string, labels map[string]string, value float64, 
 		}
 		labels[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(val), `"`)
 	}
-	value, err := strconv.ParseFloat(strings.TrimSpace(line[shut+1:]), 64)
+	value, err := sampleValue(line[shut+1:])
 	if err != nil {
 		return "", nil, 0, false
 	}
 	return name, labels, value, true
+}
+
+// sampleValue reads the value out of the tail of a sample line, which the
+// Prometheus text format allows to carry a timestamp after it.
+//
+// # Why this is not a detail
+//
+// The kubelet's cAdvisor exposition uses that allowance and the endpoints this
+// parser was first written against — etcd's, the API server's — do not:
+//
+//	container_memory_working_set_bytes{...} 2.1288392704e+10 1757068800000
+//
+// Parsing the whole tail as one number fails, the line is skipped, and a scrape
+// that arrived perfectly intact reports nothing. That is not a hypothetical: it
+// is why every recorded run reports zero resident memory for all four managers,
+// and why the first control-plane node scrape found no containers on three
+// nodes that were plainly running some. A parser finding no series and a node
+// running nothing are indistinguishable from outside, so it never said so.
+func sampleValue(tail string) (float64, error) {
+	tail = strings.TrimSpace(tail)
+	if value, _, found := strings.Cut(tail, " "); found {
+		tail = value
+	}
+	return strconv.ParseFloat(tail, 64)
 }
 
 // splitLabels splits on commas that are not inside a quoted value. Container

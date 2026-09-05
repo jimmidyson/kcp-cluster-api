@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
@@ -393,12 +392,13 @@ func eachSample(r io.Reader, f func(name string, labels map[string]string, value
 			f(name, labels, value)
 			continue
 		}
-		// The unlabelled form, which series() does not match.
+		// The unlabelled form, which series() does not match. Its tail may
+		// carry a timestamp as well — see sampleValue.
 		name, rest, ok := strings.Cut(line, " ")
 		if !ok {
 			continue
 		}
-		value, err := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+		value, err := sampleValue(rest)
 		if err != nil {
 			continue
 		}

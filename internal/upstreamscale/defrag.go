@@ -57,6 +57,20 @@ type Defragmenter struct {
 	client rest.Interface
 }
 
+// defragTimeout is how long a member is given to rewrite its file.
+//
+// etcdctl's own default is five seconds, which is not enough once a fleet is in
+// the store: at 500 clusters a member timed out at 5.004s with "context
+// deadline exceeded" and reclaimed nothing while its two peers finished. A run
+// that cannot defragment starts its next rung from a file full of free pages,
+// and a ceiling reached that way is about accumulated fragmentation rather than
+// about how much state the store can hold — which is the confusion the
+// defragmentation is there to remove.
+//
+// Five minutes is long rather than tuned. The cost of overshooting is a wait
+// between rungs; the cost of undershooting is the measurement.
+const defragTimeout = "--command-timeout=5m"
+
 // StoreLocation is where a run's etcd is and how its metrics are reached.
 //
 // There are two stores in this exercise and they live in different places. The
@@ -113,6 +127,7 @@ func KubeadmStore() StoreLocation {
 			"--cacert=/etc/kubernetes/pki/etcd/ca.crt",
 			"--cert=/etc/kubernetes/pki/etcd/server.crt",
 			"--key=/etc/kubernetes/pki/etcd/server.key",
+			defragTimeout,
 			"defrag",
 		},
 	}
@@ -133,6 +148,7 @@ func DeployedStore(namespace string) StoreLocation {
 		Defrag: []string{
 			"etcdctl",
 			fmt.Sprintf("--endpoints=http://127.0.0.1:%d", deployedscale.EtcdClientPort),
+			defragTimeout,
 			"defrag",
 		},
 	}
@@ -175,6 +191,18 @@ type DefragResult struct {
 	BeforeBytes uint64 `json:"beforeBytes"`
 	AfterBytes  uint64 `json:"afterBytes"`
 	Err         string `json:"error,omitempty"`
+}
+
+// Measured reports whether both readings arrived. A backend file is never zero
+// bytes, so a zero on either side is a reading that did not happen rather than
+// a store that holds nothing.
+func (d DefragResult) Measured() bool { return d.BeforeBytes > 0 && d.AfterBytes > 0 }
+
+func sizeOrUnknown(n uint64) string {
+	if n == 0 {
+		return "unknown"
+	}
+	return humanBytes(n)
 }
 
 // Reclaimed is how much the file shrank.
@@ -262,6 +290,14 @@ func DescribeDefrag(results []DefragResult) string {
 	for _, r := range results {
 		if r.Err != "" {
 			parts = append(parts, fmt.Sprintf("%s failed (%s)", r.Pod, r.Err))
+			continue
+		}
+		if !r.Measured() {
+			// "reclaimed 0 B (0 B to 1.3 GiB)" is what this used to print, and
+			// it reads as a member that grew from nothing — a defect in the
+			// measurement wearing the costume of a finding about the store.
+			parts = append(parts, fmt.Sprintf("%s defragmented, size **not measured** "+
+				"(before %s, after %s)", r.Pod, sizeOrUnknown(r.BeforeBytes), sizeOrUnknown(r.AfterBytes)))
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s reclaimed %s (%s to %s)",

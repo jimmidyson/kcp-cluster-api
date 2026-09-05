@@ -162,3 +162,43 @@ func TestBothStoresNameTheContainerToExecIn(t *testing.T) {
 		}
 	}
 }
+
+// TestADefragIsGivenLongEnoughToFinish.
+//
+// etcdctl's own command timeout is five seconds, and a defragmentation of a
+// backend with a fleet in it takes longer than that: at 500 clusters a member
+// timed out with "context deadline exceeded" after 5.004s and reclaimed
+// nothing, while its two peers finished. A run that cannot defragment is a run
+// whose next rung starts from a file full of free pages, and whose ceiling is
+// then about accumulated fragmentation rather than about how much state the
+// store can hold — the exact confusion the defragmentation exists to remove.
+func TestADefragIsGivenLongEnoughToFinish(t *testing.T) {
+	for _, store := range []StoreLocation{KubeadmStore(), DeployedStore("kcp-scale")} {
+		cmd := strings.Join(store.DefragCommand(), " ")
+		if !strings.Contains(cmd, "--command-timeout") {
+			t.Errorf("no command timeout, so etcdctl's own 5s applies: %q", cmd)
+		}
+	}
+}
+
+// TestAMemberThatCouldNotBeMeasuredDoesNotReportAShrink.
+//
+// A defragmentation whose before-reading failed printed "reclaimed 0 B (0 B to
+// 1.3 GiB)" — which reads as a member that grew, from a run that had simply
+// failed to measure it. Either both readings are there or the result says the
+// figures are missing.
+func TestAMemberThatCouldNotBeMeasuredDoesNotReportAShrink(t *testing.T) {
+	got := DescribeDefrag([]DefragResult{
+		{Pod: "etcd-0", BeforeBytes: 1_932_735_283, AfterBytes: 1_395_864_371},
+		{Pod: "etcd-1", BeforeBytes: 0, AfterBytes: 1_395_864_371},
+	})
+	if !strings.Contains(got, "etcd-0 reclaimed") {
+		t.Errorf("the member that was measured lost its figure: %q", got)
+	}
+	if strings.Contains(got, "0 B to") {
+		t.Errorf("a member with no before-reading was reported as having grown from nothing: %q", got)
+	}
+	if !strings.Contains(got, "etcd-1") || !strings.Contains(got, "not measured") {
+		t.Errorf("the member that could not be measured is not named as such: %q", got)
+	}
+}

@@ -137,3 +137,73 @@ func TestUsageIsNotSilentlyZero(t *testing.T) {
 		t.Error("a pod with no series parsed into a measurement of zero cost")
 	}
 }
+
+// TestASampleWithATimestampIsStillASample.
+//
+// This is the bug that made every recorded run report zero resident memory for
+// all four managers, and then made the control plane unreadable when the node
+// scrape was added: the kubelet's cAdvisor exposition puts a millisecond
+// timestamp after the value, which Prometheus text format allows and the
+// endpoints this parser was written against — etcd's and the API server's —
+// never use.
+//
+//	container_memory_working_set_bytes{...} 2.1288392704e+10 1757068800000
+//
+// Parsing the whole tail as the value fails, the line is skipped, and a scrape
+// that arrived intact reports nothing at all. It failed the same way for two
+// years' worth of figures without once saying so, because a parser that finds
+// no series and a node with no containers are indistinguishable from the
+// outside.
+func TestASampleWithATimestampIsStillASample(t *testing.T) {
+	const line = `container_memory_working_set_bytes{container="kube-apiserver",` +
+		`id="/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod123.slice",` +
+		`image="registry.k8s.io/kube-apiserver:v1.32.0",name="k8s_kube-apiserver_x",` +
+		`namespace="kube-system",pod="kube-apiserver-cp-0"} 2.1288392704e+10 1757068800000`
+
+	name, labels, value, ok := series(line)
+	if !ok {
+		t.Fatal("a cAdvisor sample with a timestamp was not parsed at all")
+	}
+	if name != "container_memory_working_set_bytes" {
+		t.Errorf("name = %q", name)
+	}
+	if value != 2.1288392704e+10 {
+		t.Errorf("value = %v, want the sample's value and not its timestamp", value)
+	}
+	if labels["pod"] != "kube-apiserver-cp-0" || labels["container"] != "kube-apiserver" {
+		t.Errorf("labels = %v", labels)
+	}
+}
+
+// TestAnUnlabelledSampleWithATimestampToo, since the same exposition carries
+// machine-level series with no labels at all.
+func TestAnUnlabelledSampleWithATimestampToo(t *testing.T) {
+	var got float64
+	var seen bool
+	err := eachSample(strings.NewReader("machine_memory_bytes 3.3706434048e+10 1757068800000\n"),
+		func(name string, _ map[string]string, value float64) {
+			if name == "machine_memory_bytes" {
+				got, seen = value, true
+			}
+		})
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if !seen {
+		t.Fatal("an unlabelled sample with a timestamp was skipped")
+	}
+	if got != 3.3706434048e+10 {
+		t.Errorf("value = %v, want the value rather than the timestamp", got)
+	}
+}
+
+// TestAValueThatIsNotANumberIsStillRefused, so that widening the parse does not
+// turn junk into a figure.
+func TestAValueThatIsNotANumberIsStillRefused(t *testing.T) {
+	if _, _, _, ok := series(`container_memory_working_set_bytes{pod="x"} not-a-number`); ok {
+		t.Error("a non-numeric value was accepted")
+	}
+	if _, _, _, ok := series(`container_memory_working_set_bytes{pod="x"} `); ok {
+		t.Error("an empty value was accepted")
+	}
+}
