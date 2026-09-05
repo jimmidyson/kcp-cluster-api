@@ -386,7 +386,9 @@ func HealthOf(facts map[string]deployedscale.PodFacts) []deployedscale.Component
 }
 
 // ControlPlaneHealth is the cheap check: has anything on the control plane's
-// nodes died since the run started.
+// nodes died. Compare it against a baseline with HealthSince — on its own it
+// reports a pod's whole history, and a static control plane pod's history
+// outlives any number of runs.
 //
 // # Why this exists separately from the sample
 //
@@ -403,4 +405,47 @@ func (s *Sampler) ControlPlaneHealth(ctx context.Context, cl client.Client,
 		return nil, err
 	}
 	return HealthOf(s.podFacts(ctx, cl, nodes)), nil
+}
+
+// HealthSince is the control plane's health measured against a baseline taken
+// before the climb.
+//
+// # Why a difference rather than a count
+//
+// The managers are restarted before a run, so their pods are new and their
+// counts start at zero. kubeadm's control plane pods are not: they live as long
+// as the node, and an API server killed hours ago still reports it. A check on
+// the raw count would abort the first rung of every run on a cluster with any
+// history — and a cluster that has been pushed until something breaks has
+// history by construction.
+//
+// So what is reported is what happened *since the baseline*, which is also the
+// window the rungs are compared across. OOMKilled travels with the restart that
+// carried it rather than with the pod: the flag is read from the last
+// termination and persists, and a process killed yesterday for memory and
+// restarted today for something else must not be reported as having run out of
+// memory now. That sentence is what a capacity finding is made of.
+func HealthSince(baseline, current map[string]deployedscale.PodFacts) []deployedscale.ComponentSample {
+	changed := map[string]deployedscale.PodFacts{}
+	for key, now := range current {
+		was := baseline[key]
+		if now.RestartCount <= was.RestartCount {
+			continue
+		}
+		since := now
+		since.RestartCount = now.RestartCount - was.RestartCount
+		changed[key] = since
+	}
+	return HealthOf(changed)
+}
+
+// ControlPlaneFacts is the pod facts for everything on the control plane's
+// nodes, which is what a baseline for HealthSince is made of.
+func (s *Sampler) ControlPlaneFacts(ctx context.Context, cl client.Client,
+) (map[string]deployedscale.PodFacts, error) {
+	nodes, err := ControlPlaneNodes(ctx, cl)
+	if err != nil {
+		return nil, err
+	}
+	return s.podFacts(ctx, cl, nodes), nil
 }

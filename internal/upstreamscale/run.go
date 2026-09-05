@@ -50,6 +50,11 @@ type Runner struct {
 	// Created is every tenant the run made, in creation order, for a caller
 	// that wants to tear down after a failure as well as after a success.
 	Created []string
+
+	// controlPlaneAtStart is what the control plane's pods had already been
+	// through before the climb began, so that the health check reports what
+	// this run did rather than what the cluster remembers.
+	controlPlaneAtStart map[string]deployedscale.PodFacts
 }
 
 func (r *Runner) logf(format string, args ...any) {
@@ -137,6 +142,21 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	} else {
 		report.AddFact("baseline", settle.Describe())
 		r.logf("%s", settle.Describe())
+	}
+
+	// What the control plane has already been through, before anything is
+	// created. Every restart the health check reports from here is one this run
+	// caused; without it, a kubeadm control plane pod restarted at any point in
+	// the node's life would fail the first rung.
+	if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
+		r.controlPlaneAtStart = facts
+		if restarted := Classify(HealthOf(facts), false); restarted != "" {
+			report.AddFact("controlPlaneHistory", restarted)
+			r.logf("NOTE: the control plane carries history from before this run: %s", restarted)
+		}
+	} else {
+		r.logf("NOTE: could not read the control plane's pods (%v), so a process dying during the "+
+			"run will not be noticed as one", err)
 	}
 
 	r.defragment(ctx, report, store, "baseline")
@@ -259,9 +279,14 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		// The control plane too, and only its pods' facts — a run aimed at a
 		// ceiling has to be able to say the API server was OOM killed rather
 		// than that reconciliation stopped keeping up. Cheap by construction:
-		// this reads no metrics. See Sampler.ControlPlaneHealth.
-		if health, err := r.Sampler.ControlPlaneHealth(ctx, r.Host); err == nil {
-			if why := Classify(health, false); why != "" {
+		// this reads no metrics.
+		//
+		// Against the baseline, not against zero: these pods live as long as
+		// the node, so their restart counts carry every earlier run's history
+		// and checking the raw number would fail the first rung on any cluster
+		// that has been pushed before. See HealthSince.
+		if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
+			if why := Classify(HealthSince(r.controlPlaneAtStart, facts), false); why != "" {
 				return false, why
 			}
 		}

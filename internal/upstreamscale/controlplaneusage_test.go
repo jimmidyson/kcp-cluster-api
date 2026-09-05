@@ -311,3 +311,74 @@ func TestTheHealthCheckIsStableOrdered(t *testing.T) {
 		}
 	}
 }
+
+// TestOnlyRestartsDuringTheRunCount.
+//
+// The managers are restarted before a run, so their pods are new and their
+// restart counts start at zero. A control plane's are not: kubeadm's static
+// pods live as long as the node, and an API server that was killed three hours
+// ago still reports it. Checking the raw count would abort the first rung of
+// every run on a cluster with any history at all — and this cluster has some.
+//
+// What matters is a restart *since the baseline*, because that is the one that
+// makes the rungs either side of it incomparable.
+func TestOnlyRestartsDuringTheRunCount(t *testing.T) {
+	before := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-0": {Name: "kube-apiserver-cp-0", RestartCount: 1, LastReason: "OOMKilled", OOMKilled: true},
+		"kube-system/etcd-cp-0":           {Name: "etcd-cp-0"},
+	}
+
+	// Nothing has happened since; the old kill is history, not a finding.
+	unchanged := HealthSince(before, before)
+	if why := Classify(unchanged, false); why != "" {
+		t.Errorf("a restart from before the run failed a rung: %q", why)
+	}
+
+	// Now one of them goes during the run.
+	after := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-0": {Name: "kube-apiserver-cp-0", RestartCount: 2, LastReason: "OOMKilled", OOMKilled: true},
+		"kube-system/etcd-cp-0":           {Name: "etcd-cp-0"},
+	}
+	why := Classify(HealthSince(before, after), false)
+	if !strings.Contains(why, "OOM") || !strings.Contains(why, "kube-apiserver-cp-0") {
+		t.Errorf("a kill during the run was classified as %q", why)
+	}
+}
+
+// TestAProcessThatAppearedDuringTheRunIsMeasuredFromZero, so a pod the baseline
+// never saw is not credited with the restarts it arrived carrying.
+func TestAProcessThatAppearedDuringTheRunIsMeasuredFromZero(t *testing.T) {
+	after := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-3": {Name: "kube-apiserver-cp-3", RestartCount: 4, LastReason: "Error"},
+	}
+	if why := Classify(HealthSince(nil, after), false); why == "" {
+		t.Error("a pod with four restarts that the baseline never saw was passed as healthy")
+	}
+}
+
+// TestAnOldKillDoesNotFollowANewRestartAround.
+//
+// OOMKilled is read from the pod's last termination, which persists. A process
+// that was OOM killed yesterday and restarted for an unrelated reason today
+// must not be reported as having run out of memory now — that is the sentence
+// a capacity finding is made of, and it has to be earned.
+func TestAnOldKillDoesNotFollowANewRestartAround(t *testing.T) {
+	before := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-0": {Name: "kube-apiserver-cp-0", RestartCount: 1, OOMKilled: true, LastReason: "OOMKilled"},
+	}
+	after := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-0": {Name: "kube-apiserver-cp-0", RestartCount: 2, OOMKilled: false, LastReason: "Error"},
+	}
+	why := Classify(HealthSince(before, after), false)
+	if strings.Contains(why, "OOM") {
+		t.Errorf("yesterday's OOM was attached to today's restart: %q", why)
+	}
+	if !strings.Contains(why, "restarted") {
+		t.Errorf("the restart itself was not reported: %q", why)
+	}
+	// One restart, not two: the count is what happened since the baseline,
+	// which is the window the rungs are compared across.
+	if !strings.Contains(why, "1 time") {
+		t.Errorf("the count is the pod's history rather than this run's: %q", why)
+	}
+}
