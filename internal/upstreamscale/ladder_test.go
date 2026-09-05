@@ -25,7 +25,7 @@ import (
 )
 
 func TestTheLadderDoublesAndStopsAtWhatOneProviderCanServe(t *testing.T) {
-	got := Ladder(25, 400)
+	got := Ladder(25, 400, 0)
 	want := []int{25, 50, 100, 200, 400}
 	if len(got) != len(want) {
 		t.Fatalf("ladder = %v, want %v", got, want)
@@ -39,7 +39,7 @@ func TestTheLadderDoublesAndStopsAtWhatOneProviderCanServe(t *testing.T) {
 	// The port range is a ceiling on the fleet, so it is a ceiling on the
 	// ladder: no rung is offered that the provider is known in advance to
 	// refuse.
-	for _, rung := range Ladder(4000, 40000) {
+	for _, rung := range Ladder(4000, 40000, 0) {
 		if rung > MaxInMemoryClusters {
 			t.Errorf("the ladder offers %d clusters, past the %d one provider can serve",
 				rung, MaxInMemoryClusters)
@@ -241,5 +241,63 @@ func TestThePaceIsPerClusterAdded(t *testing.T) {
 func TestNoPaceWithoutAnIncrement(t *testing.T) {
 	if got := (RungResult{Clusters: 10, Added: 0, Converged: true, WaitedFor: time.Minute}).PerAddedCluster(); got != 0 {
 		t.Errorf("pace = %s for a rung that added no clusters", got)
+	}
+}
+
+// TestAStepLadderClimbsInEvenIntervals.
+//
+// Doubling answers "roughly where is the ceiling"; even steps answer "where
+// exactly, and what does the curve do on the way in". Once a run knows the wall
+// is near — the fitted model puts one API server at the node's whole memory
+// around 3,500 clusters — the rungs that matter are the ones either side of it,
+// and a doubling ladder spends them elsewhere.
+func TestAStepLadderClimbsInEvenIntervals(t *testing.T) {
+	got := Ladder(500, 3000, 500)
+	want := []int{500, 1000, 1500, 2000, 2500, 3000}
+	if len(got) != len(want) {
+		t.Fatalf("ladder = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ladder = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestTheLastRungIsTheNumberThatWasAskedFor.
+//
+// A step that does not divide the range evenly would otherwise stop short: 375
+// by 500 reaches 2875 and leaves the run 125 clusters below the size it was
+// told to reach. A short final step is a smaller compromise than not answering
+// the question.
+func TestTheLastRungIsTheNumberThatWasAskedFor(t *testing.T) {
+	got := Ladder(375, 3000, 500)
+	if got[len(got)-1] != 3000 {
+		t.Errorf("ladder = %v, want it to end at the 3000 it was asked for", got)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i] <= got[i-1] {
+			t.Fatalf("ladder = %v, which does not climb", got)
+		}
+	}
+}
+
+// TestAStepLadderStillStopsAtWhatOneProviderCanServe, because the port range
+// bounds the fleet whatever shape the climb is.
+func TestAStepLadderStillStopsAtWhatOneProviderCanServe(t *testing.T) {
+	for _, rung := range Ladder(4000, 40000, 4000) {
+		if rung > MaxInMemoryClusters {
+			t.Errorf("the ladder offers %d clusters, past the %d one provider can serve",
+				rung, MaxInMemoryClusters)
+		}
+	}
+}
+
+// TestAStepBiggerThanTheRangeIsOneRung, rather than none.
+func TestAStepBiggerThanTheRangeIsOneRung(t *testing.T) {
+	got := Ladder(500, 800, 5000)
+	want := []int{500, 800}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ladder = %v, want %v", got, want)
 	}
 }

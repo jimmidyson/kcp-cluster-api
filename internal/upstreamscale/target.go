@@ -111,8 +111,15 @@ type Target interface {
 // RunOptions are the knobs a run takes, and they are the same knobs on both
 // sides — which is most of what makes two runs comparable.
 type RunOptions struct {
-	// StartClusters and MaxClusters bound the doubling ladder.
+	// StartClusters and MaxClusters bound the ladder.
 	StartClusters, MaxClusters int
+	// RungStep climbs in even intervals instead of doubling. Zero doubles.
+	//
+	// Stepping is for a run aimed at a ceiling already roughly located: it
+	// spends its rungs either side of the wall rather than everywhere below it,
+	// and gives the next fit its points where the curve is most likely to stop
+	// being a line. See Ladder.
+	RungStep int
 	// NodesPerCluster is carried for the report; the shape itself is the
 	// Target's, since it knows what a tenant is.
 	NodesPerCluster int

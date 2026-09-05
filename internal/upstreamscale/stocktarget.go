@@ -108,22 +108,45 @@ func (s *StockTarget) Controllers() []Controller { return Controllers() }
 
 func (s *StockTarget) Store() StoreLocation { return KubeadmStore() }
 
-// ControlPlane samples every API server by name.
+// ControlPlane is every process on the control plane's nodes, plus the API
+// server's own metrics for the one instance that can be read with credentials.
 //
-// kubeadm's static pods, one per control plane node, rather than one read
-// through the cluster's own kubeconfig: that addresses the VIP and lands on
-// whichever instance the load balancer picked, which is what every stock figure
-// recorded before this was. Where the pod proxy cannot reach them the reading
-// falls back to the endpoint and carries the caveat — see Sampler.ControlPlanes.
+// # Two reads, because neither answers on its own
+//
+// The **node** read is the resource one, and it is the only one that can cover
+// the whole control plane. The API server's /metrics needs credentials and the
+// pod proxy strips them — a request through it arrives as system:anonymous and
+// is refused, which is what reduced every recorded control-plane figure to one
+// arbitrary instance behind the VIP. The kubelet's cAdvisor endpoint goes
+// through the *node* proxy, which carries the caller's identity, and reports
+// every container on the node: all three API servers, all three etcd members,
+// the controller manager, the scheduler, and whatever else is up there. That is
+// where the memory and CPU come from now.
+//
+// The **endpoint** read is the behavioural one: stored objects, requests in
+// flight, requests rejected, how long the store is taking. Those exist nowhere
+// else, and they come from whichever instance the VIP picked — which is fine,
+// because they are about the cluster rather than about a process.
+//
+// A failure of the node read is fatal to the sample; a failure of the endpoint
+// read is not, because the resource question survives without it.
 func (s *StockTarget) ControlPlane(ctx context.Context, host client.Client,
 	heapSamples int, heapGap time.Duration,
 ) ([]deployedscale.ComponentSample, string, error) {
-	loc := KubeAPIServers()
-	reading, err := s.Sampler.ControlPlanes(ctx, host, loc, heapSamples, heapGap)
-	if err != nil {
+	samples, err := s.Sampler.ControlPlaneNodeUsage(ctx, host)
+	if len(samples) == 0 {
 		return nil, "", err
 	}
-	return reading.Samples(loc.Component), reading.Describe(), nil
+	described := DescribeControlPlaneUsage(samples)
+	if err != nil {
+		described += " — **incomplete**: " + err.Error()
+	}
+
+	// One instance's own metrics, for what cAdvisor cannot see. Best effort.
+	if api, apiErr := s.Sampler.APIServer(ctx, heapSamples, heapGap); apiErr == nil {
+		described += "; one instance reports " + api.Describe()
+	}
+	return samples, described, nil
 }
 
 func (s *StockTarget) Plan(clusters int) (Fleet, error) {

@@ -51,6 +51,12 @@ var (
 
 	startClusters = flag.Int("capi-start-clusters", 25, "The first rung.")
 	maxClusters   = flag.Int("capi-max-clusters", 400, "The last rung the ladder will offer.")
+	rungStep      = flag.Int("capi-rung-step", 0,
+		"Climb in even steps of this many clusters instead of doubling. Zero doubles, which is the shape "+
+			"for a first run — it finds the neighbourhood of a ceiling cheaply. A step is the shape for the "+
+			"run after it, spending rungs either side of a wall already roughly located rather than "+
+			"everywhere below it. The last rung is always -capi-max-clusters, even when the step does not "+
+			"divide the range evenly.")
 	nodesPer      = flag.Int("capi-nodes-per-cluster", 10, "Nodes per cluster, control plane included.")
 	controlPlanes = flag.Int("capi-control-plane-nodes", 3, "Of those, how many are control plane.")
 	perNamespace  = flag.Int("capi-clusters-per-namespace", 10, "How many clusters share a namespace.")
@@ -149,6 +155,7 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		Options: upstreamscale.RunOptions{
 			StartClusters:     *startClusters,
 			MaxClusters:       *maxClusters,
+			RungStep:          *rungStep,
 			NodesPerCluster:   *nodesPer,
 			CreateConcurrency: *createConcurrency,
 			SettleTolerance:   *settleTolerance,

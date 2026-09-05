@@ -437,6 +437,11 @@ tasks:
       KUBECONFIG_PATH: '{{.KUBECONFIG_PATH | default (printf "%s/capi-scale.kubeconfig" .BIN)}}'
       START_CLUSTERS: '{{.START_CLUSTERS | default "25"}}'
       MAX_CLUSTERS: '{{.MAX_CLUSTERS | default "400"}}'
+      # Even steps instead of doubling. Zero doubles, which finds the
+      # neighbourhood of a ceiling cheaply; a step spends rungs either side of a
+      # wall already roughly located — and the last rung is always MAX_CLUSTERS
+      # even when the step does not divide the range evenly.
+      RUNG_STEP: '{{.RUNG_STEP | default "0"}}'
       NODES_PER_CLUSTER: '{{.NODES_PER_CLUSTER | default "10"}}'
       CONTROL_PLANE_NODES: '{{.CONTROL_PLANE_NODES | default "3"}}'
       CLUSTERS_PER_NAMESPACE: '{{.CLUSTERS_PER_NAMESPACE | default "10"}}'
@@ -466,6 +471,7 @@ tasks:
         -capi-kubeconfig={{.KUBECONFIG_PATH}}
         -capi-start-clusters={{.START_CLUSTERS}}
         -capi-max-clusters={{.MAX_CLUSTERS}}
+        -capi-rung-step={{.RUNG_STEP}}
         -capi-nodes-per-cluster={{.NODES_PER_CLUSTER}}
         -capi-control-plane-nodes={{.CONTROL_PLANE_NODES}}
         -capi-clusters-per-namespace={{.CLUSTERS_PER_NAMESPACE}}

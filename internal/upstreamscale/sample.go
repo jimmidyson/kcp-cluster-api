@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -505,9 +506,9 @@ func (s *Sampler) EtcdAt(ctx context.Context, cl client.Client, store StoreLocat
 	if err != nil {
 		return Etcd{}, "", err
 	}
-	// The first by name, deterministically: the backend size and the quota are
-	// the same on every member, and a run that read a different one each time
-	// would attribute their disk latencies to each other.
+	// The first by name, deterministically: a run that read a different member
+	// each time would attribute their disk latencies to each other. For all
+	// three, see EveryEtcdMember.
 	pod := &members[0]
 
 	sample, err := s.etcdMemberAt(ctx, store, pod.Name)
@@ -517,6 +518,73 @@ func (s *Sampler) EtcdAt(ctx context.Context, cl client.Client, store StoreLocat
 			"and the deployed store is started with it open)", pod.Name, err)
 	}
 	return sample, pod.Name, nil
+}
+
+// EveryEtcdMember reads all of them, keyed by pod name.
+//
+// # Why all three, when the database is one
+//
+// The backend size, the key count and the quota are the same on every member —
+// that is what a quorum is for — and reading one was defensible while those
+// were the figures being used. The rest are not shared. WAL fsync and backend
+// commit are that member's disk; a leader change is a fact about one member's
+// view; and "reclaimable" is what *that* member's file would give back to a
+// defragmentation, which is what the defragmenter walks member by member. A run
+// that reads one member cannot say the store is healthy — only that one of the
+// three machines is.
+//
+// Best effort per member and reported either way: a member that will not answer
+// is the one worth knowing about, and it is not a reason to lose the two that
+// did.
+func (s *Sampler) EveryEtcdMember(ctx context.Context, cl client.Client, store StoreLocation,
+) (map[string]Etcd, error) {
+	members, err := StorePods(ctx, cl, store)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]Etcd, len(members))
+	var failed []string
+	for i := range members {
+		name := members[i].Name
+		sample, err := s.etcdMemberAt(ctx, store, name)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s (%v)", name, err))
+			continue
+		}
+		out[name] = sample
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no etcd member answered: %s", strings.Join(failed, "; "))
+	}
+	if len(failed) > 0 {
+		return out, fmt.Errorf("%d of %d etcd members could not be read: %s",
+			len(failed), len(members), strings.Join(failed, "; "))
+	}
+	return out, nil
+}
+
+// DescribeEtcdMembers is what a rung records about the store: the members that
+// agree, said once, and anything that differs between them, said per member.
+func DescribeEtcdMembers(members map[string]Etcd) string {
+	if len(members) == 0 {
+		return "no etcd member was read"
+	}
+	names := make([]string, 0, len(members))
+	for name := range members {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d member(s): ", len(names))
+	for i, name := range names {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "%s %s", name, members[name].Describe())
+	}
+	return b.String()
 }
 
 // etcdOf reads one named member, which is what a defragmentation needs either

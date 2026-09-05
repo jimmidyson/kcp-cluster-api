@@ -101,13 +101,20 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		} else {
 			r.logf("NOTE: could not sample the control plane at %s: %v", label, err)
 		}
-		if etcd, pod, err := r.Sampler.EtcdAt(ctx, r.Host, store); err == nil {
-			report.AddFact("etcd@"+label, etcd.Describe())
-			if etcd.NearQuota() {
-				r.logf("WARNING at %s: %s", label, etcd.Describe())
+		// Every member, not the first: the backend size is shared but the disk
+		// latencies, the leader changes and what a defragmentation would
+		// reclaim are each one machine's.
+		members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, store)
+		if len(members) > 0 {
+			report.AddFact("etcd@"+label, DescribeEtcdMembers(members))
+			for name, member := range members {
+				if member.NearQuota() {
+					r.logf("WARNING at %s: %s %s", label, name, member.Describe())
+				}
 			}
-		} else {
-			r.logf("NOTE: could not sample etcd (%s) at %s: %v", pod, label, err)
+		}
+		if err != nil {
+			r.logf("NOTE: reading etcd at %s: %v", label, err)
 		}
 		for name, th := range throttling {
 			if th.Significant() {
@@ -141,7 +148,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	var rungs []RungResult
 	held := 0
-	for i, clusters := range Ladder(opts.StartClusters, opts.MaxClusters) {
+	for i, clusters := range Ladder(opts.StartClusters, opts.MaxClusters, opts.RungStep) {
 		fleet, err := r.Target.Plan(clusters)
 		if err != nil {
 			return report, Summarise(rungs), fmt.Errorf("rung of %d clusters: %w", clusters, err)

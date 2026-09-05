@@ -24,24 +24,56 @@ import (
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
-// Ladder is the fleet sizes a run climbs: doubling from start, never past what
-// one in-memory provider can serve.
+// Ladder is the fleet sizes a run climbs, never past what one in-memory
+// provider can serve.
 //
-// Doubling rather than stepping, because the question is where a ceiling is
-// rather than exactly which cluster crosses it. Each rung costs a full
-// convergence, so a linear climb spends most of a run re-measuring fleets it
-// has already priced, and the cost model built from the rungs wants points
-// spread across the range in any case.
-func Ladder(start, max int) []int {
+// # Doubling or stepping, and when each is right
+//
+// A step of zero doubles. That is the shape for a first run: the question is
+// where a ceiling is rather than exactly which cluster crosses it, each rung
+// costs a full convergence, and a linear climb from nothing spends most of a
+// run re-measuring fleets it has already priced.
+//
+// A step is the shape for the run after it. Once the ceiling's neighbourhood is
+// known — the model fitted to the first run puts one API server at its node's
+// whole memory around 3,500 clusters — the rungs worth spending are the ones
+// either side of that, and doubling puts them everywhere else. Even steps also
+// give the next fit its points where the curve is most likely to stop being a
+// line.
+//
+// Stepping, the last rung is always the size that was asked for: a step that
+// does not divide the range evenly would otherwise stop short — 375 by 500
+// reaches 2875 — and a short final step is a smaller compromise than not
+// answering the question the run was given. Doubling, max stays what it always
+// was, a cap rather than a target, so the shape the recorded runs were climbed
+// in is unchanged.
+func Ladder(start, max, step int) []int {
 	if start < 1 {
 		start = 1
 	}
 	if max > MaxInMemoryClusters {
 		max = MaxInMemoryClusters
 	}
+	if start > max {
+		return nil
+	}
+
+	if step <= 0 {
+		// Unchanged, deliberately: max is a cap here rather than a target, and
+		// the recorded runs were climbed this way.
+		var out []int
+		for n := start; n <= max; n *= 2 {
+			out = append(out, n)
+		}
+		return out
+	}
+
 	var out []int
-	for n := start; n <= max; n *= 2 {
+	for n := start; n <= max; n += step {
 		out = append(out, n)
+	}
+	if out[len(out)-1] != max {
+		out = append(out, max)
 	}
 	return out
 }
