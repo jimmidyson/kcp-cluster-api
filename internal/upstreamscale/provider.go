@@ -18,9 +18,12 @@ package upstreamscale
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // MaxInMemoryClusters is how many workload clusters one provider pod can serve.
@@ -131,6 +134,77 @@ func Profiling(d *appsv1.Deployment, addr string) bool {
 		changed = true
 	}
 	return changed
+}
+
+// ClientLimits raises a manager's client-side rate limits.
+//
+// # Why a scale run has to touch these
+//
+// Cluster API's own defaults are 100 QPS and 200 burst, which is generous for a
+// fleet and not for this one. At 1,000 clusters the core manager logged
+//
+//	"Waited before sending request" delay="1.254030282s"
+//	  reason="client-side throttling, not priority and fairness"
+//
+// and then lost its leader election, because a five-second lease renewal could
+// not get through a queue its own limiter was holding. The API server refused
+// nothing. A ceiling found that way is a fact about a flag rather than about
+// the machine, and the machine is what this run is measuring — so the limits
+// are raised and the report records what to.
+func ClientLimits(d *appsv1.Deployment, qps float64, burst int) bool {
+	changed := false
+	for i := range d.Spec.Template.Spec.Containers {
+		c := &d.Spec.Template.Spec.Containers[i]
+		if setFlag(c, "--kube-api-qps", strconv.FormatFloat(qps, 'f', -1, 64)) {
+			changed = true
+		}
+		if setFlag(c, "--kube-api-burst", strconv.Itoa(burst)) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// LeaderElectionDeadlines widens the window a manager has to renew its lease.
+//
+// The limiter above is the cause; this is what turns a slow moment into an
+// exit. A manager that cannot renew within the deadline stops leading and the
+// process ends — an orderly shutdown, exit code 1, with nothing in it about
+// running out of anything, which is why the run that hit it reported a restart
+// and no reason.
+func LeaderElectionDeadlines(d *appsv1.Deployment, lease, renew, retry time.Duration) bool {
+	changed := false
+	for i := range d.Spec.Template.Spec.Containers {
+		c := &d.Spec.Template.Spec.Containers[i]
+		for name, value := range map[string]time.Duration{
+			"--leader-elect-lease-duration": lease,
+			"--leader-elect-renew-deadline": renew,
+			"--leader-elect-retry-period":   retry,
+		} {
+			if setFlag(c, name, value.String()) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// setFlag sets a flag to a value, replacing it where it is already set rather
+// than appending: a repeated flag takes the last value on a command line, which
+// is a silent way to measure something other than what was asked for.
+func setFlag(c *corev1.Container, name, value string) bool {
+	want := name + "=" + value
+	for j, arg := range c.Args {
+		if arg == want {
+			return false
+		}
+		if strings.HasPrefix(arg, name+"=") {
+			c.Args[j] = want
+			return true
+		}
+	}
+	c.Args = append(c.Args, want)
+	return true
 }
 
 func hasFlag(args []string, name string) bool {

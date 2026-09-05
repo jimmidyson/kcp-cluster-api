@@ -361,3 +361,46 @@ func containerNameOf(pod *corev1.Pod) string {
 	}
 	return pod.Spec.Containers[0].Name
 }
+
+// HealthOf turns pod facts into the samples Classify reads.
+//
+// Only the facts: a rung's health check runs every poll, for the length of a
+// convergence, so it cannot be the full sample — that is a cAdvisor scrape per
+// node plus several heap reads seconds apart. Classify looks at restarts and
+// OOM kills and nothing else, so this fetches nothing else. The process figures
+// stay zero because they were never read, and a zero that reached a report
+// would be read as a process costing nothing.
+func HealthOf(facts map[string]deployedscale.PodFacts) []deployedscale.ComponentSample {
+	keys := make([]string, 0, len(facts))
+	for key := range facts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make([]deployedscale.ComponentSample, 0, len(keys))
+	for _, key := range keys {
+		_, pod, _ := strings.Cut(key, "/")
+		out = append(out, deployedscale.ComponentSample{Component: pod, Pod: facts[key]})
+	}
+	return out
+}
+
+// ControlPlaneHealth is the cheap check: has anything on the control plane's
+// nodes died since the run started.
+//
+// # Why this exists separately from the sample
+//
+// A run aimed at a ceiling has to be able to say that the API server was OOM
+// killed rather than that reconciliation stopped keeping up, and those are the
+// same observation only if something looks. The rung's health check looked at
+// the four managers and nothing else, so a control plane dying under the fleet
+// was invisible to it — the rung would run to its step timeout and report that
+// nothing had run out.
+func (s *Sampler) ControlPlaneHealth(ctx context.Context, cl client.Client,
+) ([]deployedscale.ComponentSample, error) {
+	nodes, err := ControlPlaneNodes(ctx, cl)
+	if err != nil {
+		return nil, err
+	}
+	return HealthOf(s.podFacts(ctx, cl, nodes)), nil
+}

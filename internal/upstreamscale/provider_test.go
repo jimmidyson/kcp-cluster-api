@@ -19,6 +19,7 @@ package upstreamscale
 import (
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -216,5 +217,104 @@ func TestTheTopologyGateIsSetRatherThanReported(t *testing.T) {
 	// controller whose metrics are the measurement.
 	if EnableTopology(off) {
 		t.Error("re-enabling an enabled gate reported a change")
+	}
+}
+
+// TestTheManagersAreNotRateLimitedIntoTheirOwnCeiling.
+//
+// At 1,000 clusters the core manager lost its leader election and exited:
+//
+//	"Waited before sending request" delay="1.254030282s"
+//	  reason="client-side throttling, not priority and fairness"
+//	"Failed to renew lease" err="context deadline exceeded"
+//	"Problem running manager" err="leader election lost"
+//
+// The API server was not refusing anything. The manager was queueing its own
+// requests behind its own limiter for over a second each, until a five-second
+// lease renewal could not get through — and a lost lease is an orderly exit,
+// not a crash, so nothing in the run said "out of memory" or "out of anything".
+//
+// That is a real finding about the defaults and it is not the finding this run
+// is looking for: a ceiling reached because a client throttled itself is a
+// ceiling about a flag. The flags are raised so that what stops the run is the
+// machine, and the report records what they were raised to, because the two
+// sides of the comparison have to be given the same room.
+func TestTheManagersAreNotRateLimitedIntoTheirOwnCeiling(t *testing.T) {
+	d := deploymentWithArgs("manager", "--leader-elect")
+
+	if !ClientLimits(&d, 500, 1000) {
+		t.Fatal("raising the client limits reported no change")
+	}
+	args := strings.Join(d.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "--kube-api-qps=500") || !strings.Contains(args, "--kube-api-burst=1000") {
+		t.Errorf("the manager is still on its default limits: %q", args)
+	}
+
+	// Idempotent: the prepare step runs before every run, and a second pass
+	// must not append a duplicate flag — a repeated flag takes the last value
+	// on a command line, which is a silent way to measure something else.
+	if ClientLimits(&d, 500, 1000) {
+		t.Error("a second pass reported a change")
+	}
+	if n := strings.Count(strings.Join(d.Spec.Template.Spec.Containers[0].Args, " "), "--kube-api-qps"); n != 1 {
+		t.Errorf("--kube-api-qps appears %d times", n)
+	}
+}
+
+// TestAnExistingLimitIsReplacedRatherThanAppended, so a cluster prepared once
+// at one value and again at another ends up at the second.
+func TestAnExistingLimitIsReplacedRatherThanAppended(t *testing.T) {
+	d := deploymentWithArgs("manager", "--kube-api-qps=100", "--kube-api-burst=200")
+
+	if !ClientLimits(&d, 500, 1000) {
+		t.Fatal("replacing the limits reported no change")
+	}
+	args := strings.Join(d.Spec.Template.Spec.Containers[0].Args, " ")
+	if strings.Contains(args, "--kube-api-qps=100") || strings.Contains(args, "--kube-api-burst=200") {
+		t.Errorf("the old limits are still there: %q", args)
+	}
+	if !strings.Contains(args, "--kube-api-qps=500") {
+		t.Errorf("the new limit is not there: %q", args)
+	}
+}
+
+// TestTheLeaseSurvivesASlowMoment.
+//
+// The limiter is the cause and the deadline is what turned it into an exit. A
+// manager that cannot renew a lease within ten seconds gives up leading, and at
+// a fleet size where the API server occasionally takes longer than that, the
+// run ends with a restart rather than a measurement. The deadlines are widened
+// so that a slow moment is a slow moment.
+func TestTheLeaseSurvivesASlowMoment(t *testing.T) {
+	d := deploymentWithArgs("manager", "--leader-elect")
+
+	if !LeaderElectionDeadlines(&d, time.Minute, 40*time.Second, 5*time.Second) {
+		t.Fatal("widening the deadlines reported no change")
+	}
+	args := strings.Join(d.Spec.Template.Spec.Containers[0].Args, " ")
+	for _, want := range []string{
+		"--leader-elect-lease-duration=1m0s",
+		"--leader-elect-renew-deadline=40s",
+		"--leader-elect-retry-period=5s",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("missing %s: %q", want, args)
+		}
+	}
+	if LeaderElectionDeadlines(&d, time.Minute, 40*time.Second, 5*time.Second) {
+		t.Error("a second pass reported a change")
+	}
+}
+
+// deploymentWithArgs is a manager with the arguments given and nothing else
+// that matters here.
+func deploymentWithArgs(container string, args ...string) appsv1.Deployment {
+	return appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "capi-controller-manager", Namespace: "capi-system"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: container, Args: args}}},
+			},
+		},
 	}
 }

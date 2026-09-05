@@ -260,3 +260,54 @@ func TestAControlPlaneMissingAReplicaOfARoleIsFlagged(t *testing.T) {
 		t.Errorf("a role present on only two of three nodes was not flagged: %q", got)
 	}
 }
+
+// TestAHealthCheckCostsAListRatherThanAScrape.
+//
+// The rung's health check runs every poll — every fifteen seconds for the
+// length of a convergence — so it cannot be the full sample: that is a cAdvisor
+// scrape per node plus five heap reads two seconds apart. What Classify reads
+// is only the pod's facts, so the check only has to fetch those.
+func TestAHealthCheckCostsAListRatherThanAScrape(t *testing.T) {
+	facts := map[string]deployedscale.PodFacts{
+		"kube-system/kube-apiserver-cp-0": {
+			Name: "kube-apiserver-cp-0", Node: "cp-0",
+			RestartCount: 1, OOMKilled: true, LastReason: "OOMKilled",
+		},
+		"kube-system/etcd-cp-0": {Name: "etcd-cp-0", Node: "cp-0"},
+	}
+	samples := HealthOf(facts)
+
+	if len(samples) != 2 {
+		t.Fatalf("%d samples, want one per pod", len(samples))
+	}
+	// No process figures: this check does not scrape, and a zero here would be
+	// read as a process costing nothing if it ever reached a report.
+	for _, s := range samples {
+		if s.Process.ResidentBytes != 0 || s.Process.Goroutines != 0 {
+			t.Errorf("%s carries process figures it never read: %+v", s.Component, s.Process)
+		}
+	}
+
+	why := Classify(samples, false)
+	if !strings.Contains(why, "OOM") || !strings.Contains(why, "kube-apiserver-cp-0") {
+		t.Errorf("an OOM killed API server was classified as %q", why)
+	}
+}
+
+// TestTheHealthCheckIsStableOrderedSoTheFirstFailureNamedIsTheSameOne.
+func TestTheHealthCheckIsStableOrdered(t *testing.T) {
+	facts := map[string]deployedscale.PodFacts{
+		"kube-system/kube-scheduler-cp-2": {Name: "kube-scheduler-cp-2"},
+		"kube-system/kube-apiserver-cp-0": {Name: "kube-apiserver-cp-0"},
+		"kube-system/etcd-cp-1":           {Name: "etcd-cp-1"},
+	}
+	first := HealthOf(facts)
+	for range 5 {
+		again := HealthOf(facts)
+		for i := range first {
+			if first[i].Component != again[i].Component {
+				t.Fatalf("order moved: %v then %v", componentNames(first), componentNames(again))
+			}
+		}
+	}
+}

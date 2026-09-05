@@ -256,6 +256,15 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 				return false, why
 			}
 		}
+		// The control plane too, and only its pods' facts — a run aimed at a
+		// ceiling has to be able to say the API server was OOM killed rather
+		// than that reconciliation stopped keeping up. Cheap by construction:
+		// this reads no metrics. See Sampler.ControlPlaneHealth.
+		if health, err := r.Sampler.ControlPlaneHealth(ctx, r.Host); err == nil {
+			if why := Classify(health, false); why != "" {
+				return false, why
+			}
+		}
 
 		if time.Now().After(deadline) {
 			return false, fmt.Sprintf("%s (%s)", Classify(nil, true), last.Describe())

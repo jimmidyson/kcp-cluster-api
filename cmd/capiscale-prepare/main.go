@@ -51,6 +51,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/upstreamscale"
+	"time"
 )
 
 func main() {
@@ -68,6 +69,26 @@ func main() {
 			"Defaults to the usual rules (KUBECONFIG, then ~/.kube/config).")
 		kubecontext = fs.String("context", "", "Context to use. Named rather than taken from whatever "+
 			"is current, because this patches deployments and the current context may be somewhere else.")
+		// The manager's own client limits, and the window it has to keep its
+		// lease. At 1,000 clusters the core manager queued its own requests
+		// behind its own limiter for over a second each until a five-second
+		// lease renewal could not get through, and then exited because it had
+		// stopped leading. Nothing had run out; a flag had been reached. See
+		// upstreamscale.ClientLimits.
+		clientQPS = fs.Float64("kube-api-qps", 500,
+			"Client-side request rate for each manager. Cluster API's own default is 100, which at a "+
+				"fleet of thousands throttles the manager rather than the cluster — and a ceiling found "+
+				"that way is a fact about this flag rather than about the machine.")
+		clientBurst   = fs.Int("kube-api-burst", 1000, "Client-side burst for each manager.")
+		leaseDuration = fs.Duration("leader-elect-lease-duration", time.Minute,
+			"How long a manager's leadership lease is held.")
+		renewDeadline = fs.Duration("leader-elect-renew-deadline", 40*time.Second,
+			"How long a manager has to renew that lease before it stops leading and exits. The default "+
+				"10s is shorter than the pauses a loaded API server takes, and a lost lease is an "+
+				"orderly exit that says nothing about running out of anything.")
+		retryPeriod = fs.Duration("leader-elect-retry-period", 5*time.Second,
+			"How often it retries the renewal.")
+
 		profilerAddr = fs.String("profiler-address", ":6060",
 			"Address each controller serves pprof on. Bind all interfaces, not localhost: the samples are "+
 				"read through the API server's pod proxy, which reaches the pod IP.")
@@ -96,14 +117,28 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(context.Background(), *kubeconfig, *kubecontext, *profilerAddr, *dryRun, *only, controllers); err != nil {
+	tuning := tuning{
+		QPS: *clientQPS, Burst: *clientBurst,
+		Lease: *leaseDuration, Renew: *renewDeadline, Retry: *retryPeriod,
+	}
+	if err := run(context.Background(), *kubeconfig, *kubecontext, *profilerAddr, *dryRun, *only,
+		controllers, tuning); err != nil {
 		fmt.Fprintf(os.Stderr, "could not prepare the cluster: %v\n", err)
 		os.Exit(1)
 	}
 }
 
+// tuning is what a manager is given so that what stops a run is the machine
+// rather than one of its own flags. See upstreamscale.ClientLimits.
+type tuning struct {
+	QPS   float64
+	Burst int
+
+	Lease, Renew, Retry time.Duration
+}
+
 func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryRun bool, only string,
-	controllers []*upstreamscale.Controller,
+	controllers []*upstreamscale.Controller, tune tuning,
 ) error {
 	cfg, err := restConfig(kubeconfig, kubecontext)
 	if err != nil {
@@ -155,6 +190,13 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		}
 		if upstreamscale.Profiling(&d, profilerAddr) {
 			did = append(did, "pprof on "+profilerAddr)
+		}
+		if upstreamscale.ClientLimits(&d, tune.QPS, tune.Burst) {
+			did = append(did, fmt.Sprintf("client limits raised to %g QPS / %d burst", tune.QPS, tune.Burst))
+		}
+		if upstreamscale.LeaderElectionDeadlines(&d, tune.Lease, tune.Renew, tune.Retry) {
+			did = append(did, fmt.Sprintf("leader election given %s to renew within a %s lease",
+				tune.Renew, tune.Lease))
 		}
 		if c.DevCluster && upstreamscale.RunWithoutDocker(&d) {
 			did = append(did, "Docker socket, its hostPath volume and the privilege removed")
