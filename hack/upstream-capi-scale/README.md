@@ -410,6 +410,37 @@ one is only stripped if the layer below it did not free it. Check the list is
 empty before the next run: a run that starts over a terminating fleet measures
 both.
 
+### Restart the managers between runs
+
+A manager keeps the high-water mark of every fleet it has held. Go returns
+memory to the operating system lazily, the settle before the baseline waits for
+goroutine counts rather than for memory, and a process that has been up across
+several runs starts the next one carrying all of them — which lands directly on
+the intercept every per-cluster figure is measured against.
+
+`capiscale-prepare` rolls the deployments itself whenever it changes a flag, so
+running it is usually enough. When it reports everything already prepared,
+restart them by name:
+
+```sh
+export KUBECONFIG=../../bin/capi-scale.kubeconfig
+for ns in capi-system capi-kubeadm-bootstrap-system \
+          capi-kubeadm-control-plane-system capd-system; do
+  for d in $(kubectl -n "$ns" get deployments -o name); do
+    kubectl -n "$ns" rollout restart "$d"
+    kubectl -n "$ns" rollout status "$d" --timeout=5m
+  done
+done
+```
+
+By name because `rollout restart` and `rollout status` take a name or a
+selector and not `--all` — that flag belongs to `delete`, `label` and
+`annotate`, which is the same trap the DevMachine recovery above documents.
+
+The API server's own allocator high-water mark survives this and everything
+else short of rolling the control plane. It does not matter for a run read as
+slopes between rungs; it does for one whose absolutes are meant to be quoted.
+
 ### Do not delete the namespaces to tear a fleet down
 
 It is the fastest-looking way to clean up and it is what produces the state
