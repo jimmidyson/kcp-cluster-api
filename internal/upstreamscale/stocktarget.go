@@ -23,7 +23,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
@@ -179,8 +178,9 @@ func (s *StockTarget) Create(ctx context.Context, fleet Fleet, concurrency int) 
 	for _, ns := range fleet.Namespaces {
 		group.Go(func() error {
 			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns.Name}}
-			if err := s.Client.Create(groupCtx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("creating namespace %s: %w", ns.Name, err)
+			what := fmt.Sprintf("creating namespace %s", ns.Name)
+			if err := createRetrying(groupCtx, s.Client, namespace, what); err != nil {
+				return fmt.Errorf("%s: %w", what, err)
 			}
 			mu.Lock()
 			created = append(created, ns.Name)
@@ -189,13 +189,15 @@ func (s *StockTarget) Create(ctx context.Context, fleet Fleet, concurrency int) 
 			// The blueprint in dependency order, the class last, so that by
 			// the time it exists everything it refers to does.
 			for _, obj := range Blueprint(ns.Name) {
-				if err := s.Client.Create(groupCtx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating %T in %s: %w", obj, ns.Name, err)
+				what := fmt.Sprintf("creating %T in %s", obj, ns.Name)
+				if err := createRetrying(groupCtx, s.Client, obj, what); err != nil {
+					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
 			for _, cluster := range Clusters(ns.Name, ns.Clusters, fleet.Shape) {
-				if err := s.Client.Create(groupCtx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating cluster %s/%s: %w", ns.Name, cluster.Name, err)
+				what := fmt.Sprintf("creating cluster %s/%s", ns.Name, cluster.Name)
+				if err := createRetrying(groupCtx, s.Client, cluster, what); err != nil {
+					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
 			return nil

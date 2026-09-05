@@ -177,6 +177,13 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 		// Between rungs, never inside one: a defragmentation is a
 		// stop-the-world rewrite on the member it runs against.
+		//
+		// It is also the reason the creates that follow are retried through
+		// transient rejections. A member that has just been rewritten can drop
+		// its watches, and a manager whose informers are re-listing refuses
+		// admission until they have synced — which arrives as a rejection of
+		// the first Cluster of the next rung and looks exactly like a ceiling.
+		// See Transient.
 		if i > 0 {
 			r.defragment(ctx, report, store, fmt.Sprint(clusters))
 		}
@@ -190,10 +197,18 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		madeTenants, err := r.Target.Create(ctx, fleet, opts.CreateConcurrency)
 		r.Created = append(r.Created, madeTenants...)
 		if err != nil {
+			// With whatever the cluster was doing at the time. A creation
+			// that is refused because a manager is restarting and a creation
+			// that is refused because the cluster is full read the same in
+			// an API error, and only one of them is a ceiling.
+			failure := "the fleet could not be created: " + err.Error()
+			if why := r.died(ctx, controllers); why != "" {
+				failure += " — and " + why
+			}
 			rungs = append(rungs, RungResult{
 				Clusters: clusters, Machines: machines, Added: clusters - held,
 				CreatedIn: time.Since(startedCreate),
-				Failure:   "the fleet could not be created: " + err.Error(),
+				Failure:   failure,
 			})
 			break
 		}
@@ -252,6 +267,36 @@ func (r *Runner) defragment(ctx context.Context, report *deployedscale.Report, s
 	r.logf("%s", DescribeDefrag(results))
 }
 
+// died reports the first component that has stopped since this run began, or
+// "" when everything is still up.
+//
+// The managers and the control plane both, because a run aimed at a ceiling has
+// to be able to say the API server was OOM killed rather than that
+// reconciliation stopped keeping up. Cheap by construction: the control-plane
+// half reads pod status and no metrics.
+//
+// The control plane is judged against the baseline rather than against zero.
+// Its pods live as long as the node, so their restart counts carry every
+// earlier run's history, and checking the raw number would fail the first rung
+// on any cluster that has been pushed before. See HealthSince.
+//
+// Errors are swallowed. This is a diagnosis attached to a failure that has
+// already happened, and a run that turned "could not read the pods" into a
+// second failure would bury the first.
+func (r *Runner) died(ctx context.Context, controllers []Controller) string {
+	if components, _, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+		if why := Classify(components, false); why != "" {
+			return why
+		}
+	}
+	if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
+		if why := Classify(HealthSince(r.controlPlaneAtStart, facts), false); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
 // wait polls until the rung reaches the end state, or a component dies, or
 // time runs out — and says which.
 func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int) (bool, string) {
@@ -271,24 +316,8 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		// A component that died is why the fleet has not arrived, rather than
 		// a second thing that went wrong. Checked every poll so that a kill is
 		// reported when it happens rather than after the step timeout.
-		if components, _, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
-			if why := Classify(components, false); why != "" {
-				return false, why
-			}
-		}
-		// The control plane too, and only its pods' facts — a run aimed at a
-		// ceiling has to be able to say the API server was OOM killed rather
-		// than that reconciliation stopped keeping up. Cheap by construction:
-		// this reads no metrics.
-		//
-		// Against the baseline, not against zero: these pods live as long as
-		// the node, so their restart counts carry every earlier run's history
-		// and checking the raw number would fail the first rung on any cluster
-		// that has been pushed before. See HealthSince.
-		if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
-			if why := Classify(HealthSince(r.controlPlaneAtStart, facts), false); why != "" {
-				return false, why
-			}
+		if why := r.died(ctx, controllers); why != "" {
+			return false, why
 		}
 
 		if time.Now().After(deadline) {

@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -224,13 +223,15 @@ func (k *KcpTarget) Create(ctx context.Context, fleet Fleet, concurrency int) ([
 			// In dependency order, the class last, so that by the time it
 			// exists everything it refers to does.
 			for _, obj := range Blueprint(demo.Namespace) {
-				if err := cl.Create(groupCtx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating %T in %s: %w", obj, ws.Name, err)
+				what := fmt.Sprintf("creating %T in %s", obj, ws.Name)
+				if err := createRetrying(groupCtx, cl, obj, what); err != nil {
+					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
 			for _, cluster := range Clusters(demo.Namespace, ws.Clusters, fleet.Shape) {
-				if err := cl.Create(groupCtx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
-					return fmt.Errorf("creating cluster %s in %s: %w", cluster.Name, ws.Name, err)
+				what := fmt.Sprintf("creating cluster %s in %s", cluster.Name, ws.Name)
+				if err := createRetrying(groupCtx, cl, cluster, what); err != nil {
+					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
 			return nil

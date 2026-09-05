@@ -473,6 +473,44 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### A rung refused at its first Cluster is not a ceiling
+
+The rejection to know by sight:
+
+```
+admission webhook "default.cluster.cluster.x-k8s.io" denied the request:
+Internal error occurred: Cluster c0120 can't be defaulted. ClusterClass demo can
+not be retrieved: Timeout: failed waiting for *v1beta2.ClusterClass Informer to
+sync
+```
+
+That is Cluster API's own defaulting webhook saying its cache is not ready: the
+manager could not list ClusterClasses inside the informer's sync timeout. It is
+about the manager's readiness and not about how much the management cluster can
+hold, so a rung abandoned on it records a ceiling that does not exist.
+
+It shows up at the top of a rung because that is where the disturbance is. A
+defragmentation runs between rungs and is a stop-the-world rewrite per member;
+a member being rewritten can drop watches, the managers re-list, and the first
+Cluster of the next rung arrives while they are still doing it. A manager that
+restarted for any other reason produces the same thing.
+
+The run now rides this out — `Transient` in `internal/upstreamscale/create.go`
+separates a rejection about the server from a rejection about the object, and
+creates are retried for two minutes against the first kind only. Invalid,
+Forbidden and Conflict are still immediate failures, and a server that never
+becomes ready still stops the climb, with the attempt count and the elapsed time
+in the message. A creation failure also now carries whatever the managers and
+the control plane were doing at the time, so "a manager restarted" is not left
+to be inferred from an admission error.
+
+If you see it anyway, the manager is the place to look, not the fleet:
+
+```sh
+kubectl -n capi-system get pods
+kubectl -n capi-system logs deploy/capi-controller-manager --previous | tail -40
+```
+
 ### A container that exited 137 was not necessarily OOM killed
 
 `Exit Code: 137` is SIGKILL and reads like a memory kill. It often is not, and
