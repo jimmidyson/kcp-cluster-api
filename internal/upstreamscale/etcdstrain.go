@@ -44,11 +44,19 @@ import (
 // # Counters rather than thresholds
 //
 // Every signal here is a difference against the baseline, and none of them
-// carries a limit this code invents. A leader change and a slow apply are
-// etcd's own judgements, already made, and counting them needs no opinion
-// about how slow is too slow. The latencies are printed beside their baseline
-// for the same reason: a backend commit that went from 4ms to 400ms says what
-// it needs to say without being called bad.
+// carries a limit this code invents. A leader change, a slow apply and a
+// failed proposal are etcd's own judgements, already made, and counting them
+// needs no opinion about how slow is too slow. The latencies are printed
+// beside their baseline for the same reason: a backend commit that went from
+// 4ms to 400ms says what it needs to say without being called bad.
+//
+// The tail is here because the mean is not enough and the first reading proved
+// it. A member serving the cluster whose managers were losing their leases to
+// "etcdserver: request timed out" reported a lifetime WAL fsync mean of 1.6ms
+// — a healthy disk, averaged over three and a half million syncs and days of
+// uptime, in which a minute of stalled writes does not register. Counting the
+// syncs past one of etcd's own bucket boundaries asks the question the mean
+// cannot.
 //
 // The counters are monotonic within one member's process life. A member that
 // restarted resets them, which shows up as a negative difference — reported as
@@ -93,6 +101,21 @@ func EtcdSince(before, now map[string]Etcd) string {
 				notes = append(notes, fmt.Sprintf("WAL fsync averaged %.0fms against %.0fms",
 					during, was.WALFsyncMeanMillis()))
 			}
+		}
+		if had && is.SawLatencyTail && was.SawLatencyTail {
+			if slow := countAbove(is.WALFsyncSlow, was.WALFsyncSlow); slow > 0 {
+				notes = append(notes, fmt.Sprintf("%d WAL fsync(s) over %ss", slow, slowLatency))
+			}
+			if slow := countAbove(is.BackendCommitSlow, was.BackendCommitSlow); slow > 0 {
+				notes = append(notes, fmt.Sprintf("%d backend commit(s) over %ss", slow, slowLatency))
+			}
+		}
+		if had && is.ProposalsFailed > was.ProposalsFailed {
+			notes = append(notes, fmt.Sprintf("%d failed raft proposal(s), which is what a client "+
+				"sees as \"etcdserver: request timed out\"", is.ProposalsFailed-was.ProposalsFailed))
+		}
+		if is.ProposalsPending > 0 {
+			notes = append(notes, fmt.Sprintf("%d proposal(s) still pending", is.ProposalsPending))
 		}
 		if is.NearQuota() {
 			notes = append(notes, fmt.Sprintf("its backend is %.0f%% of the quota, and a store that "+

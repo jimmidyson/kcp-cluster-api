@@ -130,3 +130,93 @@ func TestAMemberWithNoBaselineIsNotInvented(t *testing.T) {
 		t.Errorf("a member's whole history was reported as this run's: %q", got)
 	}
 }
+
+// TestTheTailIsReportedWhereTheMeanWouldNotBe.
+//
+// This is the reading that motivated the tail. A member serving the cluster
+// whose managers were losing leases to "etcdserver: request timed out"
+// reported a lifetime WAL fsync mean of 1.6ms — genuinely healthy, averaged
+// over three and a half million syncs and days of uptime, in which a minute of
+// stalled writes does not move the third decimal place.
+func TestTheTailIsReportedWhereTheMeanWouldNotBe(t *testing.T) {
+	before := map[string]Etcd{"etcd-cp-0": {
+		HasLeader: true, SawLatencyTail: true,
+		WALFsyncSum: 5647, WALFsyncCount: 3_514_308, WALFsyncSlow: 12,
+		BackendCommitSum: 2604, BackendCommitCount: 906_789, BackendCommitSlow: 30,
+	}}
+	// A few hundred stalled syncs later, and a mean that barely moves.
+	now := map[string]Etcd{"etcd-cp-0": {
+		HasLeader: true, SawLatencyTail: true,
+		WALFsyncSum: 5747, WALFsyncCount: 3_534_308, WALFsyncSlow: 412,
+		BackendCommitSum: 2664, BackendCommitCount: 916_789, BackendCommitSlow: 330,
+		ProposalsFailed: 9,
+	}}
+
+	got := EtcdSince(before, now)
+	if !strings.Contains(got, "400 WAL fsync(s) over 0.128s") {
+		t.Errorf("the stalled syncs the mean hides are missing: %q", got)
+	}
+	if !strings.Contains(got, "300 backend commit(s) over 0.128s") {
+		t.Errorf("the stalled commits are missing: %q", got)
+	}
+	if !strings.Contains(got, "9 failed raft proposal(s)") {
+		t.Errorf("the counter for the client's own error is missing: %q", got)
+	}
+	if !strings.Contains(got, "etcdserver: request timed out") {
+		t.Errorf("the line does not connect the counter to what a client sees: %q", got)
+	}
+}
+
+// TestAnUnrecognisedHistogramIsNotEverySyncBeingSlow. A missing bucket and a
+// bucket holding nothing are the same zero, and reading one as the other would
+// report every sync a healthy store ever made as a stall.
+func TestAnUnrecognisedHistogramIsNotEverySyncBeingSlow(t *testing.T) {
+	before := map[string]Etcd{"etcd-cp-0": {HasLeader: true, WALFsyncCount: 1_000_000}}
+	now := map[string]Etcd{"etcd-cp-0": {HasLeader: true, WALFsyncCount: 2_000_000}}
+	if got := EtcdSince(before, now); strings.Contains(got, "WAL fsync(s) over") {
+		t.Errorf("a store whose histogram was not parsed was reported as stalling: %q", got)
+	}
+}
+
+// TestTheHistogramTailIsParsedFromEtcdsOwnBuckets, at the boundary rather than
+// at a number invented here.
+func TestTheHistogramTailIsParsedFromEtcdsOwnBuckets(t *testing.T) {
+	exposition := `# HELP etcd_disk_wal_fsync_duration_seconds The latency distributions of fsync
+# TYPE etcd_disk_wal_fsync_duration_seconds histogram
+etcd_disk_wal_fsync_duration_seconds_bucket{le="0.064"} 3514000
+etcd_disk_wal_fsync_duration_seconds_bucket{le="0.128"} 3514296
+etcd_disk_wal_fsync_duration_seconds_bucket{le="+Inf"} 3514308
+etcd_disk_wal_fsync_duration_seconds_sum 5647.228963687338
+etcd_disk_wal_fsync_duration_seconds_count 3514308
+etcd_disk_backend_commit_duration_seconds_bucket{le="0.128"} 906700
+etcd_disk_backend_commit_duration_seconds_bucket{le="+Inf"} 906789
+etcd_disk_backend_commit_duration_seconds_sum 2604.4815442640124
+etcd_disk_backend_commit_duration_seconds_count 906789
+etcd_server_proposals_failed_total 9
+etcd_server_proposals_pending 41
+etcd_mvcc_db_total_size_in_bytes 1610612736
+etcd_server_quota_backend_bytes 8589934592
+`
+	got, err := ParseEtcd(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	fsyncs, commits, ok := got.SlowSyncs()
+	if !ok {
+		t.Fatal("the histogram tail was not recognised")
+	}
+	if fsyncs != 12 {
+		t.Errorf("slow fsyncs = %d, want 3514308-3514296", fsyncs)
+	}
+	if commits != 89 {
+		t.Errorf("slow commits = %d, want 906789-906700", commits)
+	}
+	if got.ProposalsFailed != 9 || got.ProposalsPending != 41 {
+		t.Errorf("proposals = %d failed, %d pending", got.ProposalsFailed, got.ProposalsPending)
+	}
+	// The mean this member reported while its cluster's managers were losing
+	// leases: healthy, and the reason the tail exists.
+	if mean := got.WALFsyncMeanMillis(); mean < 1.5 || mean > 1.7 {
+		t.Errorf("WAL fsync mean = %.2fms, want the 1.6ms the real member reported", mean)
+	}
+}

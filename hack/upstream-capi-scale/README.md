@@ -506,8 +506,37 @@ their baselines rather than being called bad.
 
 If a run reports this, the fleet is not the thing to change. Check the disk
 first: etcd's fsync latency is what `sizing.md` warns turns a scale test into a
-latency test, and a WAL fsync mean in the hundreds of milliseconds is a disk
-that cannot host an etcd, whatever the CPU and memory figures say.
+latency test.
+
+**Do not check it with the mean.** The member serving the cluster whose managers
+were losing their leases reported this:
+
+```
+etcd_disk_wal_fsync_duration_seconds_sum        5647.228963687338
+etcd_disk_wal_fsync_duration_seconds_count      3514308
+etcd_disk_backend_commit_duration_seconds_sum   2604.4815442640124
+etcd_disk_backend_commit_duration_seconds_count 906789
+```
+
+1.61ms and 2.87ms — a healthy disk. Both are lifetime figures over millions of
+syncs and days of uptime, in which a minute of stalled writes does not reach the
+third decimal place. They say the disk is not *chronically* slow and cannot say
+whether it stalled, and a stall is what stops a fleet. The run reads the
+histogram tail for that reason, and reports syncs past etcd's own 128ms bucket
+boundary alongside `etcd_server_proposals_failed_total` — the direct counter for
+what a client sees as `etcdserver: request timed out`.
+
+By hand, per member, the same question:
+
+```sh
+curl -s localhost:2381/metrics | grep -E \
+  'fsync_duration_seconds_bucket|commit_duration_seconds_bucket|proposals_(failed|pending)|leader_changes|slow_apply|peer_round_trip'
+```
+
+A commit timing out with a local disk this fast points away from the disk: at
+another member's disk, at peer round-trip time between members, or at sheer
+proposal volume. `etcd_network_peer_round_trip_time_seconds` is the one of those
+the run does not sample, so check it here.
 
 ### A rung refused at its first Cluster is not a ceiling
 

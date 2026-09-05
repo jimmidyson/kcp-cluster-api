@@ -66,6 +66,26 @@ type Etcd struct {
 	BackendCommitSum   float64 `json:"backendCommitSeconds"`
 	BackendCommitCount uint64  `json:"backendCommitCount"`
 
+	// The tail those means hide. A mean over a member that has been up for
+	// days does not move for a minute of stalled writes — one read 1.6ms
+	// while a manager three metres away was losing its leader lease to
+	// "etcdserver: request timed out". These count the syncs that took longer
+	// than slowLatency, which is the question that mean cannot answer.
+	//
+	// SawLatencyTail is separate because a missing bucket and a bucket
+	// containing everything are the same zero. Without it, an etcd whose
+	// histogram this parser did not recognise would report every single sync
+	// as slow.
+	WALFsyncSlow      uint64 `json:"walFsyncSlow"`
+	BackendCommitSlow uint64 `json:"backendCommitSlow"`
+	SawLatencyTail    bool   `json:"sawLatencyTail"`
+
+	// Proposals are raft's unit of work, so a failed one is the direct
+	// counter for the error a client sees as "etcdserver: request timed out",
+	// and pending ones are the backlog that produces them.
+	ProposalsFailed  uint64 `json:"proposalsFailed"`
+	ProposalsPending uint64 `json:"proposalsPending"`
+
 	// Health. A leader change under load is etcd struggling, not a topology
 	// event.
 	HasLeader     bool   `json:"hasLeader"`
@@ -73,6 +93,15 @@ type Etcd struct {
 	SlowApplies   uint64 `json:"slowApplies"`
 	SlowReads     uint64 `json:"slowReadIndexes"`
 }
+
+// slowLatency is the histogram boundary a sync is counted as slow above.
+//
+// It is one of etcd's own bucket edges rather than a number chosen here —
+// both histograms are exponential from 1ms, so 128ms is a boundary that
+// exists and needs no interpolation. It is also an order of magnitude above
+// where etcd itself starts logging "slow fdatasync", which makes a sync past
+// it something the store has already complained about.
+const slowLatency = "0.128"
 
 // QuotaUsed is the share of the backend quota the database occupies.
 func (e Etcd) QuotaUsed() float64 {
@@ -120,11 +149,18 @@ func (e Etcd) Fragmentation() float64 {
 func (e Etcd) Fragmented() bool { return e.Fragmentation() > 0.20 }
 
 // WALFsyncMeanMillis and BackendCommitMeanMillis are means rather than
-// percentiles: a histogram's buckets are not in this parser, and what matters
-// here is a figure that moves by an order of magnitude between rungs.
+// percentiles, which is what a sum and a count support. Read them with
+// SlowSyncs: a mean says whether the disk is chronically slow and cannot say
+// whether it stalled, and a stall is what stops a fleet.
 func (e Etcd) WALFsyncMeanMillis() float64 { return mean(e.WALFsyncSum, e.WALFsyncCount) * 1000 }
 func (e Etcd) BackendCommitMeanMillis() float64 {
 	return mean(e.BackendCommitSum, e.BackendCommitCount) * 1000
+}
+
+// SlowSyncs is how many WAL fsyncs and backend commits took longer than
+// slowLatency, and whether the reading is available at all.
+func (e Etcd) SlowSyncs() (fsyncs, commits uint64, ok bool) {
+	return e.WALFsyncSlow, e.BackendCommitSlow, e.SawLatencyTail
 }
 
 // Describe is what a rung carries about the store.
@@ -295,8 +331,26 @@ func ParseEtcd(r io.Reader) (Etcd, error) {
 	var out Etcd
 	seen := false
 
-	err := eachSample(r, func(name string, _ map[string]string, value float64) {
+	// The counts at or under slowLatency, kept apart from the struct so that
+	// "the bucket was not there" stays distinguishable from "nothing was
+	// under it". See SawLatencyTail.
+	var fsyncFast, commitFast uint64
+	var sawFsyncBucket, sawCommitBucket bool
+
+	err := eachSample(r, func(name string, labels map[string]string, value float64) {
 		switch name {
+		case "etcd_disk_wal_fsync_duration_seconds_bucket":
+			if labels["le"] == slowLatency {
+				fsyncFast, sawFsyncBucket = uint64(value), true
+			}
+		case "etcd_disk_backend_commit_duration_seconds_bucket":
+			if labels["le"] == slowLatency {
+				commitFast, sawCommitBucket = uint64(value), true
+			}
+		case "etcd_server_proposals_failed_total":
+			out.ProposalsFailed = uint64(value)
+		case "etcd_server_proposals_pending":
+			out.ProposalsPending = uint64(value)
 		case "etcd_mvcc_db_total_size_in_bytes":
 			out.DBTotalBytes, seen = uint64(value), true
 		case "etcd_mvcc_db_total_size_in_use_in_bytes":
@@ -326,6 +380,14 @@ func ParseEtcd(r io.Reader) (Etcd, error) {
 	if err != nil {
 		return Etcd{}, err
 	}
+	// Both, because a tail reported for one histogram and not the other reads
+	// as a store whose commits are fine and whose syncs are not.
+	if sawFsyncBucket && sawCommitBucket {
+		out.SawLatencyTail = true
+		out.WALFsyncSlow = countAbove(out.WALFsyncCount, fsyncFast)
+		out.BackendCommitSlow = countAbove(out.BackendCommitCount, commitFast)
+	}
+
 	if !seen {
 		return Etcd{}, errors.New("no etcd gauges in this exposition: etcd serves its metrics on " +
 			"--listen-metrics-urls, which kubeadm points at 127.0.0.1 by default — the ClusterClass " +
@@ -408,6 +470,17 @@ func eachSample(r io.Reader, f func(name string, labels map[string]string, value
 		return fmt.Errorf("reading the exposition: %w", err)
 	}
 	return nil
+}
+
+// countAbove is the tail of a histogram: everything, less the bucket at the
+// boundary. Guarded because the two figures are scraped from different lines
+// of one exposition and a count that arrived a bucket-write later would
+// underflow a uint64 into something that reads as astronomical.
+func countAbove(total, atOrUnder uint64) uint64 {
+	if atOrUnder >= total {
+		return 0
+	}
+	return total - atOrUnder
 }
 
 func mean(sum float64, count uint64) float64 {
