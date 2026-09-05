@@ -115,10 +115,34 @@ func TestAnEmptyScrapeIsAnError(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]ContainerUsage) []string {
+func keysOf(m map[string]PodUsage) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestEachPodIsNamedByWhatItRuns.
+//
+// The role is what lets a report say "kube-apiserver x3" — a reader checking
+// that a control plane total covers three machines rather than one. It comes
+// from cAdvisor's own container label rather than from parsing the pod's name,
+// which on a static control plane pod happens to end in the node's name and on
+// a DaemonSet's does not.
+func TestEachPodIsNamedByWhatItRuns(t *testing.T) {
+	usage, err := ParseNodeUsage(strings.NewReader(cadvisorNode))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	for pod, role := range map[string]string{
+		"kube-system/kube-apiserver-cp-0":          "kube-apiserver",
+		"kube-system/etcd-cp-0":                    "etcd",
+		"kube-system/kube-controller-manager-cp-0": "kube-controller-manager",
+		"kube-system/cilium-9xk2v":                 "cilium-agent",
+	} {
+		if got := usage[pod].Role; got != role {
+			t.Errorf("%s runs %q, want %q", pod, got, role)
+		}
+	}
 }

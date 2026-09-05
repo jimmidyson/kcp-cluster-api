@@ -133,20 +133,21 @@ func (s *StockTarget) Store() StoreLocation { return KubeadmStore() }
 func (s *StockTarget) ControlPlane(ctx context.Context, host client.Client,
 	heapSamples int, heapGap time.Duration,
 ) ([]deployedscale.ComponentSample, string, error) {
-	samples, err := s.Sampler.ControlPlaneNodeUsage(ctx, host)
-	if len(samples) == 0 {
+	readout, err := s.Sampler.ControlPlaneNodeUsage(ctx, host)
+	if len(readout.Samples) == 0 {
 		return nil, "", err
 	}
-	described := DescribeControlPlaneUsage(samples)
-	if err != nil {
-		described += " — **incomplete**: " + err.Error()
-	}
+	described := readout.Describe()
 
-	// One instance's own metrics, for what cAdvisor cannot see. Best effort.
+	// One instance's own metrics, for what cAdvisor cannot see: stored objects,
+	// requests in flight, requests shed, how long the store is taking. Marked
+	// as one instance's, because that is what it is — those are facts about the
+	// cluster rather than about a process, so one answering for them is fine
+	// as long as nobody reads them as the control plane's cost.
 	if api, apiErr := s.Sampler.APIServer(ctx, heapSamples, heapGap); apiErr == nil {
-		described += "; one instance reports " + api.Describe()
+		described += "; one API server instance reports " + api.Describe()
 	}
-	return samples, described, nil
+	return readout.Samples, described, nil
 }
 
 func (s *StockTarget) Plan(clusters int) (Fleet, error) {

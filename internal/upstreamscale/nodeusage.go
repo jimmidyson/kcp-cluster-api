@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -28,6 +29,20 @@ import (
 // pod's real ones. Its few MiB belong to no workload, and adding them would put
 // a constant on every pod's figure.
 const sandboxContainer = "POD"
+
+// PodUsage is one pod's cost, and the two things needed to say what it is: the
+// role it plays and the machine it plays it on.
+//
+// Role is the container that holds the most memory in the pod, taken from
+// cAdvisor's own label rather than parsed out of the pod's name. It is what
+// lets a report say "kube-apiserver x3" — a reader checking that a total covers
+// three machines and not one, which is the misreading a summed figure invites.
+type PodUsage struct {
+	ContainerUsage
+
+	Role string
+	Node string
+}
 
 // ParseNodeUsage reads every pod on one node out of a kubelet cAdvisor
 // exposition, keyed "namespace/pod".
@@ -53,8 +68,12 @@ const sandboxContainer = "POD"
 // request latency, etcd's database size. Those still come from the endpoints
 // that serve them. This is the resource half, and the resource half is what a
 // limit is set against.
-func ParseNodeUsage(r io.Reader) (map[string]ContainerUsage, error) {
-	out := map[string]ContainerUsage{}
+func ParseNodeUsage(r io.Reader) (map[string]PodUsage, error) {
+	out := map[string]PodUsage{}
+	// Per pod, the working set of each container, so the role can be the
+	// container that actually holds the pod's memory rather than whichever one
+	// the exposition listed first.
+	byContainer := map[string]map[string]uint64{}
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64<<10), 8<<20)
@@ -80,6 +99,10 @@ func ParseNodeUsage(r io.Reader) (map[string]ContainerUsage, error) {
 		switch name {
 		case "container_memory_working_set_bytes":
 			usage.WorkingSetBytes += uint64(value)
+			if byContainer[key] == nil {
+				byContainer[key] = map[string]uint64{}
+			}
+			byContainer[key][container] += uint64(value)
 		case "container_cpu_usage_seconds_total":
 			usage.CPUSeconds += value
 		case "container_cpu_cfs_throttled_seconds_total":
@@ -96,6 +119,11 @@ func ParseNodeUsage(r io.Reader) (map[string]ContainerUsage, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading the cadvisor exposition: %w", err)
 	}
+	for key, containers := range byContainer {
+		usage := out[key]
+		usage.Role = largestContainer(containers)
+		out[key] = usage
+	}
 	if len(out) == 0 {
 		// Never an empty control plane: a node that answered with no series at
 		// all is a scrape that failed, and reporting it as a node costing
@@ -104,4 +132,28 @@ func ParseNodeUsage(r io.Reader) (map[string]ContainerUsage, error) {
 			"something, but not a kubelet reporting containers")
 	}
 	return out, nil
+}
+
+// largestContainer is the container holding the most of a pod's memory, which
+// is the process the pod exists to run. Ties break by name so a report's rows
+// do not move between samples.
+func largestContainer(containers map[string]uint64) string {
+	var (
+		role  string
+		most  uint64
+		names []string
+	)
+	for name := range containers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if containers[name] > most {
+			role, most = name, containers[name]
+		}
+	}
+	if role == "" && len(names) > 0 {
+		role = names[0]
+	}
+	return role
 }

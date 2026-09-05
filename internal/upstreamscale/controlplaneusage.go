@@ -67,7 +67,7 @@ func ControlPlaneNodes(ctx context.Context, cl client.Client) ([]string, error) 
 // facts may be missing an entry, and a pod is still measured without one: the
 // usage scrape and the pod list are two reads of a cluster that does not hold
 // still between them.
-func ControlPlaneUsage(usage map[string]ContainerUsage,
+func ControlPlaneUsage(usage map[string]PodUsage,
 	facts map[string]deployedscale.PodFacts,
 ) []deployedscale.ComponentSample {
 	keys := make([]string, 0, len(usage))
@@ -87,6 +87,11 @@ func ControlPlaneUsage(usage map[string]ContainerUsage,
 		if !ok {
 			podFacts = deployedscale.PodFacts{Name: pod}
 		}
+		// The node the scrape came from is authoritative: it is where the
+		// figures were read, whatever a second list of pods says.
+		if u.Node != "" {
+			podFacts.Node = u.Node
+		}
 		out = append(out, deployedscale.ComponentSample{
 			// The pod, not the component: three API servers are three
 			// processes, and a report that called them all "kube-apiserver"
@@ -102,14 +107,22 @@ func ControlPlaneUsage(usage map[string]ContainerUsage,
 	return out
 }
 
-// NodeUsage scrapes every pod on one node.
-func (s *Sampler) NodeUsage(ctx context.Context, node string) (map[string]ContainerUsage, error) {
+// NodeUsage scrapes every pod on one node, stamped with the node it came from.
+func (s *Sampler) NodeUsage(ctx context.Context, node string) (map[string]PodUsage, error) {
 	raw, err := s.clientset.CoreV1().RESTClient().Get().
 		AbsPath("/api/v1/nodes", node, "proxy", "metrics", "cadvisor").DoRaw(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading cadvisor on %s: %w", node, err)
 	}
-	return ParseNodeUsage(strings.NewReader(string(raw)))
+	usage, err := ParseNodeUsage(strings.NewReader(string(raw)))
+	if err != nil {
+		return nil, err
+	}
+	for key, u := range usage {
+		u.Node = node
+		usage[key] = u
+	}
+	return usage, nil
 }
 
 // ControlPlaneNodeUsage scrapes every pod on every control plane node, and the
@@ -122,35 +135,182 @@ func (s *Sampler) NodeUsage(ctx context.Context, node string) (map[string]Contai
 // control-plane figure was one arbitrary instance behind the VIP. The node
 // proxy carries the caller's identity, so this reads what the pod proxy cannot.
 func (s *Sampler) ControlPlaneNodeUsage(ctx context.Context, cl client.Client,
-) ([]deployedscale.ComponentSample, error) {
+) (ControlPlaneReadout, error) {
 	nodes, err := ControlPlaneNodes(ctx, cl)
 	if err != nil {
-		return nil, err
+		return ControlPlaneReadout{}, err
 	}
+	readout := ControlPlaneReadout{Nodes: nodes, Usage: map[string]PodUsage{}}
 
-	usage := map[string]ContainerUsage{}
-	var failed []string
+	var why []string
 	for _, node := range nodes {
 		perPod, err := s.NodeUsage(ctx, node)
 		if err != nil {
-			failed = append(failed, fmt.Sprintf("%s (%v)", node, err))
+			readout.Missed = append(readout.Missed, node)
+			why = append(why, fmt.Sprintf("%s (%v)", node, err))
 			continue
 		}
 		for key, u := range perPod {
-			usage[key] = u
+			readout.Usage[key] = u
 		}
 	}
-	if len(usage) == 0 {
-		return nil, fmt.Errorf("no control plane node could be scraped: %s", strings.Join(failed, "; "))
+	if len(readout.Usage) == 0 {
+		return ControlPlaneReadout{}, fmt.Errorf("no control plane node could be scraped: %s",
+			strings.Join(why, "; "))
 	}
-	if len(failed) > 0 {
+	readout.Samples = ControlPlaneUsage(readout.Usage, s.podFacts(ctx, cl, nodes))
+	if len(readout.Missed) > 0 {
 		// Named rather than silent: a control plane summed over two of its
-		// three nodes is short by a whole machine.
-		return ControlPlaneUsage(usage, s.podFacts(ctx, cl, nodes)),
-			fmt.Errorf("%d control plane node(s) could not be scraped, so these figures are short by "+
-				"whatever runs on them: %s", len(failed), strings.Join(failed, "; "))
+		// three nodes is short by a whole machine, which is exactly the
+		// misreading the node count exists to prevent.
+		return readout, fmt.Errorf("%d of %d control plane nodes could not be scraped, so these "+
+			"figures are short by whatever runs on them: %s",
+			len(readout.Missed), len(nodes), strings.Join(why, "; "))
 	}
-	return ControlPlaneUsage(usage, s.podFacts(ctx, cl, nodes)), nil
+	return readout, nil
+}
+
+// ControlPlaneReadout is one sample of the machines the control plane runs on.
+//
+// It carries what was measured *and what it covers* — the nodes found, the ones
+// that answered — because a total without its coverage invites the reading the
+// numbers cannot survive: that this is one machine's cost and the real figure
+// is three times larger.
+type ControlPlaneReadout struct {
+	// Nodes are the control plane's machines, and Missed the ones that did not
+	// answer this time.
+	Nodes  []string
+	Missed []string
+
+	// Usage is every pod on those machines, keyed "namespace/pod".
+	Usage map[string]PodUsage
+	// Samples is the same thing as report components.
+	Samples []deployedscale.ComponentSample
+}
+
+// RoleTotal is what one kind of process costs across the whole control plane.
+type RoleTotal struct {
+	Role     string
+	Count    int
+	Nodes    int
+	Resident uint64
+	CPU      float64
+}
+
+// Roles groups the readout by what each process is, largest first.
+//
+// This is the line's answer to "does that total cover all three machines": a
+// reader sees `kube-apiserver x3` and knows it does, without opening the table
+// or trusting the summing.
+func (r ControlPlaneReadout) Roles() []RoleTotal {
+	byRole := map[string]*RoleTotal{}
+	nodesSeen := map[string]map[string]bool{}
+	for _, u := range r.Usage {
+		role := u.Role
+		if role == "" {
+			role = "unnamed"
+		}
+		total, ok := byRole[role]
+		if !ok {
+			total = &RoleTotal{Role: role}
+			byRole[role] = total
+			nodesSeen[role] = map[string]bool{}
+		}
+		total.Count++
+		total.Resident += u.WorkingSetBytes
+		total.CPU += u.CPUSeconds
+		if u.Node != "" && !nodesSeen[role][u.Node] {
+			nodesSeen[role][u.Node] = true
+			total.Nodes++
+		}
+	}
+
+	out := make([]RoleTotal, 0, len(byRole))
+	for _, total := range byRole {
+		out = append(out, *total)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Resident != out[j].Resident {
+			return out[i].Resident > out[j].Resident
+		}
+		return out[i].Role < out[j].Role
+	})
+	return out
+}
+
+// Describe is the line a rung carries about the control plane's machines.
+//
+// It leads with the coverage — how many nodes, how many of them answered —
+// then the total, then each role with its replica count. The order is
+// deliberate: the first thing a reader needs is what the number covers.
+func (r ControlPlaneReadout) Describe() string {
+	if len(r.Usage) == 0 {
+		return "the control plane's nodes were **not measured**: nothing was read from them, so this " +
+			"rung has no figure for what the machines the fleet's objects live on are doing"
+	}
+
+	// Every figure here comes from what was scraped rather than from the
+	// samples built out of it: the readout is one source of truth, and a line
+	// that could disagree with its own table is worse than no line.
+	var (
+		resident    uint64
+		cpu         float64
+		largest     string
+		largestSize uint64
+	)
+	for key, u := range r.Usage {
+		resident += u.WorkingSetBytes
+		cpu += u.CPUSeconds
+		if u.WorkingSetBytes > largestSize {
+			_, pod, _ := strings.Cut(key, "/")
+			largest, largestSize = pod, u.WorkingSetBytes
+		}
+	}
+
+	scraped := len(r.Nodes) - len(r.Missed)
+	var b strings.Builder
+	if len(r.Missed) > 0 {
+		fmt.Fprintf(&b, "%d of %d nodes (could not read %s)", scraped, len(r.Nodes),
+			strings.Join(r.Missed, ", "))
+	} else {
+		fmt.Fprintf(&b, "%d nodes", len(r.Nodes))
+	}
+	fmt.Fprintf(&b, ", %d processes, %s resident in total, %.0f CPU-seconds",
+		len(r.Usage), humanBytes(resident), cpu)
+
+	roles := r.Roles()
+	parts := make([]string, 0, len(roles))
+	for _, role := range roles {
+		parts = append(parts, fmt.Sprintf("%s x%d %s", role.Role, role.Count, humanBytes(role.Resident)))
+	}
+	fmt.Fprintf(&b, " — %s", strings.Join(parts, ", "))
+	fmt.Fprintf(&b, "; largest single process %s at %s", largest, humanBytes(largestSize))
+
+	// A role that is evidently replicated and yet short of a machine is either
+	// a scrape that missed one or a control plane running degraded, and both
+	// are worth attention on a run whose purpose is to find where something
+	// breaks. A role on exactly one node is not flagged: that is what a
+	// singleton looks like, and "x1" against the node count above says it
+	// already.
+	for _, role := range roles {
+		if role.Nodes > 1 && role.Nodes < scraped {
+			fmt.Fprintf(&b, " — **%s is on %d of the %d nodes read**", role.Role, role.Nodes, scraped)
+		}
+	}
+
+	var restarted []string
+	for _, s := range r.Samples {
+		if s.Pod.RestartCount > 0 {
+			restarted = append(restarted, fmt.Sprintf("%s x%d", s.Component, s.Pod.RestartCount))
+		}
+	}
+	if len(restarted) > 0 {
+		// A restart resets every counter above it, so a rung containing one is
+		// not comparable with the rung below — and on a run aimed at a ceiling
+		// it is usually the finding itself.
+		fmt.Fprintf(&b, " — **restarted during this run**: %s", strings.Join(restarted, ", "))
+	}
+	return b.String()
 }
 
 // podFacts reads restart counts and last reasons for the pods on the given
@@ -200,49 +360,4 @@ func containerNameOf(pod *corev1.Pod) string {
 		}
 	}
 	return pod.Spec.Containers[0].Name
-}
-
-// DescribeControlPlaneUsage is the line a rung carries about the machines the
-// control plane runs on.
-//
-// The total first, because that is what a node budget is spent against, and the
-// largest single process after it, because that is what the node it sits on has
-// to fit.
-func DescribeControlPlaneUsage(samples []deployedscale.ComponentSample) string {
-	if len(samples) == 0 {
-		return "the control plane's nodes were **not measured**: nothing was read from them, so this " +
-			"rung has no figure for what the machines the fleet's objects live on are doing"
-	}
-
-	var (
-		resident uint64
-		cpu      float64
-		largest  deployedscale.ComponentSample
-	)
-	for _, s := range samples {
-		resident += s.Process.ResidentBytes
-		cpu += s.Process.CPUSeconds
-		if s.Process.ResidentBytes > largest.Process.ResidentBytes {
-			largest = s
-		}
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d processes on the control plane's nodes: %s resident in total, %.0f CPU-seconds",
-		len(samples), humanBytes(resident), cpu)
-	fmt.Fprintf(&b, "; largest is %s at %s", largest.Component, humanBytes(largest.Process.ResidentBytes))
-
-	var restarted []string
-	for _, s := range samples {
-		if s.Pod.RestartCount > 0 {
-			restarted = append(restarted, fmt.Sprintf("%s x%d", s.Component, s.Pod.RestartCount))
-		}
-	}
-	if len(restarted) > 0 {
-		// A restart resets every counter above it, so a rung containing one is
-		// not comparable with the rung below — and on a run aimed at a ceiling
-		// it is usually the finding itself.
-		fmt.Fprintf(&b, " — **restarted during this run**: %s", strings.Join(restarted, ", "))
-	}
-	return b.String()
 }

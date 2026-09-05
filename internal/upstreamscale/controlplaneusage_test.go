@@ -34,12 +34,12 @@ func usageOf(ws uint64, cpu float64) ContainerUsage {
 // members, the controller manager and the scheduler all run on those nodes and
 // all of them are the control plane's cost.
 func TestTheControlPlaneIsEveryProcessOnItsNodes(t *testing.T) {
-	usage := map[string]ContainerUsage{
-		"kube-system/kube-apiserver-cp-0":          usageOf(21_288_392_704, 14204.5),
-		"kube-system/kube-apiserver-cp-1":          usageOf(20_401_094_656, 13980.0),
-		"kube-system/etcd-cp-0":                    usageOf(2_684_354_560, 3810.25),
-		"kube-system/kube-controller-manager-cp-0": usageOf(5_368_709_120, 6120.75),
-		"kube-system/kube-scheduler-cp-0":          usageOf(134_217_728, 210.5),
+	usage := map[string]PodUsage{
+		"kube-system/kube-apiserver-cp-0":          {ContainerUsage: usageOf(21_288_392_704, 14204.5), Role: "kube-apiserver", Node: "cp-0"},
+		"kube-system/kube-apiserver-cp-1":          {ContainerUsage: usageOf(20_401_094_656, 13980.0), Role: "kube-apiserver", Node: "cp-1"},
+		"kube-system/etcd-cp-0":                    {ContainerUsage: usageOf(2_684_354_560, 3810.25), Role: "etcd", Node: "cp-0"},
+		"kube-system/kube-controller-manager-cp-0": {ContainerUsage: usageOf(5_368_709_120, 6120.75), Role: "kube-controller-manager", Node: "cp-0"},
+		"kube-system/kube-scheduler-cp-0":          {ContainerUsage: usageOf(134_217_728, 210.5), Role: "kube-scheduler", Node: "cp-0"},
 	}
 	samples := ControlPlaneUsage(usage, nil)
 
@@ -67,10 +67,10 @@ func TestTheControlPlaneIsEveryProcessOnItsNodes(t *testing.T) {
 // TestTheComponentsComeBackInAStableOrder, so a report's rows are the same from
 // one sample to the next and a diff of two runs is a diff of numbers.
 func TestTheComponentsComeBackInAStableOrder(t *testing.T) {
-	usage := map[string]ContainerUsage{
-		"kube-system/kube-scheduler-cp-2": usageOf(1, 1),
-		"kube-system/kube-apiserver-cp-0": usageOf(2, 2),
-		"kube-system/etcd-cp-1":           usageOf(3, 3),
+	usage := map[string]PodUsage{
+		"kube-system/kube-scheduler-cp-2": {ContainerUsage: usageOf(1, 1), Role: "kube-scheduler", Node: "cp-2"},
+		"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(2, 2), Role: "kube-apiserver", Node: "cp-0"},
+		"kube-system/etcd-cp-1":           {ContainerUsage: usageOf(3, 3), Role: "etcd", Node: "cp-1"},
 	}
 	first := ControlPlaneUsage(usage, nil)
 	for range 5 {
@@ -95,8 +95,8 @@ func TestTheComponentsComeBackInAStableOrder(t *testing.T) {
 // reach the end state in time, with every component still healthy". That is the
 // wrong sentence about the right event.
 func TestARestartedControlPlaneProcessSaysSo(t *testing.T) {
-	usage := map[string]ContainerUsage{
-		"kube-system/kube-apiserver-cp-0": usageOf(21_288_392_704, 14204.5),
+	usage := map[string]PodUsage{
+		"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(21_288_392_704, 14204.5), Role: "kube-apiserver", Node: "cp-0"},
 	}
 	facts := map[string]deployedscale.PodFacts{
 		"kube-system/kube-apiserver-cp-0": {
@@ -123,7 +123,7 @@ func TestARestartedControlPlaneProcessSaysSo(t *testing.T) {
 // reads, and a pod that appears in one and not the other is still a process
 // costing the node something.
 func TestAPodWithNoFactsIsStillMeasured(t *testing.T) {
-	usage := map[string]ContainerUsage{"kube-system/cilium-9xk2v": usageOf(402_653_184, 88.25)}
+	usage := map[string]PodUsage{"kube-system/cilium-9xk2v": {ContainerUsage: usageOf(402_653_184, 88.25), Role: "cilium-agent", Node: "cp-0"}}
 	samples := ControlPlaneUsage(usage, map[string]deployedscale.PodFacts{})
 	if len(samples) != 1 || samples[0].Process.ResidentBytes != 402_653_184 {
 		t.Fatalf("samples = %+v", samples)
@@ -147,13 +147,14 @@ func componentNames(samples []deployedscale.ComponentSample) []string {
 // thing on it. Both, and the count, or a reader has to add up a table to learn
 // what the control plane cost.
 func TestTheControlPlaneLineLeadsWithTheTotalAndNamesTheLargest(t *testing.T) {
-	samples := ControlPlaneUsage(map[string]ContainerUsage{
-		"kube-system/kube-apiserver-cp-0":          usageOf(21_474_836_480, 14204.5),
-		"kube-system/etcd-cp-0":                    usageOf(2_147_483_648, 3810.25),
-		"kube-system/kube-controller-manager-cp-0": usageOf(5_368_709_120, 6120.75),
-	}, nil)
+	usage := map[string]PodUsage{
+		"kube-system/kube-apiserver-cp-0":          {ContainerUsage: usageOf(21_474_836_480, 14204.5), Role: "kube-apiserver", Node: "cp-0"},
+		"kube-system/etcd-cp-0":                    {ContainerUsage: usageOf(2_147_483_648, 3810.25), Role: "etcd", Node: "cp-0"},
+		"kube-system/kube-controller-manager-cp-0": {ContainerUsage: usageOf(5_368_709_120, 6120.75), Role: "kube-controller-manager", Node: "cp-0"},
+	}
+	samples := ControlPlaneUsage(usage, nil)
 
-	got := DescribeControlPlaneUsage(samples)
+	got := ControlPlaneReadout{Nodes: []string{"cp-0"}, Usage: usage, Samples: samples}.Describe()
 	if !strings.Contains(got, "3 processes") {
 		t.Errorf("the line does not say how many processes this is: %q", got)
 	}
@@ -168,7 +169,94 @@ func TestTheControlPlaneLineLeadsWithTheTotalAndNamesTheLargest(t *testing.T) {
 
 // TestAnUnreachableControlPlaneIsNotAFreeOne.
 func TestAnUnreachableControlPlaneIsNotAFreeOne(t *testing.T) {
-	if got := DescribeControlPlaneUsage(nil); !strings.Contains(got, "not") {
+	if got := (ControlPlaneReadout{}).Describe(); !strings.Contains(got, "not") {
 		t.Errorf("an unread control plane reads as %q", got)
+	}
+}
+
+// TestTheLineSaysHowManyNodesAndHowManyOfEachRole.
+//
+// A control plane is three machines, and the figure that matters is what all
+// three cost together. A line that gives a total without saying what it covers
+// invites exactly the wrong reading — that it is one node's, and that the real
+// number is three times larger. So the count of nodes is on the line, and so is
+// the count of each role: "kube-apiserver x3" is a reader checking the total
+// covers what they think it covers, without opening the table.
+func TestTheLineSaysHowManyNodesAndHowManyOfEachRole(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes: []string{"cp-0", "cp-1", "cp-2"},
+		Usage: map[string]PodUsage{
+			"kube-system/kube-apiserver-cp-0":          {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-0"},
+			"kube-system/kube-apiserver-cp-1":          {ContainerUsage: usageOf(20_401_094_656, 100), Role: "kube-apiserver", Node: "cp-1"},
+			"kube-system/kube-apiserver-cp-2":          {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-2"},
+			"kube-system/etcd-cp-0":                    {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-0"},
+			"kube-system/etcd-cp-1":                    {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-1"},
+			"kube-system/etcd-cp-2":                    {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-2"},
+			"kube-system/kube-controller-manager-cp-0": {ContainerUsage: usageOf(5_368_709_120, 60), Role: "kube-controller-manager", Node: "cp-0"},
+		},
+	}
+	got := readout.Describe()
+
+	if !strings.Contains(got, "3 nodes") {
+		t.Errorf("the line does not say how many machines this covers: %q", got)
+	}
+	if !strings.Contains(got, "kube-apiserver x3") {
+		t.Errorf("the line does not say there are three API servers in the total: %q", got)
+	}
+	if !strings.Contains(got, "etcd x3") {
+		t.Errorf("the line does not say there are three etcd members in the total: %q", got)
+	}
+	// 20 + 19 + 20 + 2 + 2 + 2 + 5 GiB = 70 GiB.
+	if !strings.Contains(got, "70.0 GiB") {
+		t.Errorf("the line does not carry the total across all three nodes: %q", got)
+	}
+	// And the per-role subtotal, so the API servers can be read as a set.
+	if !strings.Contains(got, "59.0 GiB") {
+		t.Errorf("the line does not subtotal the API servers: %q", got)
+	}
+}
+
+// TestANodeThatCouldNotBeScrapedMakesTheTotalShortAndSaysSo.
+//
+// Two nodes of three summed and presented as a control plane is understating it
+// by a machine — which is the same misreading the node count exists to prevent,
+// arriving by a different route.
+func TestANodeThatCouldNotBeScrapedMakesTheTotalShortAndSaysSo(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes:  []string{"cp-0", "cp-1", "cp-2"},
+		Missed: []string{"cp-2"},
+		Usage: map[string]PodUsage{
+			"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-0"},
+			"kube-system/kube-apiserver-cp-1": {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-1"},
+		},
+	}
+	got := readout.Describe()
+	if !strings.Contains(got, "2 of 3") {
+		t.Errorf("the line does not say a node is missing from the total: %q", got)
+	}
+	if !strings.Contains(got, "cp-2") {
+		t.Errorf("the line does not name the node it could not read: %q", got)
+	}
+}
+
+// TestAControlPlaneMissingAReplicaOfARoleIsFlagged.
+//
+// Three nodes carrying two API servers is either a scrape that missed one or a
+// control plane running degraded, and both are worth a reader's attention on a
+// run whose whole purpose is to find where something breaks.
+func TestAControlPlaneMissingAReplicaOfARoleIsFlagged(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes: []string{"cp-0", "cp-1", "cp-2"},
+		Usage: map[string]PodUsage{
+			"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-0"},
+			"kube-system/kube-apiserver-cp-1": {ContainerUsage: usageOf(21_474_836_480, 100), Role: "kube-apiserver", Node: "cp-1"},
+			"kube-system/etcd-cp-0":           {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-0"},
+			"kube-system/etcd-cp-1":           {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-1"},
+			"kube-system/etcd-cp-2":           {ContainerUsage: usageOf(2_147_483_648, 50), Role: "etcd", Node: "cp-2"},
+		},
+	}
+	got := readout.Describe()
+	if !strings.Contains(got, "kube-apiserver") || !strings.Contains(got, "2 of the 3 nodes") {
+		t.Errorf("a role present on only two of three nodes was not flagged: %q", got)
 	}
 }
