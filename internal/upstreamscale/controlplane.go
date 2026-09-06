@@ -197,6 +197,18 @@ type APIServer struct {
 	// InflightRequests is both kinds summed: split by kind they are two halves
 	// of one pressure.
 	InflightRequests uint64 `json:"inflightRequests"`
+	// Writes and EventWrites are the API server's own request accounting: every
+	// mutating request it has served, and the share of them that were events.
+	//
+	// Events are a scale question rather than a bookkeeping one. Each one is a
+	// raft proposal and a WAL fsync in the same log as every Machine and
+	// KubeadmControlPlane status write, and client-go's spam filter is keyed
+	// per source and object — so it stops one controller flooding one object
+	// and does nothing at all about thirty thousand Machines emitting one
+	// event each. The load scales with the fleet, undamped.
+	Writes      uint64 `json:"writes"`
+	EventWrites uint64 `json:"eventWrites"`
+
 	// RejectedRequests is priority and fairness shedding load. Any at all is
 	// worth a reader's attention.
 	RejectedRequests uint64 `json:"rejectedRequests"`
@@ -320,6 +332,20 @@ func isClusterAPIResource(resource string) bool {
 	return strings.HasSuffix(resource, ".cluster.x-k8s.io")
 }
 
+// isWriteVerb matches the requests that reach the store.
+//
+// WATCH and LIST are the expensive reads and they are not here: a read costs
+// the API server and its cache, and this counter is about what costs the raft
+// log. DELETECOLLECTION is one request and many writes, which undercounts a
+// teardown and nothing a rung measures.
+func isWriteVerb(verb string) bool {
+	switch verb {
+	case "POST", "PUT", "PATCH", "DELETE", "DELETECOLLECTION":
+		return true
+	}
+	return false
+}
+
 // isEventResource matches both names the API server stores events under.
 func isEventResource(resource string) bool {
 	return resource == "events" || resource == "events.events.k8s.io"
@@ -421,6 +447,14 @@ func ParseAPIServer(r io.Reader) (APIServer, error) {
 			out.EtcdRequestSum += value
 		case "etcd_request_duration_seconds_count":
 			out.EtcdRequestCount += uint64(value)
+		case "apiserver_request_total":
+			if !isWriteVerb(labels["verb"]) {
+				break
+			}
+			out.Writes += uint64(value)
+			if isEventResource(labels["resource"]) {
+				out.EventWrites += uint64(value)
+			}
 		case "apiserver_storage_objects":
 			out.StorageObjects += uint64(value)
 			switch resource := labels["resource"]; {

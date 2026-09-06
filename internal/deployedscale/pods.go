@@ -26,6 +26,10 @@ import (
 // container for exceeding its memory limit.
 const ReasonOOMKilled = "OOMKilled"
 
+// MirrorPodAnnotation is what the kubelet puts on the API representation of a
+// static pod, and the definitive marker of one.
+const MirrorPodAnnotation = "kubernetes.io/config.mirror"
+
 // PodFacts is what the cluster knows about one component that its own process
 // cannot know about itself.
 //
@@ -49,6 +53,11 @@ type PodFacts struct {
 	LastExitCode int32  `json:"lastExitCode,omitempty"`
 	LastReason   string `json:"lastReason,omitempty"`
 
+	// StaticPod says the kubelet read this pod from disk rather than from the
+	// API server, which is what makes it part of how the machine is a control
+	// plane rather than something scheduled onto one.
+	StaticPod bool `json:"staticPod"`
+
 	// MemoryLimitBytes is what the OOMKill would be against. Recorded with
 	// every sample because a figure read against no limit cannot be turned
 	// into a sizing decision.
@@ -65,6 +74,9 @@ func PodFactsFrom(pod *corev1.Pod, container string) PodFacts {
 		Name:  pod.Name,
 		Node:  pod.Spec.NodeName,
 		PodIP: pod.Status.PodIP,
+	}
+	if _, static := pod.Annotations[MirrorPodAnnotation]; static {
+		facts.StaticPod = true
 	}
 
 	for i := range pod.Spec.Containers {

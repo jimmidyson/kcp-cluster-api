@@ -20,6 +20,9 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
@@ -380,5 +383,51 @@ func TestAnOldKillDoesNotFollowANewRestartAround(t *testing.T) {
 	// which is the window the rungs are compared across.
 	if !strings.Contains(why, "1 time") {
 		t.Errorf("the count is the pod's history rather than this run's: %q", why)
+	}
+}
+
+// TestACloudControllerManagerIsNotTheControlPlane.
+//
+// A climb held 1000 clusters and reported its ceiling as
+// nutanix-cloud-controller-manager losing a leader election. The CCM is the
+// infrastructure provider's addon; it is not Cluster API and not the API
+// server. The rung gave up after five and a half minutes and may well have
+// converged.
+//
+// It is not there by accident, which is why excluding it by node would be
+// wrong: a CCM has to tolerate the control-plane taint, because the first
+// control-plane node keeps the cloud provider's uninitialized taint until the
+// CCM clears it. It belongs there and it is still not the control plane.
+func TestACloudControllerManagerIsNotTheControlPlane(t *testing.T) {
+	apiServer := deployedscale.PodFacts{Name: "kube-apiserver-cp-0", StaticPod: true}
+	// Labelled as control-plane software, because CCM charts do exactly that.
+	ccm := deployedscale.PodFacts{Name: "nutanix-cloud-controller-manager-76bdd45c76-jmwn4"}
+
+	if !IsControlPlaneComponent(apiServer) {
+		t.Error("a static control plane pod was not counted as the control plane")
+	}
+	if IsControlPlaneComponent(ccm) {
+		t.Error("the cloud controller manager was counted as the control plane, which is the " +
+			"misreading that ended a rung at 1500 clusters")
+	}
+}
+
+// TestAStaticPodIsRecognisedByItsMirrorAnnotation, which the kubelet writes and
+// a chart cannot claim — unlike the tier label, which they do claim.
+func TestAStaticPodIsRecognisedByItsMirrorAnnotation(t *testing.T) {
+	static := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:        "kube-apiserver-cp-0",
+		Annotations: map[string]string{deployedscale.MirrorPodAnnotation: "abc123"},
+	}}
+	if !deployedscale.PodFactsFrom(static, "kube-apiserver").StaticPod {
+		t.Error("a mirror pod was not read as a static pod")
+	}
+
+	labelled := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:   "cloud-controller-manager-abc",
+		Labels: map[string]string{"tier": "control-plane", "component": "cloud-controller-manager"},
+	}}
+	if deployedscale.PodFactsFrom(labelled, "manager").StaticPod {
+		t.Error("a pod that merely labels itself control-plane was read as a static pod")
 	}
 }

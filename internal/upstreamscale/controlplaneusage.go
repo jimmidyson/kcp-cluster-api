@@ -404,7 +404,17 @@ func (s *Sampler) ControlPlaneHealth(ctx context.Context, cl client.Client,
 	if err != nil {
 		return nil, err
 	}
-	return HealthOf(s.podFacts(ctx, cl, nodes)), nil
+	all := s.podFacts(ctx, cl, nodes)
+	components := map[string]deployedscale.PodFacts{}
+	for key, facts := range all {
+		if IsControlPlaneComponent(facts) {
+			components[key] = facts
+		}
+	}
+	if len(components) == 0 {
+		components = all
+	}
+	return HealthOf(components), nil
 }
 
 // HealthSince is the control plane's health measured against a baseline taken
@@ -441,11 +451,79 @@ func HealthSince(baseline, current map[string]deployedscale.PodFacts) []deployed
 
 // ControlPlaneFacts is the pod facts for everything on the control plane's
 // nodes, which is what a baseline for HealthSince is made of.
+// ControlPlaneFacts splits the pods on the control plane's nodes into the ones
+// that are the control plane and the ones that merely run beside it.
+//
+// Two maps rather than one filtered map, because a run wants both answers and
+// they are not the same answer. See IsControlPlaneComponent.
 func (s *Sampler) ControlPlaneFacts(ctx context.Context, cl client.Client,
-) (map[string]deployedscale.PodFacts, error) {
+) (components, beside map[string]deployedscale.PodFacts, err error) {
 	nodes, err := ControlPlaneNodes(ctx, cl)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return s.podFacts(ctx, cl, nodes), nil
+	all := s.podFacts(ctx, cl, nodes)
+
+	components = map[string]deployedscale.PodFacts{}
+	beside = map[string]deployedscale.PodFacts{}
+	for key, facts := range all {
+		if facts.StaticPod {
+			components[key] = facts
+			continue
+		}
+		beside[key] = facts
+	}
+
+	// No static pod anywhere means this is not a kubeadm control plane, and
+	// watching nothing is how an OOM-killed API server goes unnoticed while a
+	// rung runs to its step timeout reporting that nothing ran out. Everything
+	// on the node is then the best available answer to "did it die".
+	if len(components) == 0 {
+		return all, nil, nil
+	}
+	return components, beside, nil
 }
+
+// IsControlPlaneComponent reports whether a pod is part of the control plane
+// rather than something that legitimately runs beside it.
+//
+// # The rung this cost
+//
+// A climb held 1000 clusters and then reported this as its ceiling:
+//
+//	The next rung, 1500 clusters, did not:
+//	nutanix-cloud-controller-manager restarted 1 time(s) — exited 1 of its own
+//	accord ... a manager that loses its leader election exits this way
+//
+// The cloud controller manager is the infrastructure provider's addon. It is
+// not Cluster API, it is not the API server, and it is not what the rung was
+// measuring. The rung gave up after five and a half minutes and may well have
+// converged.
+//
+// It is not there by accident either, so excluding it by name or by node would
+// both be wrong: a CCM must tolerate the control-plane taint, because the first
+// control-plane node stays unschedulable with the cloud provider's
+// uninitialized taint until the CCM clears it, and nothing else can. It has to
+// run there, and it is still not the control plane.
+//
+// # Why a static pod and not a label
+//
+// The obvious filter is kubeadm's `tier: control-plane` label, and it is not
+// safe: that label is a convention, and cloud controller manager charts adopt
+// it precisely because they consider themselves control-plane software. The
+// mirror annotation is not a convention — the kubelet writes it on the API
+// object of a pod it read from disk, so it says "this process is part of how
+// this machine is a control plane" rather than "whoever packaged this thought
+// so".
+//
+// # Why the usage path still counts everything
+//
+// Only the health check narrows. A control-plane node's memory is spent on
+// every pod running there, addons included, so a usage figure covering only the
+// static pods would understate the node — and understating the node is how a
+// run concludes there is headroom that is not there.
+//
+// The two paths answer different questions: one asks what the node costs, the
+// other asks whether the thing being measured died. A cloud provider addon
+// belongs in the first answer and not in the second.
+func IsControlPlaneComponent(facts deployedscale.PodFacts) bool { return facts.StaticPod }

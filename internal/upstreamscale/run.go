@@ -55,6 +55,11 @@ type Runner struct {
 	// through before the climb began, so that the health check reports what
 	// this run did rather than what the cluster remembers.
 	controlPlaneAtStart map[string]deployedscale.PodFacts
+	// besideAtStart is the same for what runs beside the control plane rather
+	// than being it — a cloud controller manager, a CNI, a metrics agent. Kept
+	// apart because a death there is worth reporting and is not this run's
+	// ceiling. See IsControlPlaneComponent.
+	besideAtStart map[string]deployedscale.PodFacts
 
 	// etcdAtStart is the same for the store, and for the same reason: every
 	// counter here is cumulative over a member's process life, so on a
@@ -156,8 +161,9 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	// created. Every restart the health check reports from here is one this run
 	// caused; without it, a kubeadm control plane pod restarted at any point in
 	// the node's life would fail the first rung.
-	if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
+	if facts, beside, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
 		r.controlPlaneAtStart = facts
+		r.besideAtStart = beside
 		if restarted := Classify(HealthOf(facts), false); restarted != "" {
 			report.AddFact("controlPlaneHistory", restarted)
 			r.logf("NOTE: the control plane carries history from before this run: %s", restarted)
@@ -222,6 +228,9 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			failure := "the fleet could not be created: " + err.Error()
 			if why := r.died(ctx, controllers); why != "" {
 				failure += " — and " + why
+			}
+			if note := r.beside(ctx); note != "" {
+				failure += " — " + note
 			}
 			if strain := r.strain(ctx); strain != "" {
 				failure += " — " + strain
@@ -321,7 +330,7 @@ func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 			return why
 		}
 	}
-	if facts, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
+	if facts, _, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
 		if why := Classify(HealthSince(r.controlPlaneAtStart, facts), false); why != "" {
 			return why
 		}
@@ -340,6 +349,30 @@ func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 //
 // Errors are swallowed for the same reason they are in died: this is a
 // diagnosis attached to a failure that has already happened.
+// beside reports a death among the pods that run on the control plane's nodes
+// without being the control plane, or "" when there was none.
+//
+// A note rather than a verdict. The cloud controller manager that ended a rung
+// at 1500 clusters lost its lease on a PUT with a five-second timeout — a
+// tighter deadline than anything in Cluster API sets, which makes it the first
+// thing to notice an API server that has stopped answering. That is worth
+// having in the failure line and it is not the ceiling: it is not the system
+// under test, and a run that stops when it dies is reporting the fuse length of
+// the most impatient neighbour.
+func (r *Runner) beside(ctx context.Context) string {
+	if r.besideAtStart == nil {
+		return ""
+	}
+	_, beside, err := r.Sampler.ControlPlaneFacts(ctx, r.Host)
+	if err != nil {
+		return ""
+	}
+	if why := Classify(HealthSince(r.besideAtStart, beside), false); why != "" {
+		return "beside the control plane, " + why
+	}
+	return ""
+}
+
 func (r *Runner) strain(ctx context.Context) string {
 	if r.etcdAtStart == nil {
 		return ""
@@ -383,6 +416,9 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 			why := fmt.Sprintf("%s (%s)", timedOutBecause(steady), last.Describe())
 			if flapped := steady.Describe(); flapped != "" {
 				why += " — " + flapped
+			}
+			if note := r.beside(ctx); note != "" {
+				why += " — " + note
 			}
 			if strain := r.strain(ctx); strain != "" {
 				why += " — " + strain
