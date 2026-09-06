@@ -75,11 +75,14 @@ func main() {
 		// lease renewal could not get through, and then exited because it had
 		// stopped leading. Nothing had run out; a flag had been reached. See
 		// upstreamscale.ClientLimits.
-		clientQPS = fs.Float64("kube-api-qps", 500,
-			"Client-side request rate for each manager. Cluster API's own default is 100, which at a "+
-				"fleet of thousands throttles the manager rather than the cluster — and a ceiling found "+
-				"that way is a fact about this flag rather than about the machine.")
-		clientBurst   = fs.Int("kube-api-burst", 1000, "Client-side burst for each manager.")
+		clientQPS = fs.Float64("kube-api-qps", 100,
+			"Client-side request rate for each manager. Cluster API's own default, deliberately: a "+
+				"ceiling found at a client rate limit is a fact about the flag rather than about the "+
+				"machine, but 500 here put five times the write rate onto a store that could not "+
+				"absorb it — etcd timed out lease renewals, managers exited, and no rung finished. "+
+				"Raise it once a run reaches a ceiling with the managers visibly throttling and "+
+				"nothing else giving way, and record that the run was taken with it raised.")
+		clientBurst   = fs.Int("kube-api-burst", 200, "Client-side burst for each manager.")
 		leaseDuration = fs.Duration("leader-elect-lease-duration", time.Minute,
 			"How long a manager's leadership lease is held.")
 		renewDeadline = fs.Duration("leader-elect-renew-deadline", 40*time.Second,

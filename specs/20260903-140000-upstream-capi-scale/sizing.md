@@ -194,3 +194,10 @@ The provider's defaults are part of what a ceiling means:
 found at the defaults is a ceiling for the defaults. If the run stops because
 reconciliation did not keep up rather than because something died, these are the
 first things to raise — and then it is a different measurement, recorded as one.
+
+`--kube-api-qps/--kube-api-burst` are left at Cluster API's own 100/200 rather
+than raised, and that is the lesson of raising them. At 500/1000 the managers
+put five times the write rate onto the store, which then could not commit a
+leader lease: managers exited with `leader election lost` and no rung finished.
+A throttled manager is a measurement with a caveat. A run that cannot complete
+a rung is not a measurement.

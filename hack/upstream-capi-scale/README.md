@@ -473,6 +473,29 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### The managers keep Cluster API's own client rate limit
+
+`capiscale-prepare` defaults to `-kube-api-qps=100 -kube-api-burst=200`, which is
+what Cluster API ships.
+
+They were raised to 500/1000 for a while, on a principle that still holds: a
+ceiling found at a client rate limit is a fact about the flag rather than about
+the machine. What it produced was five times the write rate onto a store that
+could not absorb it. etcd began timing out lease renewals, managers exited with
+`leader election lost`, and no rung finished — so the run stopped measuring
+anything at all, which is worse than measuring a throttled manager.
+
+At 100/200 the same 500-cluster rung converged, in 10m52s against the 4m52s it
+took before it fell over. Slower and finished beats faster and aborted.
+
+Raise it once a run reaches a ceiling with the managers visibly throttling and
+nothing else giving way, and record that the run was taken with it raised — that
+is a different measurement and worth having, but it is the second one.
+
+Note that raising it and the leader-election FlowSchema are a pair. The schema
+keeps a manager's heartbeat out of the queue its own bulk traffic fills; it does
+nothing about the volume of that traffic reaching etcd.
+
 ### The KubeadmControlPlane webhooks are the stock ceiling, and they kill their own manager
 
 Measured on this cluster, from the API server's own admission metrics:
