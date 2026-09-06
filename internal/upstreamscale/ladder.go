@@ -163,6 +163,25 @@ func (r RungResult) Timing() string {
 //
 // A death outranks a timeout, because a component that died is why the fleet
 // did not arrive rather than a second thing that happened to go wrong.
+// Culprit names the component Classify would report, or "" when nothing died.
+//
+// Separate from Classify so that a caller can look the component up in the
+// other things a sample carries — the throttling map above all, which answers
+// "was it short of CPU" without a scrape by hand after the run is over.
+func Culprit(components []deployedscale.ComponentSample) string {
+	for _, c := range components {
+		if c.Pod.OOMKilled {
+			return c.Component
+		}
+	}
+	for _, c := range components {
+		if c.Pod.RestartCount > 0 {
+			return c.Component
+		}
+	}
+	return ""
+}
+
 func Classify(components []deployedscale.ComponentSample, timedOut bool) string {
 	for _, c := range components {
 		if c.Pod.OOMKilled {

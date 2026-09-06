@@ -301,3 +301,40 @@ func TestAStepBiggerThanTheRangeIsOneRung(t *testing.T) {
 		t.Errorf("ladder = %v, want %v", got, want)
 	}
 }
+
+// TestTheCulpritCanBeLookedUpInWhatElseTheSampleCarries.
+//
+// A manager killed while starved of CPU quota and one killed with CPU to
+// spare are different findings, and the sample already holds the difference in
+// its throttling map. Establishing which one it was took a cAdvisor scrape by
+// hand after the run was over, and the answer — 15 throttled periods out of
+// 61,053 — sent the diagnosis somewhere else entirely.
+func TestTheCulpritCanBeLookedUpInWhatElseTheSampleCarries(t *testing.T) {
+	components := []deployedscale.ComponentSample{
+		{Component: "capi-controller-manager"},
+		{Component: "capi-kubeadm-control-plane-controller-manager",
+			Pod: deployedscale.PodFacts{RestartCount: 1, LastExitCode: 137, LastReason: "Error"}},
+	}
+	if got := Culprit(components); got != "capi-kubeadm-control-plane-controller-manager" {
+		t.Errorf("culprit = %q, want the one that restarted", got)
+	}
+	if !strings.Contains(Classify(components, false), Culprit(components)) {
+		t.Error("Culprit and Classify disagree about which component died")
+	}
+	if got := Culprit(nil); got != "" {
+		t.Errorf("a healthy sample named %q as a culprit", got)
+	}
+}
+
+// TestAnOomOutranksAPlainRestartInBothPlaces, so the component the line names
+// is the component its throttling is looked up for.
+func TestAnOomOutranksAPlainRestartInBothPlaces(t *testing.T) {
+	components := []deployedscale.ComponentSample{
+		{Component: "restarted", Pod: deployedscale.PodFacts{RestartCount: 1}},
+		{Component: "killed", Pod: deployedscale.PodFacts{RestartCount: 1, OOMKilled: true,
+			LastReason: deployedscale.ReasonOOMKilled}},
+	}
+	if got := Culprit(components); got != "killed" {
+		t.Errorf("culprit = %q, want the OOM kill Classify reports", got)
+	}
+}

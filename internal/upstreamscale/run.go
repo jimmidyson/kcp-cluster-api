@@ -305,8 +305,19 @@ func (r *Runner) defragment(ctx context.Context, report *deployedscale.Report, s
 // already happened, and a run that turned "could not read the pods" into a
 // second failure would bury the first.
 func (r *Runner) died(ctx context.Context, controllers []Controller) string {
-	if components, _, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+	if components, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
 		if why := Classify(components, false); why != "" {
+			// With the kernel's own accounting for the component that died.
+			// A manager killed while starved of quota and one killed with CPU
+			// to spare are different findings, and the sample already carries
+			// the difference — died() used to discard it, so establishing
+			// which was a scrape by hand after the run was over.
+			if th, ok := throttling[Culprit(components)]; ok && th.Periods > 0 {
+				why += " — " + th.Describe()
+				if !th.Significant() {
+					why += ", so it was not short of CPU"
+				}
+			}
 			return why
 		}
 	}
