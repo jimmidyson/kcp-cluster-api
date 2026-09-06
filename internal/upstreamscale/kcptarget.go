@@ -222,13 +222,25 @@ func (k *KcpTarget) Create(ctx context.Context, fleet Fleet, concurrency int) ([
 
 			// In dependency order, the class last, so that by the time it
 			// exists everything it refers to does.
-			for _, obj := range Blueprint(demo.Namespace) {
+			blueprint := Blueprint(demo.Namespace)
+			for _, obj := range blueprint {
 				what := fmt.Sprintf("creating %T in %s", obj, ws.Name)
 				if err := createRetrying(groupCtx, cl, obj, what); err != nil {
 					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
-			for _, cluster := range Clusters(demo.Namespace, ws.Clusters, fleet.Shape) {
+			// The same wait as the stock side, and for the same reason: both
+			// instruments have to ask the fleet for the same amount of
+			// admission work. See WaitForBlueprint.
+			if class, ok := ClassOf(blueprint); ok {
+				if err := WaitForBlueprint(groupCtx, cl, demo.Namespace, class.Name); err != nil {
+					return fmt.Errorf("%s: %w", ws.Name, err)
+				}
+			}
+			// No class namespace: the class is in this workspace's one
+			// namespace alongside its Clusters, which is what a workspace
+			// being an isolation boundary means. See Blueprint.
+			for _, cluster := range Clusters(demo.Namespace, "", ws.Clusters, fleet.Shape) {
 				what := fmt.Sprintf("creating cluster %s in %s", cluster.Name, ws.Name)
 				if err := createRetrying(groupCtx, cl, cluster, what); err != nil {
 					return fmt.Errorf("%s: %w", what, err)

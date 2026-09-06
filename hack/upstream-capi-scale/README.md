@@ -473,6 +473,44 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### One ClusterClass per API server, which is not one per side
+
+Stock puts a single ClusterClass in `capi-scale-blueprint` and every Cluster in
+the fleet references it across namespaces — `Topology.ClassRef` carries a
+`Namespace`, and no feature gate beyond `ClusterTopology` is needed for it. kcp
+puts one in each workspace, because a workspace is an isolation boundary and a
+class in one is not visible in another.
+
+So at 3,000 clusters with `CLUSTERS_PER_NAMESPACE=10` the stock side has one
+ClusterClass and the kcp side has three hundred.
+
+**That asymmetry is the arrangement, not a flaw in it.** Both sides run what an
+operator would actually run, and the duplication on the kcp side is what tenant
+API isolation costs. Forcing an equal number of classes onto both — which the
+harness used to do, on the mistaken belief that a Cluster could only name a class
+in its own namespace — hid exactly the difference the comparison exists to find.
+
+It also removes a race. The blueprint used to be created per namespace and the
+Clusters immediately after, so the first Clusters in each of three hundred
+namespaces were admitted before their class had been reconciled:
+
+```
+Cluster refers to ClusterClass capi-scale-0001/demo, but this ClusterClass hasn't
+been successfully reconciled. Cluster topology has not been fully validated.
+```
+
+Nothing broke — the Cluster is admitted and reconciled again once the class is
+ready — but those Clusters did less admission work than their neighbours, and
+admission work is what this run now measures. `WaitForBlueprint` waits for
+`status.observedGeneration` to catch up, and for `VariablesReady` when the class
+reports it, before any Cluster is created. On the stock side that is one wait for
+the whole fleet; on the kcp side one per workspace, which is the same
+duplication in a different currency.
+
+One shared class does mean a class that will not reconcile stops the whole fleet
+rather than one tenant. That is the right way round: a run cannot measure
+admission cost against a class the server will not validate against.
+
 ### The managers keep Cluster API's own client rate limit
 
 `capiscale-prepare` defaults to `-kube-api-qps=100 -kube-api-burst=200`, which is

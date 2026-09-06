@@ -150,7 +150,8 @@ func TestEveryBlueprintObjectHasAKindInTheScheme(t *testing.T) {
 		t.Fatalf("building the scheme: %v", err)
 	}
 	objects := Blueprint("capi-scale-0000")
-	for _, cluster := range Clusters("capi-scale-0000", []string{"c0000"}, FleetShape{ControlPlaneMachines: 1}) {
+	for _, cluster := range Clusters("capi-scale-0000", BlueprintNamespace, []string{"c0000"},
+		FleetShape{ControlPlaneMachines: 1}) {
 		objects = append(objects, cluster)
 	}
 
@@ -173,6 +174,42 @@ func TestEveryBlueprintObjectHasAKindInTheScheme(t *testing.T) {
 	for _, list := range []runtime.Object{&clusterv1.ClusterList{}, &clusterv1.MachineList{}} {
 		if _, _, err := s.ObjectKinds(list); err != nil {
 			t.Errorf("%T is not in the scheme: %v", list, err)
+		}
+	}
+}
+
+// TestTheStockFleetSharesOneClassAcrossNamespaces.
+//
+// One ClusterClass per API server is what an operator runs: stock has one
+// server so it has one class, and every Cluster reaches it through
+// ClassRef.Namespace.
+func TestTheStockFleetSharesOneClassAcrossNamespaces(t *testing.T) {
+	for _, c := range Clusters("capi-scale-0042", BlueprintNamespace, []string{"c0420"},
+		FleetShape{ControlPlaneMachines: 1}) {
+		if got := c.Spec.Topology.ClassRef.Namespace; got != BlueprintNamespace {
+			t.Errorf("classRef.namespace = %q, so this Cluster wants a class in its own namespace", got)
+		}
+		if c.Spec.Topology.ClassRef.Name == "" {
+			t.Error("the class reference lost its name")
+		}
+	}
+	if BlueprintNamespace == NamespaceName(0) {
+		t.Error("the shared class shares a namespace with a tenant, whose teardown would take it")
+	}
+}
+
+// TestTheKcpFleetKeepsItsClassInTheWorkspace.
+//
+// Not a shortcoming to be fixed: a workspace is an isolation boundary, so a
+// class in one is not visible in another, and the duplication is what tenant
+// API isolation costs. Recording an equal number of classes on both sides
+// would hide the difference the comparison exists to find — so the empty class
+// namespace here is deliberate and is asserted rather than left to drift.
+func TestTheKcpFleetKeepsItsClassInTheWorkspace(t *testing.T) {
+	for _, c := range Clusters("default", "", []string{"c0000"}, FleetShape{ControlPlaneMachines: 1}) {
+		if got := c.Spec.Topology.ClassRef.Namespace; got != "" {
+			t.Errorf("classRef.namespace = %q, but a workspace's class is in the Cluster's own "+
+				"namespace and every recorded kcp run was taken with it unset", got)
 		}
 	}
 }

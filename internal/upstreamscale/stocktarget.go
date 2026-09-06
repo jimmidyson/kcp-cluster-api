@@ -173,6 +173,18 @@ func (s *StockTarget) Create(ctx context.Context, fleet Fleet, concurrency int) 
 		created []string
 	)
 
+	// One ClusterClass for the whole fleet, before anything references it.
+	//
+	// Serially and up front rather than inside the group, because every tenant
+	// needs it and a hundred goroutines racing to create the same objects is a
+	// hundred AlreadyExists conflicts to no purpose. It is also the only part
+	// of a rung that cannot be done in parallel with anything, being what the
+	// rest depends on.
+	if err := s.blueprint(ctx); err != nil {
+		return []string{BlueprintNamespace}, err
+	}
+	created = append(created, BlueprintNamespace)
+
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(concurrency)
 	for _, ns := range fleet.Namespaces {
@@ -186,15 +198,7 @@ func (s *StockTarget) Create(ctx context.Context, fleet Fleet, concurrency int) 
 			created = append(created, ns.Name)
 			mu.Unlock()
 
-			// The blueprint in dependency order, the class last, so that by
-			// the time it exists everything it refers to does.
-			for _, obj := range Blueprint(ns.Name) {
-				what := fmt.Sprintf("creating %T in %s", obj, ns.Name)
-				if err := createRetrying(groupCtx, s.Client, obj, what); err != nil {
-					return fmt.Errorf("%s: %w", what, err)
-				}
-			}
-			for _, cluster := range Clusters(ns.Name, ns.Clusters, fleet.Shape) {
+			for _, cluster := range Clusters(ns.Name, BlueprintNamespace, ns.Clusters, fleet.Shape) {
 				what := fmt.Sprintf("creating cluster %s/%s", ns.Name, cluster.Name)
 				if err := createRetrying(groupCtx, s.Client, cluster, what); err != nil {
 					return fmt.Errorf("%s: %w", what, err)
@@ -204,6 +208,40 @@ func (s *StockTarget) Create(ctx context.Context, fleet Fleet, concurrency int) 
 		})
 	}
 	return created, group.Wait()
+}
+
+// blueprint puts the fleet's one ClusterClass in place and waits for it.
+//
+// Idempotent, because the ladder is cumulative: every rung re-applies the whole
+// fleet and only the new tenants are actually created. The wait runs every time
+// regardless — a class that was reconciled for the last rung is still
+// reconciled for this one, so it costs a single Get.
+func (s *StockTarget) blueprint(ctx context.Context) error {
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: BlueprintNamespace}}
+	what := fmt.Sprintf("creating namespace %s", BlueprintNamespace)
+	if err := createRetrying(ctx, s.Client, namespace, what); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+
+	// In dependency order, the class last, so that by the time it exists
+	// everything it refers to does.
+	objects := Blueprint(BlueprintNamespace)
+	for _, obj := range objects {
+		what := fmt.Sprintf("creating %T in %s", obj, BlueprintNamespace)
+		if err := createRetrying(ctx, s.Client, obj, what); err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+	}
+
+	// Existing is not reconciled, and a Cluster created against an unreconciled
+	// class is admitted without its topology being validated. One class means
+	// one wait for the whole fleet rather than one per tenant, which is the
+	// other thing sharing it buys. See WaitForBlueprint.
+	class, ok := ClassOf(objects)
+	if !ok {
+		return nil
+	}
+	return WaitForBlueprint(ctx, s.Client, BlueprintNamespace, class.Name)
 }
 
 // Converged counts every Cluster and Machine on the cluster against what the

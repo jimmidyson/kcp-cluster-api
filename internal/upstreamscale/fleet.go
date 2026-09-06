@@ -135,10 +135,21 @@ func ClusterName(i int) string   { return fmt.Sprintf("c%04d", i) }
 // The objects come from internal/demo, which is where this repository's
 // ClusterClass already lives — the same class the kcp runs are built from, so a
 // difference between the two instruments is not a difference in what they
-// asked for. What is added here is the namespace: the demo puts everything in
-// one because a workspace only ever has one, and a fleet spread over namespaces
-// needs the class in each of them, since a Cluster names a class in its own
-// namespace and nowhere else.
+// asked for. What is added here is the namespace it goes in.
+//
+// # One class per API server, which is not one class per side
+//
+// Stock puts a single ClusterClass in BlueprintNamespace and every Cluster in
+// the fleet references it across namespaces, because Topology.ClassRef carries
+// a Namespace. kcp puts one in each workspace, because a workspace is an
+// isolation boundary and a class in one is not visible in another.
+//
+// That asymmetry is the arrangement rather than a flaw in it. Both sides run
+// what an operator would actually run, and the duplication on the kcp side is
+// what tenant API isolation costs — a real property of the architecture, and
+// one of the things worth measuring rather than one to be engineered away
+// before measuring. Recording it as an equal number of classes on both sides
+// would have hidden exactly the difference the run exists to find.
 //
 // In dependency order, the class last, so that by the time it exists everything
 // it refers to does.
@@ -150,12 +161,27 @@ func Blueprint(namespace string) []client.Object {
 	return objects
 }
 
+// BlueprintNamespace holds the stock side's one ClusterClass.
+//
+// Its own namespace rather than a tenant's: the class outlives any single rung
+// and every tenant refers to it, so putting it in capi-scale-0000 would make
+// one arbitrary tenant's teardown everyone else's problem.
+const BlueprintNamespace = "capi-scale-blueprint"
+
 // Clusters builds one namespace's Clusters.
-func Clusters(namespace string, names []string, shape FleetShape) []*clusterv1.Cluster {
+//
+// classNamespace is where the ClusterClass lives. Empty means the Cluster's own
+// namespace, which is what kcp wants — a workspace has one namespace and the
+// class is in it, so an explicit reference would say the same thing at greater
+// length and diverge from the objects every recorded kcp run was taken with.
+func Clusters(namespace, classNamespace string, names []string, shape FleetShape) []*clusterv1.Cluster {
 	out := make([]*clusterv1.Cluster, 0, len(names))
 	for _, name := range names {
 		c := demo.NewCluster(name, shape.ControlPlaneMachines, shape.WorkerMachines, KubernetesVersion)
 		c.Namespace = namespace
+		if classNamespace != "" {
+			c.Spec.Topology.ClassRef.Namespace = classNamespace
+		}
 		out = append(out, c)
 	}
 	return out
