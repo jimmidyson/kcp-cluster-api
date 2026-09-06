@@ -473,6 +473,44 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### Lease renewals are given their own priority level
+
+`capiscale-prepare` installs a `FlowSchema` named `capi-leader-election` that
+routes the managers' `coordination.k8s.io/leases` writes to the API server's
+built-in `leader-election` priority level.
+
+Without it those renewals queue behind the same manager's Machine and DevMachine
+writes. A renewal is a few hundred bytes every few seconds and it fails anyway,
+because the queue it is in does not drain at a fleet of thousands. That is how a
+manager comes to exit with `leader election lost` while nothing has run out.
+
+The API server already ships the level for this. What it does not ship is a
+schema pointing Cluster API at it: the built-in leader-election schemas name
+specific system components and `kube-system` service accounts, and the managers
+live in `capi-system`, `capd-system` and their siblings. Check where a renewal
+actually lands — the API server names the schema and level in response headers:
+
+```sh
+kubectl -n capi-system get lease controller-leader-election-capi -v=8 2>&1 |
+  grep -i 'X-Kubernetes-PF'
+```
+
+**This is not tuning the result.** Isolating a heartbeat does not let the cluster
+hold more clusters; it stops a manager exiting for a reason unrelated to
+capacity, which was aborting runs before they reached a ceiling. Giving the
+managers' *bulk* traffic a level of its own would be different — that makes
+Cluster API hold more by making it slower, and belongs in a separate experiment
+rather than in the defaults. Both sides of the comparison get the schema, or the
+side that keeps its leaders is being compared against a side that loses them.
+
+The schema is applied after the client-limit patching, and the pairing is the
+point: raising a manager's client rate lets it saturate the API server, and the
+schema is what keeps its own heartbeat out of the queue it just filled.
+
+If the run reports `shedding load: N request(s) rejected by priority and
+fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
+backing off, which is a better outcome than the timeouts it replaces.
+
 ### When the store is the ceiling, the managers report it as their own death
 
 The manager log to recognise:

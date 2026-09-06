@@ -227,6 +227,34 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		fmt.Printf("%-22s %s (QoS %s)\n", c.Name, strings.Join(did, "; "), upstreamscale.QoSClass(&d))
 	}
 
+	// Cluster-scoped and applied once, after the managers: a FlowSchema is not
+	// a property of any one of them.
+	//
+	// After the ClientLimits above rather than instead of them. Raising a
+	// manager's client rate lets it saturate the API server, and the schema is
+	// what keeps its own heartbeat out of the queue it just filled. Setting one
+	// without the other is how a manager comes to lose a leader election it
+	// was never short of time to renew.
+	schema := upstreamscale.LeaderElectionFlowSchema(upstreamscale.ManagerNamespaces(
+		derefControllers(controllers)))
+	switch {
+	case dryRun:
+		fmt.Printf("%-22s would route lease renewals in %s to the %q priority level\n",
+			"flow control", strings.Join(upstreamscale.ManagerNamespaces(derefControllers(controllers)), ", "),
+			upstreamscale.LeaderElectionLevel)
+	default:
+		changed, err := upstreamscale.EnsureFlowSchema(ctx, cl, schema)
+		if err != nil {
+			return fmt.Errorf("flow control: %w", err)
+		}
+		if changed {
+			fmt.Printf("%-22s lease renewals routed to the %q priority level, away from the "+
+				"managers' own bulk writes\n", "flow control", upstreamscale.LeaderElectionLevel)
+		} else {
+			fmt.Printf("%-22s already prepared\n", "flow control")
+		}
+	}
+
 	if len(gateless) > 0 {
 		// Should be unreachable: the loop above enables it. Kept because the
 		// consequence of it being off is an admission error that names the
@@ -285,4 +313,14 @@ func restConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
 		return nil, fmt.Errorf("building a client config: %w", err)
 	}
 	return cfg, nil
+}
+
+// derefControllers is the slice ManagerNamespaces wants. The flags bind to
+// pointers so that a controller's fields can be overridden individually.
+func derefControllers(in []*upstreamscale.Controller) []upstreamscale.Controller {
+	out := make([]upstreamscale.Controller, 0, len(in))
+	for _, c := range in {
+		out = append(out, *c)
+	}
+	return out
 }
