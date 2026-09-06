@@ -177,8 +177,7 @@ func Classify(components []deployedscale.ComponentSample, timedOut bool) string 
 		}
 	}
 	if timedOut {
-		return "the fleet did not reach the end state in time, with every component still healthy: " +
-			"nothing ran out, reconciliation did not keep up"
+		return timedOutBecause(Steadiness{})
 	}
 	return ""
 }
@@ -236,4 +235,22 @@ func (c Ceiling) Describe() string {
 	fmt.Fprintf(&b, " The next rung, %d clusters and %d Machines, did not: %s (%s).",
 		c.Failed.Clusters, c.Failed.Machines, c.Failed.Failure, c.Failed.Timing())
 	return b.String()
+}
+
+// timedOutBecause is the wording for a rung that ran out of time with nothing
+// dead, which is two findings rather than one.
+//
+// "Reconciliation did not keep up" is the right sentence for a fleet that was
+// still arriving. It is the wrong sentence for a fleet that arrived and would
+// not hold its readiness — there the work was done and the proof would not
+// stay still, which points at Cluster API's per-cluster health probes rather
+// than at its reconcilers. See Steadiness.
+func timedOutBecause(steady Steadiness) string {
+	if steady.Flapping() {
+		return "the fleet did not reach the end state in time, with every component still " +
+			"healthy — and it did not fail to arrive: its readiness would not hold still long " +
+			"enough to be counted all at once"
+	}
+	return "the fleet did not reach the end state in time, with every component still healthy: " +
+		"nothing ran out, reconciliation did not keep up"
 }

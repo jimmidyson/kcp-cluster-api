@@ -345,6 +345,7 @@ func (r *Runner) strain(ctx context.Context) string {
 func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int) (bool, string) {
 	deadline := time.Now().Add(r.Options.StepTimeout)
 	var last Convergence
+	var steady Steadiness
 
 	for {
 		var err error
@@ -355,6 +356,7 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		if last.Done {
 			return true, ""
 		}
+		steady.Observe(last)
 
 		// A component that died is why the fleet has not arrived, rather than
 		// a second thing that went wrong. Checked every poll so that a kill is
@@ -364,7 +366,13 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		}
 
 		if time.Now().After(deadline) {
-			why := fmt.Sprintf("%s (%s)", Classify(nil, true), last.Describe())
+			// A fleet that never arrived and a fleet that arrived and would
+			// not hold still are different findings, and the last poll's
+			// count cannot tell them apart. See Steadiness.
+			why := fmt.Sprintf("%s (%s)", timedOutBecause(steady), last.Describe())
+			if flapped := steady.Describe(); flapped != "" {
+				why += " — " + flapped
+			}
 			if strain := r.strain(ctx); strain != "" {
 				why += " — " + strain
 			}
