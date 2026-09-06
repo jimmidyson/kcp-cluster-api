@@ -89,6 +89,13 @@ func main() {
 		retryPeriod = fs.Duration("leader-elect-retry-period", 5*time.Second,
 			"How often it retries the renewal.")
 
+		probeTimeout = fs.Int("probe-timeout-seconds", 5,
+			"How long a manager's health checks may take to answer. The stock 1s is not a ping: "+
+				"Cluster API's healthz opens a TLS connection to the manager's own webhook server, "+
+				"so a manager is killed when its own webhooks are busy.")
+		probeFailures = fs.Int("probe-failure-threshold", 5,
+			"How many health checks in a row may fail before the kubelet kills the manager.")
+
 		profilerAddr = fs.String("profiler-address", ":6060",
 			"Address each controller serves pprof on. Bind all interfaces, not localhost: the samples are "+
 				"read through the API server's pod proxy, which reaches the pod IP.")
@@ -120,6 +127,10 @@ func main() {
 	tuning := tuning{
 		QPS: *clientQPS, Burst: *clientBurst,
 		Lease: *leaseDuration, Renew: *renewDeadline, Retry: *retryPeriod,
+		//nolint:gosec // Flag values, bounded by whoever runs this.
+		ProbeTimeout: int32(*probeTimeout),
+		//nolint:gosec // As above.
+		ProbeFailures: int32(*probeFailures),
 	}
 	if err := run(context.Background(), *kubeconfig, *kubecontext, *profilerAddr, *dryRun, *only,
 		controllers, tuning); err != nil {
@@ -135,6 +146,10 @@ type tuning struct {
 	Burst int
 
 	Lease, Renew, Retry time.Duration
+
+	// ProbeTimeout and ProbeFailures decide how long a manager may take to
+	// answer a health check that is not a ping — see ProbePatience.
+	ProbeTimeout, ProbeFailures int32
 }
 
 func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryRun bool, only string,
@@ -197,6 +212,10 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		if upstreamscale.LeaderElectionDeadlines(&d, tune.Lease, tune.Renew, tune.Retry) {
 			did = append(did, fmt.Sprintf("leader election given %s to renew within a %s lease",
 				tune.Renew, tune.Lease))
+		}
+		if upstreamscale.ProbePatience(&d, tune.ProbeTimeout, tune.ProbeFailures) {
+			did = append(did, fmt.Sprintf("health checks given %ds and %d failures",
+				tune.ProbeTimeout, tune.ProbeFailures))
 		}
 		if c.DevCluster && upstreamscale.RunWithoutDocker(&d) {
 			did = append(did, "Docker socket, its hostPath volume and the privilege removed")

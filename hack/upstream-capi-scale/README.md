@@ -473,6 +473,59 @@ kubectl delete clusters -A --all --wait=false
 # wait until none remain, and only then remove the namespaces
 ```
 
+### The KubeadmControlPlane webhooks are the stock ceiling, and they kill their own manager
+
+Measured on this cluster, from the API server's own admission metrics:
+
+| KubeadmControlPlane UPDATE | calls | total | per call |
+|---|--:|--:|--:|
+| `default.kubeadmcontrolplane` | 58,889 | 4,163s | **70.7ms** |
+| `validation.kubeadmcontrolplane` | 58,881 | 4,031s | **68.5ms** |
+
+About **139ms of admission on every KubeadmControlPlane status update**, and
+~187ms on a create. A webhook call should be single-digit milliseconds. Both are
+served by the KCP manager itself, and both figures are lifetime means, so during
+a failing rung they are worse than this.
+
+That closes a loop which is structural in stock Cluster API rather than
+particular to any cluster:
+
+```
+KCP controller probes N workload clusters for control-plane and etcd health
+  → writes N KubeadmControlPlane status updates
+    → each costs ~139ms through two webhooks served by the KCP manager
+      → its webhook server queues
+        → healthz, which is a TLS dial to that same server, misses its 1s timeout
+          → three misses and the kubelet kills the manager
+```
+
+More clusters means more probes means more status writes means more admission
+load on the process doing the probing. It is also why control-plane readiness
+flaps: the same queue delays the status updates a rung is counting.
+
+`capiscale-prepare` therefore gives the managers' health checks
+`-probe-timeout-seconds=5` and `-probe-failure-threshold=5`. Only raised, never
+lowered, and no probe is invented for a container that has none.
+
+**This is not tuning the result.** The stock check is not a ping — Cluster API
+wires healthz to controller-runtime's webhook `StartedChecker`, which opens a
+TLS connection to the manager's own webhook server — so a one-second timeout
+means a manager is killed for being busy with its own webhooks. Nothing here
+lets the cluster hold more clusters; it lets a run reach a ceiling instead of
+ending 81 seconds into a rung. The slow webhooks stay slow and stay measured.
+Both sides of the comparison get it, or the side that keeps its managers is
+being compared against the side that loses them.
+
+To re-measure after a run:
+
+```sh
+kubectl get --raw /metrics |
+  grep -E 'apiserver_admission_webhook_admission_duration_seconds_(sum|count)\{name="(default|validation)\.kubeadmcontrolplane'
+```
+
+`sum / count` per webhook. A mean that climbs between rungs is the ceiling
+arriving.
+
 ### Lease renewals are given their own priority level
 
 `capiscale-prepare` installs a `FlowSchema` named `capi-leader-election` that
