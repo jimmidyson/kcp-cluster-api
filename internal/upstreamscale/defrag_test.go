@@ -202,3 +202,59 @@ func TestAMemberThatCouldNotBeMeasuredDoesNotReportAShrink(t *testing.T) {
 		t.Errorf("the member that could not be measured is not named as such: %q", got)
 	}
 }
+
+// TestAnUnsettledReadingIsNotAStoreThatRefusedToShrink.
+//
+// Runs kept reporting one member of three as having reclaimed nothing while
+// its peers each shed 850 MiB. Three members of one raft cluster hold the same
+// data and free the same pages under the same compaction, so that is not a
+// thing the store can do — and before and after were *exactly* equal, which a
+// real defragmentation never leaves, since a rewritten file differs by at least
+// a page. The reading was taken before the gauge caught up.
+func TestAnUnsettledReadingIsNotAStoreThatRefusedToShrink(t *testing.T) {
+	stale := DefragResult{
+		Pod: "etcd-cp-0", BeforeBytes: 2 << 30, AfterBytes: 2 << 30,
+		AfterFreeBytes: 850 << 20, Settled: false,
+	}
+	got := DescribeDefrag([]DefragResult{stale})
+	if !strings.Contains(got, "did not settle") {
+		t.Errorf("a stale reading reads as a store that would not shrink: %q", got)
+	}
+	if !strings.Contains(got, "850.0 MiB of the file is still free") {
+		t.Errorf("the line does not carry what says the reading is stale: %q", got)
+	}
+}
+
+// TestAMemberWithNothingToReclaimIsNotFlagged.
+//
+// Reclaiming nothing is the right answer for a member that restarted and took
+// a snapshot from the leader: its file is already compact. The test is whether
+// the file and its data have converged, not whether the number moved — waiting
+// for movement would wait forever on exactly that member.
+func TestAMemberWithNothingToReclaimIsNotFlagged(t *testing.T) {
+	compact := DefragResult{
+		Pod: "etcd-cp-0", BeforeBytes: 1 << 30, AfterBytes: 1 << 30,
+		AfterFreeBytes: 4 << 10, Settled: true,
+	}
+	got := DescribeDefrag([]DefragResult{compact})
+	if strings.Contains(got, "did not settle") {
+		t.Errorf("a member that had nothing to reclaim was flagged: %q", got)
+	}
+	if !strings.Contains(got, "reclaimed 0 B") {
+		t.Errorf("the line does not say what happened: %q", got)
+	}
+}
+
+// TestFragmentationIsWhatSettlingIsJudgedOn, which is the same threshold the
+// defragmenter uses to decide a file is worth rewriting at all — so a file it
+// would not bother with is a file it does not wait on.
+func TestFragmentationIsWhatSettlingIsJudgedOn(t *testing.T) {
+	// A file whose allocated size and data have converged.
+	if (Etcd{DBTotalBytes: 1 << 30, DBInUseBytes: 1 << 30}).Fragmented() {
+		t.Error("a compact file was called fragmented, so settling would never be reached")
+	}
+	// The stale reading: a gigabyte allocated, a quarter of it in use.
+	if !(Etcd{DBTotalBytes: 1 << 30, DBInUseBytes: 256 << 20}).Fragmented() {
+		t.Error("a file three quarters free was not called fragmented")
+	}
+}

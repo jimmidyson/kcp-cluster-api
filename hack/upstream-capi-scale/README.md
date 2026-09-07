@@ -318,6 +318,44 @@ moving parts than two rolling updates and a hand-patched topology. It is also
 the only path that is known to work end to end, because it is the one the script
 does.
 
+## One member reclaiming nothing is usually the gauge, not the store
+
+A run reporting this is reporting a measurement defect, not a finding:
+
+```
+fw9n7 reclaimed 0 B (2.0 GiB to 2.0 GiB); nl882 reclaimed 850.3 MiB (2.0 GiB to
+1.2 GiB); w4pp6 reclaimed 850.5 MiB (2.0 GiB to 1.2 GiB)
+```
+
+Three members of one raft cluster hold the same data and free the same pages
+under the same compaction. One of them having nothing to reclaim while its peers
+shed 850 MiB is not something the store can do — and `before` and `after` are
+*exactly* equal, which a real defragmentation never leaves, because a rewritten
+file differs by at least a page.
+
+`etcd_mvcc_db_total_size_in_bytes` is refreshed when the backend commits, not
+when a file is rewritten. A member that happens to be quiet in the moment after
+its defragmentation keeps publishing its old size. Which member that catches is
+timing, which is why it moved between members and between runs.
+
+The reading is now waited on rather than taken once: after defragmenting, the
+member is polled until its allocated size and its data have converged, or thirty
+seconds pass. **Only the read is retried, never the defragmentation** — a second
+rewrite of an already-compact file costs a stop-the-world pause for no gain, and
+this runs between every pair of rungs.
+
+Convergence rather than movement is the test on purpose. A member that restarted
+and took a snapshot from the leader has a compact file already, so reclaiming
+nothing from it is correct, and waiting for its number to move would wait
+forever. When the file never converges the line says so, with the free space
+that proves it:
+
+```
+fw9n7 reclaimed 0 B (2.0 GiB to 2.0 GiB) — **the size did not settle**: 850.3
+MiB of the file is still free after defragmenting, so this reading is the gauge
+lagging rather than the store refusing to shrink
+```
+
 ## etcd is defragmented between rungs
 
 Compaction frees pages inside etcd's backend file and returns none of them, and

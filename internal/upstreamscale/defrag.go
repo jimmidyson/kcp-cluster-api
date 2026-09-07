@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -190,7 +191,14 @@ type DefragResult struct {
 	Pod         string `json:"pod"`
 	BeforeBytes uint64 `json:"beforeBytes"`
 	AfterBytes  uint64 `json:"afterBytes"`
-	Err         string `json:"error,omitempty"`
+
+	// AfterFreeBytes is the space still free inside the file once the
+	// defragmentation has been given time to show up, and Settled says whether
+	// it ever did. See Defragmenter.settled.
+	AfterFreeBytes uint64 `json:"afterFreeBytes"`
+	Settled        bool   `json:"settled"`
+
+	Err string `json:"error,omitempty"`
 }
 
 // Measured reports whether both readings arrived. A backend file is never zero
@@ -247,9 +255,10 @@ func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sam
 			out = append(out, result)
 			continue
 		}
-		if after, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
-			result.AfterBytes = after.DBTotalBytes
-		}
+		after, settled := d.settled(ctx, sampler, store, pod.Name)
+		result.AfterBytes = after.DBTotalBytes
+		result.AfterFreeBytes = after.FreeBytes()
+		result.Settled = settled
 		out = append(out, result)
 	}
 	return out, nil
@@ -300,8 +309,78 @@ func DescribeDefrag(results []DefragResult) string {
 				"(before %s, after %s)", r.Pod, sizeOrUnknown(r.BeforeBytes), sizeOrUnknown(r.AfterBytes)))
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s reclaimed %s (%s to %s)",
-			r.Pod, humanBytes(r.Reclaimed()), humanBytes(r.BeforeBytes), humanBytes(r.AfterBytes)))
+		part := fmt.Sprintf("%s reclaimed %s (%s to %s)",
+			r.Pod, humanBytes(r.Reclaimed()), humanBytes(r.BeforeBytes), humanBytes(r.AfterBytes))
+		if !r.Settled {
+			part += fmt.Sprintf(" — **the size did not settle**: %s of the file is still free "+
+				"after defragmenting, so this reading is the gauge lagging rather than the store "+
+				"refusing to shrink", humanBytes(r.AfterFreeBytes))
+		}
+		parts = append(parts, part)
 	}
 	return "defragmented between rungs: " + strings.Join(parts, "; ")
+}
+
+// settleTimeout and settlePoll bound how long a member is given to publish the
+// size it now has.
+const (
+	settleTimeout = 30 * time.Second
+	settlePoll    = 2 * time.Second
+)
+
+// settled reads a member's size once the defragmentation has shown up in the
+// gauge, and says whether it ever did.
+//
+// # The reading this exists for
+//
+// Runs kept reporting one member of three as having reclaimed nothing:
+//
+//	fw9n7 reclaimed 0 B (2.0 GiB to 2.0 GiB); nl882 reclaimed 850.3 MiB
+//	(2.0 GiB to 1.2 GiB); w4pp6 reclaimed 850.5 MiB (2.0 GiB to 1.2 GiB)
+//
+// Three members of one raft cluster hold the same data and free the same pages
+// under the same compaction, so one of them having nothing to reclaim while its
+// peers shed 850 MiB is not a thing the store can do. And "before" and "after"
+// were *exactly* equal, which a real defragmentation never leaves — a rewritten
+// file differs by at least a page.
+//
+// What actually happened is that the reading was taken too early.
+// etcd_mvcc_db_total_size_in_bytes is refreshed when the backend commits, not
+// when a file is rewritten, so a member that is momentarily quiet keeps
+// publishing its old size. Whether that catches a member is timing, which is
+// why it moved between members and between runs.
+//
+// # Why the free space is the test rather than the size
+//
+// Waiting for the size to *change* would wait forever on a member that
+// genuinely had nothing to reclaim — one that restarted and took a snapshot
+// from the leader has a compact file already, and reclaiming nothing from it is
+// the right answer. Waiting for the file to have little free space in it is the
+// question actually being asked: a defragmented file is one whose allocated
+// size and its data have converged, however it got that way.
+//
+// Only the read is retried, never the defragmentation. A second rewrite of a
+// file that is already compact costs a stop-the-world pause on a member for no
+// gain, and this runs between every pair of rungs.
+func (d *Defragmenter) settled(ctx context.Context, sampler *Sampler, store StoreLocation,
+	pod string,
+) (Etcd, bool) {
+	deadline := time.Now().Add(settleTimeout)
+	var last Etcd
+	for {
+		if reading, err := sampler.etcdMemberAt(ctx, store, pod); err == nil {
+			last = reading
+			if !reading.Fragmented() {
+				return reading, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return last, false
+		}
+		select {
+		case <-ctx.Done():
+			return last, false
+		case <-time.After(settlePoll):
+		}
+	}
 }
