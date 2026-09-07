@@ -293,15 +293,11 @@ kubectl -n kube-system get pod -l component=etcd \
 All three members, because a quota is per member and a rolled control plane
 picks them up one at a time.
 
-## The API server's etcd compaction interval, and why it is one minute
+## The compaction stall, and why the interval stays at five minutes
 
-`clusterclass` also appends `--etcd-compaction-interval=1m` to the API server's
-arguments, `APISERVER_ETCD_COMPACTION_INTERVAL` to change it and empty to leave
-kube-apiserver on its 5-minute default, which is what the recorded runs used.
-
-The reason is a 1500-cluster rung that ended with the controller manager,
-scheduler and API server on one control plane node all restarting inside two
-minutes, and this in that node's etcd log:
+A 1500-cluster rung ended with the controller manager, scheduler and API server
+on one control plane node all restarting inside two minutes, and this in that
+node's etcd log:
 
 ```
 15:05:05  scheduled compaction starts: 163,243 revisions, five minutes' worth at a converging fleet's write rate
@@ -321,33 +317,54 @@ over a third of the file's 594,730 pages is the minute and a half. The disk's
 write path was never the problem: fsync tails on all three members are healthy
 and agree.
 
-A smaller interval does not make the compaction cheaper. It makes each one a
-fifth the size, so the worst case with a cold cache is seconds rather than a
-minute, and no lease on the control plane expires behind it. The memory fix is
-the real one and is separate; this bounds the damage while the cache is cold.
+**The obvious knob is the wrong one, and it was tried and reverted.** Shortening
+the API server's `--etcd-compaction-interval` from 5m to 1m makes each
+compaction a fifth the size, which bounds a cold-cache stall at seconds. It also
+shrinks the history etcd keeps from five-to-ten minutes to one-to-two, because
+the API server compacts to the revision it saw one tick earlier. Everything
+that resumes from an old revision lives inside that window: an API server whose
+own etcd watch was interrupted for longer re-lists every resource type, and a
+paginated list whose `continue` token has aged out starts again, unpaginated.
+At 16,000 Machines those re-lists are the most expensive event in the system,
+and a shorter interval makes them five times easier to trigger. OpenShift does
+not touch this interval, and a scale test whose settings would not be defensible
+on a production cluster is measuring a cluster nobody would run. So it stays at
+five minutes.
 
-**Why this patch works when the profiling patch did not.** The argument is
+**What is defensible is what OpenShift does instead**: leave the store alone and
+make everything around it tolerate a slow minute. Each of these is an OpenShift
+production default, and each maps onto one link in the chain above:
+
+| OpenShift | kubeadm | the link it breaks |
+|---|---|---|
+| API server liveness probe `/livez?exclude=etcd` | `/livez` including etcd | the kubelet killed the API server for a slow store |
+| `--etcd-healthcheck-timeout=9s`, `--etcd-readycheck-timeout=9s` | 2 s | readiness on every API server went 500 during the stall |
+| leader election 137 s lease, 107 s renew, 26 s retry on every controller, built for a 78 s API server outage | 15 s, 10 s, 2 s | the controller manager lost its lease to a 5 s GET |
+
+The timeouts and the leader election flags are new argument names, so they
+append through the ClusterClass copy exactly as the etcd quota does — see below.
+The probe path is not an argument: kubeadm generates the probes and exposes no
+knob for them, but it does apply **patch files** to the static pod manifests it
+writes, from the directory named by `initConfiguration.patches.directory` and
+`joinConfiguration.patches.directory`. CAREN's class already names
+`/etc/kubernetes/patches` in both and writes two `kubeletconfiguration` patches
+there, so a `kube-apiserver1+strategic.yaml` setting the liveness path is one
+more entry appended to `files`, and no post-kubeadm command is needed. The
+memory ceiling on the API server that would have kept the database in cache is
+the root fix, and is a separate question.
+
+**Why an append works when the profiling patch did not.** An argument
 *appended* — `add` at index `-`, the one array index the patch validator
-permits — under a name CAREN's class does not set, so the "extraArgs name must
-be unique" refusal does not apply. And it is the last patch in `spec.patches`,
-so it renders after CAREN's runtime extension and lands on the list that
-extension produced instead of replacing it. All three of the profiling attempts
-below were trying to *change* an argument CAREN already sets, which is a
-different problem and is still not possible from here.
+permits — under a name CAREN's class does not set is not caught by the
+"extraArgs name must be unique" refusal. And a patch placed last in
+`spec.patches` renders after CAREN's runtime extension and lands on the list
+that extension produced instead of replacing it. All three of the profiling
+attempts below were trying to *change* an argument CAREN already sets, which is
+a different problem and is still not possible from here.
 
-On a cluster that already exists this rolls the control plane, one machine at a
-time, as any change to the copy does — see the next section. Check it took, all
-three members, because the roll picks them up one at a time:
-
-```sh
-kubectl -n kube-system get pod -l component=kube-apiserver \
-  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].command}{"\n"}{end}' \
-  | tr ' ' '\n' | grep -E 'kube-apiserver-|etcd-compaction'
-```
-
-And to see what a compaction costs on a given cluster, etcd logs every one with
-its duration. Seconds is healthy; anything past ten is the cache going cold
-under the API server, and the node's memory is the thing to look at:
+To see what a compaction costs on a given cluster, etcd logs every one with its
+duration. Seconds is healthy; anything past ten is the cache going cold under
+the API server, and the node's memory is the thing to look at:
 
 ```sh
 kubectl -n kube-system logs etcd-<leader> | grep 'finished scheduled compaction' \
@@ -1168,8 +1185,8 @@ like a fixable mistake and the third was not:
    side apply dry-run, not on the ClusterClass that caused it. Note what this
    does and does not rule out: the append itself landed, in the same list as
    CAREN's `profiling`, which is why the uniqueness rule saw it. Appending an
-   argument CAREN does *not* set works, and is how the etcd compaction
-   interval is applied above.
+   argument CAREN does *not* set works, which is how the OpenShift tolerances
+   above can be applied.
 2. **Replace that entry in place.** Refused:
    `core/webhooks/admission/patch_validation.go` permits an array index of only
    `0` or `-` on `add`, and forbids any index at all on `replace` and `remove` —

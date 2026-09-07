@@ -284,11 +284,19 @@ The store did not fail; it was starved of memory by the process in front of
 it. Everything here reduces proposals, shortens what one compaction can hold,
 or isolates the small writes.
 
-- **Compact every minute, not every five.** `--etcd-compaction-interval=1m`
-  on the API servers makes each compaction a fifth the size, so a cold-cache
-  compaction holds the store for seconds rather than a minute. The
-  provisioning script now appends it through the ClusterClass copy; see
-  `hack/upstream-capi-scale/README.md`.
+- **Do not shorten the compaction interval.** It was tried at one minute and
+  reverted: it bounds a cold-cache stall, but it also cuts the history etcd
+  keeps to one or two minutes, and at this scale that turns any etcd
+  interruption into a full re-list by every API server. OpenShift leaves it
+  at five minutes, and a setting that is not defensible in production has no
+  place in the test.
+- **Make the control plane tolerate a slow minute, as OpenShift does.** A
+  liveness probe of `/livez?exclude=etcd` so the kubelet does not kill an API
+  server for a slow store, 9-second etcd health and ready check timeouts, and
+  137/107/26-second leader election on the controller manager and scheduler,
+  built for a 78-second API server outage. The arguments append through the
+  ClusterClass copy; the probe goes through kubeadm's patch directory, which
+  CAREN's class already uses. See `hack/upstream-capi-scale/README.md`.
 - **Keep etcd's database in the page cache**, which is the memory ceiling on
   the API server from the section below, and keep the etcd leader off the
   node that holds the controller-manager leader.
