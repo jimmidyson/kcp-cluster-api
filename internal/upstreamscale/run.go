@@ -289,12 +289,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			if why := r.died(ctx, controllers); why != "" {
 				failure += " — and " + why
 			}
-			if note := r.beside(ctx); note != "" {
-				failure += " — " + note
-			}
-			if strain := r.strain(ctx); strain != "" {
-				failure += " — " + strain
-			}
+			failure = annotate(failure, r.beside(ctx), r.strain(ctx))
 			rungs = append(rungs, RungResult{
 				Clusters: clusters, Machines: machines, Added: clusters - held,
 				CreatedIn: time.Since(startedCreate),
@@ -447,6 +442,22 @@ func (r *Runner) strain(ctx context.Context) string {
 	return EtcdSince(r.etcdAtStart, members)
 }
 
+// annotate appends every note that has something to say to a failure line,
+// and leaves the line alone when none does.
+//
+// One place rather than three, because the three failure paths — a rung that
+// could not be created, a process that died, a fleet that did not arrive —
+// each grew this by hand, and the death path was the one that missed the
+// store's counters until a run needed them there.
+func annotate(why string, notes ...string) string {
+	for _, note := range notes {
+		if note != "" {
+			why += " — " + note
+		}
+	}
+	return why
+}
+
 // wait polls until the rung reaches the end state, or a component dies, or
 // time runs out — and says which.
 func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int) (bool, string) {
@@ -468,8 +479,14 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		// A component that died is why the fleet has not arrived, rather than
 		// a second thing that went wrong. Checked every poll so that a kill is
 		// reported when it happens rather than after the step timeout.
+		//
+		// With what the store was doing, the same as a timeout carries. A
+		// process that dies under load usually died of the store — a lease it
+		// could not renew — and the one time that was the whole story, the
+		// death path was the only failure path that left the store's counters
+		// off the line.
 		if why := r.died(ctx, controllers); why != "" {
-			return false, why
+			return false, annotate(why, r.beside(ctx), r.strain(ctx))
 		}
 
 		if time.Now().After(deadline) {
@@ -477,16 +494,7 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 			// not hold still are different findings, and the last poll's
 			// count cannot tell them apart. See Steadiness.
 			why := fmt.Sprintf("%s (%s)", timedOutBecause(steady), last.Describe())
-			if flapped := steady.Describe(); flapped != "" {
-				why += " — " + flapped
-			}
-			if note := r.beside(ctx); note != "" {
-				why += " — " + note
-			}
-			if strain := r.strain(ctx); strain != "" {
-				why += " — " + strain
-			}
-			return false, why
+			return false, annotate(why, steady.Describe(), r.beside(ctx), r.strain(ctx))
 		}
 		r.logf("    %s", last.Describe())
 		select {

@@ -110,6 +110,17 @@ func EtcdSince(before, now map[string]Etcd) string {
 				notes = append(notes, fmt.Sprintf("%d backend commit(s) over %ss", slow, slowLatency))
 			}
 		}
+		// The path to the leader, which a clean leader says nothing about.
+		if had && is.SawPeerRTT && was.SawPeerRTT {
+			if slow := countAbove(is.PeerRTTSlow, was.PeerRTTSlow); slow > 0 {
+				notes = append(notes, fmt.Sprintf("%d peer round trip(s) over %ss", slow, slowPeerRTT))
+			}
+			if during, ok := sinceMeanMillis(is.PeerRTTSum, was.PeerRTTSum,
+				is.PeerRTTCount, was.PeerRTTCount); ok && during > was.PeerRTTMeanMillis() {
+				notes = append(notes, fmt.Sprintf("peer round trip averaged %.0fms during the run "+
+					"against %.0fms before it", during, was.PeerRTTMeanMillis()))
+			}
+		}
 		if had && is.ProposalsFailed > was.ProposalsFailed {
 			notes = append(notes, fmt.Sprintf("%d failed raft proposal(s), which is what a client "+
 				"sees as \"etcdserver: request timed out\"", is.ProposalsFailed-was.ProposalsFailed))

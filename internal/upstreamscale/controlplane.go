@@ -86,6 +86,20 @@ type Etcd struct {
 	ProposalsFailed  uint64 `json:"proposalsFailed"`
 	ProposalsPending uint64 `json:"proposalsPending"`
 
+	// The path to the leader. A follower forwards every proposal it receives,
+	// so a client whose local API server writes through a follower waits on
+	// this member's round trip to the leader as well as on the leader's own
+	// disk — and a leader whose counters are clean has said nothing about
+	// that path. One run's lease timed out at a client on a node whose leader
+	// showed no slow apply and no slow fsync; this is the signal that sees the
+	// wait. Summed across peers, because a member has two and the run wants
+	// to know it could not reach its leader rather than which peer that was.
+	// SawPeerRTT for the same reason SawLatencyTail exists.
+	PeerRTTSum   float64 `json:"peerRoundTripSeconds"`
+	PeerRTTCount uint64  `json:"peerRoundTripCount"`
+	PeerRTTSlow  uint64  `json:"peerRoundTripSlow"`
+	SawPeerRTT   bool    `json:"sawPeerRoundTrip"`
+
 	// Health. A leader change under load is etcd struggling, not a topology
 	// event.
 	HasLeader     bool   `json:"hasLeader"`
@@ -93,6 +107,17 @@ type Etcd struct {
 	SlowApplies   uint64 `json:"slowApplies"`
 	SlowReads     uint64 `json:"slowReadIndexes"`
 }
+
+// slowPeerRTT is the boundary a round trip to a peer is counted as slow above.
+//
+// etcd's peer histogram runs from 0.1ms in powers of two, so 0.1024s is a
+// boundary that exists. It is also the default heartbeat interval: a round
+// trip past it is one the leader's heartbeats are late for, which is where
+// leader elections come from.
+const slowPeerRTT = "0.1024"
+
+// PeerRTTMeanMillis is the lifetime mean round trip to this member's peers.
+func (e Etcd) PeerRTTMeanMillis() float64 { return mean(e.PeerRTTSum, e.PeerRTTCount) * 1000 }
 
 // slowLatency is the histogram boundary a sync is counted as slow above.
 //
@@ -434,9 +459,21 @@ func ParseEtcd(r io.Reader) (Etcd, error) {
 	// under it". See SawLatencyTail.
 	var fsyncFast, commitFast uint64
 	var sawFsyncBucket, sawCommitBucket bool
+	// Per peer, summed: the histogram carries one series per peer member.
+	var peerFast uint64
+	var sawPeerBucket bool
 
 	err := eachSample(r, func(name string, labels map[string]string, value float64) {
 		switch name {
+		case "etcd_network_peer_round_trip_time_seconds_bucket":
+			if labels["le"] == slowPeerRTT {
+				peerFast += uint64(value)
+				sawPeerBucket = true
+			}
+		case "etcd_network_peer_round_trip_time_seconds_sum":
+			out.PeerRTTSum += value
+		case "etcd_network_peer_round_trip_time_seconds_count":
+			out.PeerRTTCount += uint64(value)
 		case "etcd_disk_wal_fsync_duration_seconds_bucket":
 			if labels["le"] == slowLatency {
 				fsyncFast, sawFsyncBucket = uint64(value), true
@@ -484,6 +521,10 @@ func ParseEtcd(r io.Reader) (Etcd, error) {
 		out.SawLatencyTail = true
 		out.WALFsyncSlow = countAbove(out.WALFsyncCount, fsyncFast)
 		out.BackendCommitSlow = countAbove(out.BackendCommitCount, commitFast)
+	}
+	if sawPeerBucket {
+		out.SawPeerRTT = true
+		out.PeerRTTSlow = countAbove(out.PeerRTTCount, peerFast)
 	}
 
 	if !seen {

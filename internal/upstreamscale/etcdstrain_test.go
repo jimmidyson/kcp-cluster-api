@@ -220,3 +220,88 @@ etcd_server_quota_backend_bytes 8589934592
 		t.Errorf("WAL fsync mean = %.2fms, want the 1.6ms the real member reported", mean)
 	}
 }
+
+// TestAFollowerThatCannotReachItsLeaderIsNamedAsOne.
+//
+// The run this is from: the leader's own counters were clean — no slow
+// applies, a healthy fsync tail — while a client on another node lost its
+// lease to "etcdserver: request timed out". That client wrote through its
+// local API server, which writes through its local member, which forwards
+// every proposal to the leader. The member and the path to the leader are
+// where the wait was, and peer round-trip time is the one signal that sees
+// the path.
+func TestAFollowerThatCannotReachItsLeaderIsNamedAsOne(t *testing.T) {
+	before := map[string]Etcd{"etcd-cp-2": {
+		HasLeader: true, SawPeerRTT: true,
+		PeerRTTSum: 0.4, PeerRTTCount: 4000, PeerRTTSlow: 0, // 0.1ms
+	}}
+	now := map[string]Etcd{"etcd-cp-2": {
+		HasLeader: true, SawPeerRTT: true,
+		PeerRTTSum: 30.4, PeerRTTCount: 4100, PeerRTTSlow: 37, // 300ms over the run
+	}}
+
+	got := EtcdSince(before, now)
+	if !strings.Contains(got, "37 peer round trip(s) over 0.1024s") {
+		t.Errorf("the slow round trips to the leader are missing: %q", got)
+	}
+	if !strings.Contains(got, "peer round trip averaged 300ms during the run against 0ms before it") {
+		t.Errorf("the round trip over the run is not beside its baseline: %q", got)
+	}
+}
+
+// TestAMemberWhoseRoundTripsWereNotParsedIsNotCalledFarAway, for the reason the
+// fsync tail has the same guard: a missing bucket and a bucket holding nothing
+// are the same zero.
+func TestAMemberWhoseRoundTripsWereNotParsedIsNotCalledFarAway(t *testing.T) {
+	before := map[string]Etcd{"etcd-cp-2": {HasLeader: true, PeerRTTCount: 1000}}
+	now := map[string]Etcd{"etcd-cp-2": {HasLeader: true, PeerRTTCount: 2000}}
+	if got := EtcdSince(before, now); strings.Contains(got, "peer round trip") {
+		t.Errorf("a member whose histogram was not parsed was reported as far from its leader: %q", got)
+	}
+}
+
+// TestPeerRoundTripsAreParsedAcrossEveryPeer: the histogram is per peer, and a
+// member has two of them, so the figures are summed — a run wants to know the
+// member could not reach its leader, and does not know which peer that is.
+func TestPeerRoundTripsAreParsedAcrossEveryPeer(t *testing.T) {
+	exposition := `etcd_network_peer_round_trip_time_seconds_bucket{To="1a2b",le="0.0512"} 1990
+etcd_network_peer_round_trip_time_seconds_bucket{To="1a2b",le="0.1024"} 1995
+etcd_network_peer_round_trip_time_seconds_bucket{To="1a2b",le="+Inf"} 2000
+etcd_network_peer_round_trip_time_seconds_sum{To="1a2b"} 0.5
+etcd_network_peer_round_trip_time_seconds_count{To="1a2b"} 2000
+etcd_network_peer_round_trip_time_seconds_bucket{To="3c4d",le="0.1024"} 3000
+etcd_network_peer_round_trip_time_seconds_bucket{To="3c4d",le="+Inf"} 3030
+etcd_network_peer_round_trip_time_seconds_sum{To="3c4d"} 1.5
+etcd_network_peer_round_trip_time_seconds_count{To="3c4d"} 3030
+etcd_mvcc_db_total_size_in_bytes 1610612736
+etcd_server_quota_backend_bytes 8589934592
+`
+	got, err := ParseEtcd(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if !got.SawPeerRTT {
+		t.Fatal("the peer histogram was not recognised")
+	}
+	if got.PeerRTTSlow != 35 {
+		t.Errorf("slow round trips = %d, want (2000-1995)+(3030-3000)", got.PeerRTTSlow)
+	}
+	if got.PeerRTTCount != 5030 {
+		t.Errorf("round trips = %d, want 5030 across both peers", got.PeerRTTCount)
+	}
+	if ms := got.PeerRTTMeanMillis(); ms < 0.39 || ms > 0.41 {
+		t.Errorf("mean = %v ms, want about 0.4 (2.0s over 5030)", ms)
+	}
+}
+
+// TestAMemberWithNoPeersHasNoRoundTripToReport, which is a single-member store
+// and not a broken parser.
+func TestAMemberWithNoPeersHasNoRoundTripToReport(t *testing.T) {
+	got, err := ParseEtcd(strings.NewReader("etcd_mvcc_db_total_size_in_bytes 1\netcd_server_quota_backend_bytes 2\n"))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.SawPeerRTT {
+		t.Error("a store with no peer histogram claimed to have measured its peers")
+	}
+}

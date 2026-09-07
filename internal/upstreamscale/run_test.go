@@ -272,3 +272,24 @@ func TestTheBaselineIsSampledBeforeAnythingIsCreated(t *testing.T) {
 			first.Label, first.Clusters)
 	}
 }
+
+// TestAFailureLineCarriesEveryNoteThatHasSomethingToSay, and none that does
+// not.
+//
+// The run this is from: a rung ended on a process that died, and the line said
+// only that it died. The store's counters for the same minute — the failed
+// proposals that were the actual cause — were attached to the timeout path
+// and not to the death path, so the one time they would have explained a
+// failure they were not on it.
+func TestAFailureLineCarriesEveryNoteThatHasSomethingToSay(t *testing.T) {
+	got := annotate("kube-vip restarted 1 time(s)", "", "beside the control plane, nothing",
+		"", "etcd, since the run began — etcd-2: 1 failed raft proposal(s)")
+	want := "kube-vip restarted 1 time(s) — beside the control plane, nothing — " +
+		"etcd, since the run began — etcd-2: 1 failed raft proposal(s)"
+	if got != want {
+		t.Errorf("annotate() = %q, want %q", got, want)
+	}
+	if got := annotate("the fleet did not arrive"); got != "the fleet did not arrive" {
+		t.Errorf("a line with nothing to add was changed: %q", got)
+	}
+}
