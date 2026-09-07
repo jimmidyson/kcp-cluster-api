@@ -663,6 +663,54 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+### A control plane shedding itself is the ceiling, not a caveat
+
+A rung at 1500 clusters ended with `kube-controller-manager` exiting 1, and the
+report called it `restarted 1 time(s) — exited 1 of its own accord`. That reads
+as a process blip. Its own log says what it was:
+
+```
+"Shutting down controller" controller="garbagecollector"
+"Shutting down node controller"
+"Shutting down controller" controller="deployment"
+"Shutting down endpoint controller"
+"Shutting down controller" controller="taint-eviction-controller"
+"Shutting down persistent volume controller"
+... twenty more
+```
+
+For as long as that lasts the cluster has no garbage collection, no node
+lifecycle management, no deployment or endpoint reconciliation and no taint
+eviction — with a fleet still running on it. That is a management cluster that
+has stopped being able to manage itself, and it is a **stronger** result than a
+convergence timeout, not a weaker one.
+
+There was a wrong turn here worth recording. The Nutanix cloud controller
+manager is excluded from failing a rung because it is an addon that happens to
+run on control-plane nodes, and the first instinct was to extend that to
+`kube-controller-manager` and `kube-scheduler` on the grounds that they too have
+short fuses and are noticed first. They are not the same thing. The CCM runs
+*beside* the control plane; these two **are** it.
+
+Nor is a five-second lease timeout over-sensitivity. A lease that cannot be
+renewed makes its holder step aside rather than act on state it can no longer
+confirm — the mechanism firing is the mechanism working, and a cluster where it
+fires repeatedly is one that is not safely operable however many Clusters are
+Ready.
+
+So `SteppedDown` classifies it as what it is, ahead of the generic restart line,
+and names what the cluster went without. A Cluster API manager exiting 1 keeps
+the ordinary wording: it is not a static pod, and losing it stops reconciliation
+rather than the cluster's ability to run pods. An OOM kill still outranks
+everything, because a component killed for memory wants a memory answer.
+
+The mechanism joins up with the garbage collector. Cluster API's object graph
+gives the GC an informer per resource and owner references across a hundred
+thousand objects, and it loses write conflicts continuously against the
+KubeadmControlPlanes that Cluster API is updating at ~139ms of admission apiece.
+Cluster API's cost to `kube-controller-manager` is not incidental — it is the
+mechanism by which the control plane fails.
+
 ### A manager that died in a previous run is not this run's ceiling
 
 The control plane was given a restart baseline early, because a kubeadm static

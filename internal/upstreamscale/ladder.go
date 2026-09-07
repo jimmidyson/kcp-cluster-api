@@ -163,6 +163,11 @@ func (r RungResult) Timing() string {
 //
 // A death outranks a timeout, because a component that died is why the fleet
 // did not arrive rather than a second thing that happened to go wrong.
+//
+// And a Kubernetes control-plane component that stepped down outranks a plain
+// restart, because it is not one: a management cluster without its garbage
+// collector and node lifecycle controller is a different finding from a process
+// that came back. See SteppedDown.
 // Culprit names the component Classify would report, or "" when nothing died.
 //
 // Separate from Classify so that a caller can look the component up in the
@@ -186,6 +191,17 @@ func Classify(components []deployedscale.ComponentSample, timedOut bool) string 
 	for _, c := range components {
 		if c.Pod.OOMKilled {
 			return fmt.Sprintf("%s was %s", c.Component, c.Pod.WhyItDied())
+		}
+	}
+	// Before the generic restart line, because "kube-controller-manager
+	// restarted 1 time(s)" reads as a process blip and is the Kubernetes
+	// control plane going down. See SteppedDown.
+	for _, c := range components {
+		if c.Pod.RestartCount == 0 {
+			continue
+		}
+		if why := SteppedDown(c.Component, c.Pod); why != "" {
+			return why
 		}
 	}
 	for _, c := range components {
