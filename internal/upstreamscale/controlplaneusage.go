@@ -340,18 +340,10 @@ func (r ControlPlaneReadout) Describe() string {
 		}
 	}
 
-	var restarted []string
-	for _, s := range r.Samples {
-		if s.Pod.RestartCount > 0 {
-			restarted = append(restarted, fmt.Sprintf("%s x%d", s.Component, s.Pod.RestartCount))
-		}
-	}
-	if len(restarted) > 0 {
-		// A restart resets every counter above it, so a rung containing one is
-		// not comparable with the rung below — and on a run aimed at a ceiling
-		// it is usually the finding itself.
-		fmt.Fprintf(&b, " — **restarted during this run**: %s", strings.Join(restarted, ", "))
-	}
+	// The restart clause is not here, and that is deliberate: see Restarted.
+	// This readout is one scrape and knows only what a pod's whole history is,
+	// which for a kubeadm static pod outlives the run by as long as the node
+	// has been up. Only the run knows what it started from.
 	return b.String()
 }
 
@@ -491,8 +483,13 @@ func HealthSince(baseline, current map[string]deployedscale.PodFacts) []deployed
 	return HealthOf(changed)
 }
 
-// ManagersSince is HealthSince for the managers, whose samples arrive as
-// components rather than as a map of pod facts.
+// RestartsSince restates every sample's restart history as what has happened
+// since a baseline taken before the climb, keeping the samples themselves.
+//
+// This is HealthSince for samples that arrive as components rather than as a
+// map of pod facts — and it is what every restart a run reports has to be
+// measured with, whether the process is a manager, a control plane static pod
+// or something that merely runs beside one.
 //
 // # Why the managers needed this too, and did not have it
 //
@@ -511,26 +508,77 @@ func HealthSince(baseline, current map[string]deployedscale.PodFacts) []deployed
 // A manager only restarts on its own account, so its baseline is almost always
 // zero and this looks like it can never matter. It matters exactly once, and
 // then it matters for every run afterwards until somebody rolls the deployment.
-func ManagersSince(baseline map[string]int32,
+func RestartsSince(baseline map[string]int32,
 	current []deployedscale.ComponentSample,
 ) []deployedscale.ComponentSample {
 	out := make([]deployedscale.ComponentSample, 0, len(current))
 	for _, c := range current {
-		if c.Pod.RestartCount <= baseline[c.Component] {
-			// Not just the count: OOMKilled and the last termination travel
-			// with a restart that has already been counted, so a manager OOM
-			// killed yesterday would keep reporting itself as OOM killed
-			// today with a restart count of zero.
-			continue
-		}
 		since := c
 		since.Pod.RestartCount = c.Pod.RestartCount - baseline[c.Component]
+		if since.Pod.RestartCount <= 0 {
+			// Not just the count: OOMKilled and the last termination travel
+			// with a restart that has already been counted, so a process OOM
+			// killed yesterday would keep reporting itself as OOM killed
+			// today with a restart count of zero.
+			since.Pod.RestartCount = 0
+			since.Pod.OOMKilled = false
+			since.Pod.LastExitCode = 0
+			since.Pod.LastReason = ""
+		}
 		out = append(out, since)
 	}
 	return out
 }
 
-// ManagerRestarts is the baseline ManagersSince is measured against.
+// ManagersSince is RestartsSince narrowed to the processes that actually
+// restarted, which is what a health check asks for.
+func ManagersSince(baseline map[string]int32,
+	current []deployedscale.ComponentSample,
+) []deployedscale.ComponentSample {
+	out := make([]deployedscale.ComponentSample, 0, len(current))
+	for _, c := range RestartsSince(baseline, current) {
+		if c.Pod.RestartCount > 0 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Restarted is the rung line's restart clause: which of these processes
+// restarted, and how often, since the baseline they were rebased against with
+// RestartsSince. Empty when none did.
+//
+// # Why the readout cannot write this sentence itself
+//
+// It used to, and it was wrong every time. ControlPlaneReadout.Describe had
+// the restart counts to hand and printed them under a "during this run"
+// heading, but a scrape only knows a pod's whole history: a report of a run
+// that reached 1000 clusters listed `kube-apiserver x3` and `kube-apiserver x4`
+// at its **baseline**, before a single cluster existed — three of those
+// restarts were ours, done by hand the previous evening to measure a fresh
+// process, and one was a manager's from the day before.
+//
+// The abort path was already correct, because it went through a baseline. Only
+// the sentence a reader actually reads was lying, which is the worse half to
+// get wrong: nobody re-derives a ceiling from a table when a line above it has
+// already named the process that died.
+func Restarted(since []deployedscale.ComponentSample) string {
+	restarted := make([]string, 0, len(since))
+	for _, s := range since {
+		if s.Pod.RestartCount > 0 {
+			restarted = append(restarted, fmt.Sprintf("%s x%d", s.Component, s.Pod.RestartCount))
+		}
+	}
+	if len(restarted) == 0 {
+		return ""
+	}
+	// A restart resets every counter beside it, so a rung containing one is not
+	// comparable with the rung below — and on a run aimed at a ceiling it is
+	// usually the finding itself.
+	return "**restarted during this run**: " + strings.Join(restarted, ", ")
+}
+
+// ManagerRestarts is the baseline RestartsSince is measured against.
 func ManagerRestarts(components []deployedscale.ComponentSample) map[string]int32 {
 	out := make(map[string]int32, len(components))
 	for _, c := range components {

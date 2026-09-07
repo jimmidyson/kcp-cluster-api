@@ -65,6 +65,13 @@ type Runner struct {
 	// in one run then failed every rung of every run after it. See
 	// ManagersSince.
 	managersAtStart map[string]int32
+	// cpRestartsAtStart is the same again for everything on the control
+	// plane's nodes, keyed by pod rather than by component: the readout covers
+	// every process up there, including the ones that merely run beside the
+	// control plane and so have no entry in controlPlaneAtStart. Taken from
+	// the first readout of the run rather than beforehand, because that
+	// readout is a scrape of three nodes and one is enough. See Restarted.
+	cpRestartsAtStart map[string]int32
 
 	// etcdAtStart is the same for the store, and for the same reason: every
 	// counter here is cumulative over a member's process life, so on a
@@ -119,7 +126,20 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			r.logf("NOTE: could not sample the controllers at %s: %v", label, err)
 			return
 		}
+		// Against the baseline, exactly as the health check is: a pod's own
+		// count is its whole life, and a kubeadm static pod's life is the
+		// node's. Rebased here rather than in the readout so that the samples
+		// the report keeps carry this run's restarts too — the report's own
+		// "a container restarted during this run" banner reads them.
+		components = RestartsSince(r.managersAtStart, components)
 		if cp, described, err := r.Target.ControlPlane(ctx, r.Host, opts.APIHeapSamples, opts.APIHeapGap); err == nil {
+			if r.cpRestartsAtStart == nil {
+				r.cpRestartsAtStart = ManagerRestarts(cp)
+			}
+			cp = RestartsSince(r.cpRestartsAtStart, cp)
+			if restarted := Restarted(cp); restarted != "" {
+				described += " — " + restarted
+			}
 			components = append(components, cp...)
 			report.AddFact("controlPlane@"+label, described)
 		} else {

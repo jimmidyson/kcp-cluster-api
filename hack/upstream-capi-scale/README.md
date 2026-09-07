@@ -746,6 +746,49 @@ A manager only restarts on its own account, so its baseline is nearly always
 zero and this looks like it can never matter. It matters exactly once, and then
 it matters for every run afterwards until somebody rolls the deployment.
 
+### And neither is one the report *prints*, which took a third go to get right
+
+The same bug had a third home, and it survived both fixes because it was in a
+sentence rather than in a decision. `ControlPlaneReadout.Describe` had the
+restart counts to hand — it holds a sample of every pod on the control plane's
+nodes — and printed them under the heading `**restarted during this run**`. A
+scrape only knows a pod's whole history, so the heading was never true.
+
+The report of the run that reached 1000 clusters carried this at its
+**baseline**, before a single cluster existed:
+
+```
+| controlPlane@baseline (no clusters) | ... — **restarted during this run**:
+kube-apiserver-capi-scale-pddjz-fw9n7 x3, kube-apiserver-capi-scale-pddjz-w4pp6 x4, ...
+```
+
+Three of those were ours, done by hand the previous evening to measure a fresh
+API server; the rest were older still. Nothing had restarted during that run.
+
+The abort path was right the whole time, because it went through `HealthSince`.
+Only the line a reader actually reads was wrong — which is the worse half to get
+wrong, since nobody re-derives a ceiling from a table when a line above it has
+already named the process that died.
+
+The fix is the one the other two got. `RestartsSince` rebases a whole set of
+samples against a baseline taken before the climb, keeping the samples (they
+carry the run's memory figures) and zeroing the restart history of anything that
+has not restarted since — the count, the `OOMKilled` flag and the last
+termination together, because those travel with a restart that has already been
+counted. `ManagersSince` is now that function narrowed to what restarted, and
+`Restarted` writes the clause from the rebased samples in the runner, which is
+the only place that knows what the run started from. The readout no longer
+mentions restarts at all.
+
+The rebased samples are what the report keeps, so its own
+`A container restarted during this run` banner stops naming yesterday's
+restarts too.
+
+The general shape, now three for three: **on a long-lived cluster every counter
+you did not baseline is mostly somebody else's run.** It applied to etcd's
+counters, to the managers, to the control plane's pods, and to the sentence
+describing them.
+
 ### Restart the API servers before a measured run, or the baseline is the last one
 
 Measured on this cluster, both readings against an API with **no Clusters, no

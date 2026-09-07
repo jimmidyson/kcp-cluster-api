@@ -545,3 +545,76 @@ func TestAManagerThisRunHasNotSeenBeforeIsJudgedFromZero(t *testing.T) {
 		t.Error("a component with no baseline was treated as having restarted before the run")
 	}
 }
+
+// TestTheRestartClauseCountsOnlyThisRun.
+//
+// A report of a run that reached 1000 clusters carried, at its **baseline**
+// and before a single cluster existed, `kube-apiserver-…-fw9n7 x3,
+// kube-apiserver-…-w4pp6 x4` under the heading "restarted during this run".
+// Three of those were ours, done by hand the previous evening to measure a
+// fresh process; the rest were older still. The abort path had a baseline and
+// was right; the sentence a reader actually reads did not and was wrong.
+func TestTheRestartClauseCountsOnlyThisRun(t *testing.T) {
+	byHandYesterday := []deployedscale.ComponentSample{
+		{Component: "kube-apiserver-fw9n7", Pod: deployedscale.PodFacts{
+			StaticPod: true, RestartCount: 3, LastExitCode: 137, LastReason: "Error"}},
+		{Component: "kube-apiserver-w4pp6", Pod: deployedscale.PodFacts{
+			StaticPod: true, RestartCount: 4}},
+	}
+	baseline := ManagerRestarts(byHandYesterday)
+
+	if clause := Restarted(RestartsSince(baseline, byHandYesterday)); clause != "" {
+		t.Errorf("the rung line claimed a restart this run did not cause: %q", clause)
+	}
+
+	// And a real one, which is the finding the line exists for.
+	died := append([]deployedscale.ComponentSample{}, byHandYesterday...)
+	died[0].Pod.RestartCount = 4
+	clause := Restarted(RestartsSince(baseline, died))
+	if !strings.Contains(clause, "kube-apiserver-fw9n7 x1") {
+		t.Errorf("a restart during the run was not reported: %q", clause)
+	}
+	if strings.Contains(clause, "w4pp6") {
+		t.Errorf("a process that did not restart was named alongside it: %q", clause)
+	}
+}
+
+// TestTheReadoutDoesNotWriteTheRestartClauseItself, because one scrape cannot
+// know what the run started from. See Restarted.
+func TestTheReadoutDoesNotWriteTheRestartClauseItself(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes: []string{"cp-0"},
+		Usage: map[string]PodUsage{
+			"kube-system/kube-apiserver-cp-0": {Role: "kube-apiserver", Node: "cp-0",
+				ContainerUsage: ContainerUsage{WorkingSetBytes: 1 << 30}},
+		},
+		Samples: []deployedscale.ComponentSample{{
+			Component: "kube-apiserver-cp-0",
+			Pod:       deployedscale.PodFacts{StaticPod: true, RestartCount: 3},
+		}},
+	}
+	if strings.Contains(readout.Describe(), "restarted") {
+		t.Errorf("the readout described a restart out of a lifetime count: %q", readout.Describe())
+	}
+}
+
+// TestRestartsSinceKeepsEveryProcess, because the samples it rebases are also
+// the run's memory figures: dropping the ones that did not restart would drop
+// the control plane.
+func TestRestartsSinceKeepsEveryProcess(t *testing.T) {
+	current := []deployedscale.ComponentSample{
+		{Component: "kube-apiserver-cp-0", Pod: deployedscale.PodFacts{RestartCount: 2},
+			Process: deployedscale.ProcessSample{ResidentBytes: 1 << 30}},
+		{Component: "etcd-cp-0", Pod: deployedscale.PodFacts{RestartCount: 0}},
+	}
+	since := RestartsSince(map[string]int32{"kube-apiserver-cp-0": 2}, current)
+	if len(since) != 2 {
+		t.Fatalf("rebasing dropped a process: %v", since)
+	}
+	if since[0].Process.ResidentBytes != 1<<30 {
+		t.Error("rebasing lost the figure the sample was taken for")
+	}
+	if since[0].Pod.RestartCount != 0 {
+		t.Errorf("restarts = %d, want none since the baseline", since[0].Pod.RestartCount)
+	}
+}
