@@ -156,6 +156,15 @@ CAREN_CLUSTERCLASS_URL="${CAREN_CLUSTERCLASS_URL:-https://raw.githubusercontent.
 # to use your own.
 CLUSTER_TEMPLATE="${CLUSTER_TEMPLATE:-https://raw.githubusercontent.com/nutanix-cloud-native/cluster-api-runtime-extensions-nutanix/${CAREN_VERSION}/examples/capi-quick-start/nutanix-cluster-cilium-helm-addon.yaml}"
 
+# A login on every node, from NUTANIX_SSH_AUTHORIZED_KEY in the environment.
+#
+# That variable is CAPX's, from CAPX's own cluster template, and CAREN's quick
+# start never reads it — so a key exported for it was silently ignored, and the
+# first node that failed cloud-init could not be logged into. CAREN creates
+# users through its clusterConfig variable, which is where the trimmer writes
+# the key. Unset leaves the cluster with no login, as the recorded runs had.
+SSH_USER="${SSH_USER:-capiuser}"
+
 # The fleet the sizing document asks for.
 CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-3}"
 WORKER_COUNT="${WORKER_COUNT:-4}"
@@ -199,6 +208,8 @@ config() {
   [[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] || livez="kubeadm default, /livez including the etcd check"
   local leader="lease ${LEADER_ELECT_LEASE_DURATION}, renew ${LEADER_ELECT_RENEW_DEADLINE}, retry ${LEADER_ELECT_RETRY_PERIOD} (OpenShift; kubeadm is 15s/10s/2s)"
   [[ -n "${LEADER_ELECT_LEASE_DURATION}" ]] || leader="kubeadm default, 15s/10s/2s (LEADER_ELECT_LEASE_DURATION is empty)"
+  local sshlogin="none (NUTANIX_SSH_AUTHORIZED_KEY is unset; CAREN's template does not read it, this script does)"
+  [[ -z "${NUTANIX_SSH_AUTHORIZED_KEY:-}" ]] || sshlogin="user ${SSH_USER}, key ${NUTANIX_SSH_AUTHORIZED_KEY##* } (from NUTANIX_SSH_AUTHORIZED_KEY, via CAREN's users variable)"
   local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
   if [[ -n "${ETCD_DISK_SIZE}" ]]; then
     etcddisk="${ETCD_DISK_SIZE} as ${ETCD_DISK_DEVICE}, mounted on /var/lib/etcd"
@@ -224,6 +235,7 @@ API server etcd checks   ${etcdcheck}
 API server liveness      ${livez}
 leader election          ${leader} — on kube-controller-manager and kube-scheduler
 etcd disk                ${etcddisk}
+node login               ${sshlogin}
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
   control plane pool       ${CONTROL_PLANE_POOL_WORKERS} of ${WORKER_COUNT} workers (0 = one unlabelled pool)
 CONFIG
@@ -602,6 +614,8 @@ create() {
         --worker-memory "${WORKER_MEMORY}" \
         --worker-disk "${WORKER_DISK}" \
         --cluster-class "${SCALE_CLUSTERCLASS}" \
+        --ssh-user "${SSH_USER}" \
+        --ssh-authorized-key "${NUTANIX_SSH_AUTHORIZED_KEY:-}" \
     > "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
 
   # Two changes the generated manifest needs, both made above:

@@ -55,7 +55,20 @@ export NUTANIX_STORAGE_CONTAINER_NAME=...
 export CONTROL_PLANE_ENDPOINT_IP=... KUBERNETES_SERVICE_LOAD_BALANCER_IP=...
 export KUBERNETES_VERSION=v1.32.0
 export DOCKER_HUB_USERNAME=... DOCKER_HUB_PASSWORD=...
+export NUTANIX_SSH_AUTHORIZED_KEY="ssh-ed25519 AAAA... you@host"   # read by this script, not by CAREN
 ```
+
+That last one is not what it looks like. `NUTANIX_SSH_AUTHORIZED_KEY` is CAPX's
+variable, from CAPX's own cluster template, and CAREN's quick start never reads
+it — every `${VARIABLE}` in that template is listed by `grep -oE '\$\{[A-Z_]+'`
+and the key is not among them. A key exported for it was silently ignored, and
+the first control plane node that failed cloud-init could not be logged into to
+find out why. CAREN creates users through its `clusterConfig` variable's `users`
+list, so `create` now writes the key there, as user `SSH_USER` (`capiuser`) with
+passwordless sudo; `config` says whether a login will exist. Users are
+cloud-init, so only machines built after the change carry the key: a node that
+is already stuck stays locked, and the fix is to let the control plane replace
+it (see "Debugging a control plane node that never joined").
 
 ```sh
 ./scale-cluster.sh config         # resolve and print every input, touching nothing
@@ -469,6 +482,57 @@ done
 `SOURCE` should be the data disk's partition, not the root filesystem, with
 `LABEL=etcd` on it. If it is the root filesystem, the guard did not fire and
 the manifest that reached the node is not the one this step wrote.
+
+## Debugging a control plane node that never joined
+
+A ClusterClass change rolls the control plane, and a new machine that never
+becomes Ready is the failure the etcd disk guard is designed to produce. Read it
+from the outside first, from the bootstrap cluster:
+
+```sh
+export KUBECONFIG=../../bin/capi-scale-bootstrap.kubeconfig
+kubectl get machines -o wide                                  # which one is stuck, and in which phase
+kubectl describe machine <name> | sed -n '/Conditions/,/Events/p'
+kubectl get kubeadmconfig -o wide                             # bootstrap data ready, or not
+kubectl get nutanixmachine <name> -o jsonpath='{.status}' | jq   # the VM exists, and has its disks
+```
+
+A Machine in `Provisioned` with a `KubeadmConfig` whose data is ready and no
+Node is a VM that booted and did not run kubeadm to completion. That is a
+cloud-init question, and it needs a login on the node, which is what the SSH
+key above is for. With one:
+
+```sh
+ssh capiuser@<node ip>
+sudo cloud-init status --long                  # done, error, or still running, and which stage
+sudo tail -50 /var/log/cloud-init-output.log   # the guard's own message is here if it fired
+sudo grep -iE 'error|fail|warn' /var/log/cloud-init.log | tail -30
+lsblk -o NAME,SIZE,TYPE,LABEL,MOUNTPOINT       # is the data disk there, and under which name
+findmnt -T /var/lib/etcd -o TARGET,SOURCE      # is etcd's directory on it
+sudo journalctl -u kubelet --no-pager | tail -30
+```
+
+What the disk change can fail on, in the order to check:
+
+- **The disk came up under a different name.** `lsblk` shows it; if it is not
+  `/dev/sdb`, set `ETCD_DISK_DEVICE` and re-run `clusterclass`. The guard fired
+  because `disk_setup` and `mounts` were told the wrong device, and its message
+  is the last line of `cloud-init-output.log`.
+- **The disk is not attached at all.** `nutanixmachine` status and the VM in
+  Prism show one disk. CAPX before v1.5 ignores `dataDisks`; the bootstrap
+  cluster's CAPX version is in `clusterctl describe cluster` and `config`.
+- **cloud-init failed before the mount.** `cloud-init status --long` names the
+  module; `disk_setup` refusing an already-partitioned device is the usual one
+  on a reused disk, and `overwrite: false` is deliberate.
+
+A node without a login cannot be read this way, and the console in Prism has no
+password to offer. Delete the stuck Machine on the bootstrap cluster and the
+KubeadmControlPlane replaces it with one built from the current spec, key
+included:
+
+```sh
+kubectl delete machine <name>
+```
 
 ## Changing the ClusterClass on a cluster that already exists
 

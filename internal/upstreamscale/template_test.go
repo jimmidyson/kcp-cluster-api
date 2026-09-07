@@ -456,3 +456,61 @@ func workerPools(t *testing.T, manifest string) []map[string]any {
 	}
 	return out
 }
+
+// TestAnSSHKeyReachesTheNodesThroughCarensUsersVariable.
+//
+// NUTANIX_SSH_AUTHORIZED_KEY is CAPX's variable, from CAPX's own template, and
+// CAREN's quick start never reads it — so a key exported for it was silently
+// ignored, and the first node that failed cloud-init could not be logged into
+// to find out why. CAREN puts users on nodes through the clusterConfig
+// variable's users list, which is where the key goes.
+func TestAnSSHKeyReachesTheNodesThroughCarensUsersVariable(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{
+		Workers: 4, SSHUser: "capiuser", SSHAuthorizedKey: "ssh-ed25519 AAAAC3 jimmi",
+	})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	for _, want := range []string{
+		"users:", "name: capiuser", "- ssh-ed25519 AAAAC3 jimmi", "sudo: ALL=(ALL) NOPASSWD:ALL",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the users variable is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestNoKeyMeansNoUser, so a cluster nobody asked for a login on does not get
+// one.
+func TestNoKeyMeansNoUser(t *testing.T) {
+	out, err := TrimForScale(generated, Sizing{Workers: 4, SSHUser: "capiuser"})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if strings.Contains(out, "users:") || strings.Contains(out, "capiuser") {
+		t.Errorf("a user was added with no key to log in with:\n%s", out)
+	}
+}
+
+// TestTheKeyReplacesAUserOfTheSameNameRatherThanDuplicatingIt, because CAREN
+// refuses two users with one name and the second run of create must not fail
+// on the first run's user.
+func TestTheKeyReplacesAUserOfTheSameNameRatherThanDuplicatingIt(t *testing.T) {
+	withUser := strings.Replace(generated, "        addons:",
+		"        users:\n          - name: capiuser\n            sshAuthorizedKeys:\n              - ssh-rsa OLD\n        addons:", 1)
+	if withUser == generated {
+		t.Fatal("the fixture did not take the user; the anchor moved")
+	}
+	out, err := TrimForScale(withUser, Sizing{
+		Workers: 4, SSHUser: "capiuser", SSHAuthorizedKey: "ssh-ed25519 NEW",
+	})
+	if err != nil {
+		t.Fatalf("trimming: %v", err)
+	}
+	if n := strings.Count(out, "name: capiuser"); n != 1 {
+		t.Errorf("capiuser appears %d times, want 1", n)
+	}
+	if strings.Contains(out, "ssh-rsa OLD") || !strings.Contains(out, "ssh-ed25519 NEW") {
+		t.Errorf("the old key survived or the new one did not land:\n%s", out)
+	}
+}

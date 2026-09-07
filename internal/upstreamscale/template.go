@@ -150,6 +150,20 @@ type Sizing struct {
 	// is invisible until something needs either.
 	ClusterClass string
 
+	// SSHUser and SSHAuthorizedKey put a login on every node, through CAREN's
+	// users variable.
+	//
+	// NUTANIX_SSH_AUTHORIZED_KEY is CAPX's variable, from CAPX's own cluster
+	// template, and CAREN's quick start never reads it: a key exported for it
+	// was silently ignored, and the first node that failed cloud-init could
+	// not be logged into to find out why. CAREN writes users with cloud-init
+	// from the clusterConfig variable's users list, so that is where the key
+	// goes. An empty key adds no user; a user of the same name is replaced,
+	// since CAREN refuses two with one name and the second run of create must
+	// not fail on the first run's user.
+	SSHUser          string
+	SSHAuthorizedKey string
+
 	// The rest are the node sizes. CAREN's example builds every node at 2 vCPU
 	// and 4 GiB — a sensible quick start, and a sixth of the memory the sizing
 	// document asks the control plane for.
@@ -271,6 +285,10 @@ func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
 		// The control plane's machine size lives under this same variable.
 		resize(nested(value, "controlPlane", "nutanix", "machineDetails"),
 			sizing.ControlPlaneVCPUs, sizing.ControlPlaneMemory, sizing.ControlPlaneDisk)
+		// And so do the users cloud-init creates on every node.
+		if sizing.SSHAuthorizedKey != "" {
+			value["users"] = withUser(value["users"], sizing.SSHUser, sizing.SSHAuthorizedKey)
+		}
 	}
 	for i := range variables {
 		variable, ok := variables[i].(map[string]any)
@@ -288,6 +306,27 @@ func trimCluster(doc *unstructured.Unstructured, sizing Sizing) error {
 		return fmt.Errorf("writing the topology variables: %w", err)
 	}
 	return nil
+}
+
+// withUser returns the users list with one user holding the key, replacing a
+// user of the same name and leaving every other one alone. Passwordless sudo,
+// because the login exists to read a node's cloud-init and kubelet logs when
+// it never joined, and those are root's.
+func withUser(existing any, name, key string) []any {
+	var users []any
+	if list, ok := existing.([]any); ok {
+		for _, u := range list {
+			if user, ok := u.(map[string]any); ok && user["name"] == name {
+				continue
+			}
+			users = append(users, u)
+		}
+	}
+	return append(users, map[string]any{
+		"name":              name,
+		"sshAuthorizedKeys": []any{key},
+		"sudo":              "ALL=(ALL) NOPASSWD:ALL",
+	})
 }
 
 // resize adjusts the fields a scale test cares about and leaves the rest of

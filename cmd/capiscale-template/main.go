@@ -75,6 +75,14 @@ func main() {
 	// store cannot be measured — sits unused.
 	fs.StringVar(&sizing.ClusterClass, "cluster-class", "", "ClusterClass the Cluster should name. "+
 		"Empty leaves the template's own, which is CAREN's unpatched one.")
+	// NUTANIX_SSH_AUTHORIZED_KEY is CAPX's variable and CAREN's template never
+	// reads it. CAREN puts users on nodes through its clusterConfig variable,
+	// so a key has to be written there to reach a node at all.
+	fs.StringVar(&sizing.SSHUser, "ssh-user", "capiuser", "User cloud-init creates on every node, with "+
+		"passwordless sudo, when -ssh-authorized-key is set.")
+	fs.StringVar(&sizing.SSHAuthorizedKey, "ssh-authorized-key", "", "Public key for that user. Empty adds "+
+		"no user. Written to CAREN's users variable, which is the only way a key reaches a CAREN node; the "+
+		"NUTANIX_SSH_AUTHORIZED_KEY variable CAPX's template reads is not read by CAREN's.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
