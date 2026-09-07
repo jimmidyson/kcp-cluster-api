@@ -249,7 +249,53 @@ type APIServer struct {
 	// HeapSamples is how many reads the heap figure is the lowest of, when no
 	// collection could be forced. See LowestHeap.
 	HeapSamples int `json:"heapSamples,omitempty"`
+
+	// The Go runtime's own decomposition of the heap, which answers what a
+	// sawtooth floor cannot.
+	//
+	// # Why this matters more here than anywhere else
+	//
+	// A run reported an API server at 23.5 GiB resident against 9.7 GiB of
+	// heap, on a 32 GiB node, and the obvious question — how much of that is
+	// live data and how much is memory the runtime has not handed back — could
+	// not be answered. The heap figure is the lowest of several reads with no
+	// collection forced, so it is an upper bound and nothing more; and
+	// profiling, which would settle it, cannot be turned on here (see
+	// hack/upstream-capi-scale/README.md for the node that was broken finding
+	// out).
+	//
+	// These four come off /metrics with no profiling and no forced collection:
+	// InUse is spans holding at least one live object, Idle is spans holding
+	// nothing, and Released is the part of Idle already given back to the OS.
+	// Idle minus Released is therefore memory this process is holding and not
+	// using — the figure that decides whether a GOMEMLIMIT would help or
+	// whether the objects genuinely cost this much.
+	//
+	// NextGC is the heap size the next collection triggers at, which is what
+	// GOGC actually resolves to on this process rather than what it was set to.
+	HeapInUseBytes    uint64 `json:"heapInUseBytes,omitempty"`
+	HeapIdleBytes     uint64 `json:"heapIdleBytes,omitempty"`
+	HeapReleasedBytes uint64 `json:"heapReleasedBytes,omitempty"`
+	NextGCBytes       uint64 `json:"nextGCBytes,omitempty"`
 }
+
+// RetainedBytes is heap the runtime holds and is not using: idle spans it has
+// not returned to the OS.
+//
+// Guarded because the four gauges are scraped from one exposition but written
+// by the runtime at different moments, and released briefly exceeding idle
+// would underflow into something astronomical.
+func (a APIServer) RetainedBytes() uint64 {
+	if a.HeapReleasedBytes >= a.HeapIdleBytes {
+		return 0
+	}
+	return a.HeapIdleBytes - a.HeapReleasedBytes
+}
+
+// SawHeapBreakdown reports whether the runtime gauges were in the exposition.
+// A process that did not publish them has a zero breakdown rather than an empty
+// heap, and the difference is the whole point of asking.
+func (a APIServer) SawHeapBreakdown() bool { return a.HeapInUseBytes > 0 || a.HeapIdleBytes > 0 }
 
 // LowestHeap reduces several reads of the API server to one, keeping the
 // smallest heap and everything else from the freshest read.
@@ -277,9 +323,19 @@ func LowestHeap(samples []APIServer) APIServer {
 	out := samples[len(samples)-1]
 	out.HeapSamples = len(samples)
 	for _, s := range samples {
-		if s.Process.HeapAllocBytes < out.Process.HeapAllocBytes {
-			out.Process.HeapAllocBytes = s.Process.HeapAllocBytes
+		if s.Process.HeapAllocBytes >= out.Process.HeapAllocBytes {
+			continue
 		}
+		out.Process.HeapAllocBytes = s.Process.HeapAllocBytes
+		// The runtime's breakdown travels with the read the heap figure came
+		// from, not with the freshest one. Four gauges written at one moment
+		// describe one heap; mixing a later read's idle with an earlier read's
+		// alloc would produce a decomposition of nothing that existed, and it
+		// would be the reader who noticed, from figures that did not add up.
+		out.HeapInUseBytes = s.HeapInUseBytes
+		out.HeapIdleBytes = s.HeapIdleBytes
+		out.HeapReleasedBytes = s.HeapReleasedBytes
+		out.NextGCBytes = s.NextGCBytes
 	}
 	return out
 }
@@ -302,6 +358,21 @@ func (a APIServer) Describe() string {
 		a.Process.Goroutines, humanBytes(a.Process.HeapAllocBytes), humanBytes(a.Process.ResidentBytes),
 		a.StorageObjects, a.ClusterAPIObjects, a.EventObjects,
 		a.InflightRequests, a.EtcdRequestMeanMillis())
+
+	// What the resident figure is actually made of, when the runtime says.
+	//
+	// Without it a reader has a heap and a resident and no way to tell an API
+	// server holding a lot of live objects from one holding a lot of memory it
+	// has finished with — and those want opposite responses: bigger nodes for
+	// the first, a GOMEMLIMIT for the second.
+	if a.SawHeapBreakdown() {
+		fmt.Fprintf(&b, "; of the resident set %s is heap in use and %s is heap the runtime holds "+
+			"and is not using (%s already returned to the OS)",
+			humanBytes(a.HeapInUseBytes), humanBytes(a.RetainedBytes()), humanBytes(a.HeapReleasedBytes))
+		if a.NextGCBytes > 0 {
+			fmt.Fprintf(&b, ", next collection at %s", humanBytes(a.NextGCBytes))
+		}
+	}
 	switch {
 	case a.HeapCollected:
 	case a.HeapSamples > 1:
@@ -432,6 +503,14 @@ func ParseAPIServer(r io.Reader) (APIServer, error) {
 		switch name {
 		case "go_goroutines":
 			out.Process.Goroutines, sawGoroutines = int(value), true
+		case "go_memstats_heap_inuse_bytes":
+			out.HeapInUseBytes = uint64(value)
+		case "go_memstats_heap_idle_bytes":
+			out.HeapIdleBytes = uint64(value)
+		case "go_memstats_heap_released_bytes":
+			out.HeapReleasedBytes = uint64(value)
+		case "go_memstats_next_gc_bytes":
+			out.NextGCBytes = uint64(value)
 		case "go_memstats_heap_alloc_bytes":
 			out.Process.HeapAllocBytes, sawHeap = uint64(value), true
 		case "go_memstats_sys_bytes":

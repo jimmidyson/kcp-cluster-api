@@ -625,6 +625,57 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+### Live data or memory nobody handed back — the API server line says which
+
+A run reported an API server at **23.5 GiB resident against 9.7 GiB of heap**,
+on a 32 GiB node, holding 104,556 objects. That is about 97 KiB of heap per
+stored object, against a Cluster API object that serialises to perhaps 5-15 KB.
+
+The obvious question — how much of that is live data and how much is memory the
+runtime has finished with and not returned — could not be answered from the
+report. The heap figure is the lowest of several reads with no collection
+forced, so it is an upper bound and nothing more, and profiling (which would
+settle it) cannot be turned on here.
+
+The Go runtime publishes the decomposition on `/metrics`, needing no profiling
+and no forced collection, so the line now carries it:
+
+| gauge | meaning |
+|---|---|
+| `go_memstats_heap_inuse_bytes` | spans holding at least one live object |
+| `go_memstats_heap_idle_bytes` | spans holding nothing |
+| `go_memstats_heap_released_bytes` | of those, already returned to the OS |
+| `go_memstats_next_gc_bytes` | the heap size the next collection triggers at |
+
+`idle − released` is memory the process is holding and not using. The two
+readings want opposite responses:
+
+- **Mostly in use** → the objects genuinely cost this much, and the answer is
+  bigger control-plane nodes. If that holds, it is also the finding `sizing.md`
+  asks for: an ordinary kube-apiserver serving Cluster API's CRDs as
+  unstructured objects is expensive, and that applies to every management
+  cluster anyone runs.
+- **Mostly retained** → the runtime has no reason to be frugal, because kubeadm
+  gives `kube-apiserver` a CPU request and nothing else: no memory limit, no
+  cgroup ceiling, no `GOMEMLIMIT`. It has no idea it is on a 32 GiB node shared
+  with etcd, the scheduler, the controller manager and Cilium.
+
+For the second case, `GOMEMLIMIT` in the static pod's env is the lever — a soft
+limit that makes the collector work harder as memory approaches it and returns
+pages more eagerly, rather than the hard wall a cgroup limit gives. Two rules:
+pair it with a cgroup memory limit set **above** it, never below (a cgroup limit
+alone turns a slow collection into a `137`); and expect it in the CPU column,
+because a GC-bound API server answers `/livez` more slowly, which is the failure
+this whole exercise keeps meeting.
+
+`next_gc_bytes` is there because it shows what GOGC resolves to on this process
+rather than what somebody thinks it was set to.
+
+Restarting the API servers is a **measurement** step, not an operational one: it
+gives a clean baseline for a cluster that has been through days of runs. A
+production API server needing periodic restarts would be a bug worth reporting,
+not a runbook entry.
+
 ### Every rung's etcd line carries what changed, not just what is
 
 A rung reports the store's state — size, keys, mean latencies, leader — and then

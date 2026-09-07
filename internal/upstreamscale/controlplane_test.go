@@ -345,3 +345,101 @@ func TestTheHeapFloorStandsInForACollectionThatCannotBeForced(t *testing.T) {
 		t.Error("an empty set of reads produced a sample")
 	}
 }
+
+// TestTheHeapIsDecomposedFromMetricsRatherThanGuessed.
+//
+// The question this answers: an API server at 23.5 GiB resident against 9.7 GiB
+// of heap, on a 32 GiB node. Live data, or memory the runtime has finished with
+// and not handed back? Those want opposite responses — bigger nodes for the
+// first, a GOMEMLIMIT for the second — and the heap figure alone cannot tell
+// them apart, being the lowest of several reads with no collection forced.
+//
+// The runtime publishes the decomposition on /metrics, so no profiling is
+// needed — which matters here, because turning profiling on broke a node.
+func TestTheHeapIsDecomposedFromMetricsRatherThanGuessed(t *testing.T) {
+	exposition := `go_goroutines 4183
+go_memstats_heap_alloc_bytes 1.0415e+10
+go_memstats_heap_inuse_bytes 1.1e+10
+go_memstats_heap_idle_bytes 1.4e+10
+go_memstats_heap_released_bytes 2e+09
+go_memstats_next_gc_bytes 2.08e+10
+go_memstats_sys_bytes 2.6e+10
+process_resident_memory_bytes 2.5232e+10
+apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 1500
+`
+	got, err := ParseAPIServer(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if !got.SawHeapBreakdown() {
+		t.Fatal("the runtime gauges were in the exposition and were not read")
+	}
+	// 14 GiB idle less 2 GiB already returned.
+	if want := uint64(12e9); got.RetainedBytes() != want {
+		t.Errorf("retained = %d, want idle minus released (%d)", got.RetainedBytes(), want)
+	}
+	if got.NextGCBytes == 0 {
+		t.Error("the collection target is missing, so GOGC's effect cannot be read")
+	}
+
+	line := got.Describe()
+	for _, want := range []string{"heap in use", "not using", "returned to the OS", "next collection"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line does not say %q: %s", want, line)
+		}
+	}
+}
+
+// TestAProcessThatPublishesNoBreakdownIsNotDescribedAsEmpty. Zero idle and zero
+// in-use is what a missing gauge looks like and also what an impossible heap
+// looks like; saying nothing beats saying the runtime holds nothing.
+func TestAProcessThatPublishesNoBreakdownIsNotDescribedAsEmpty(t *testing.T) {
+	exposition := `go_goroutines 100
+go_memstats_heap_alloc_bytes 1e+09
+go_memstats_sys_bytes 2e+09
+process_resident_memory_bytes 2e+09
+apiserver_storage_objects{resource="clusters.cluster.x-k8s.io"} 1
+`
+	got, err := ParseAPIServer(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if got.SawHeapBreakdown() {
+		t.Error("a breakdown was claimed for a process that published none")
+	}
+	if strings.Contains(got.Describe(), "not using") {
+		t.Errorf("a decomposition was printed without the gauges to support it: %s", got.Describe())
+	}
+}
+
+// TestTheBreakdownTravelsWithTheHeapItDescribes.
+//
+// LowestHeap keeps the smallest heap of several reads and the freshest
+// everything else. The four runtime gauges are the exception: written at one
+// moment, they describe one heap, and pairing a later read's idle with an
+// earlier read's alloc produces a decomposition of a heap that never existed.
+func TestTheBreakdownTravelsWithTheHeapItDescribes(t *testing.T) {
+	lean := APIServer{
+		Process:        deployedscale.ProcessSample{HeapAllocBytes: 5 << 30},
+		HeapInUseBytes: 6 << 30, HeapIdleBytes: 2 << 30, HeapReleasedBytes: 1 << 30,
+	}
+	fat := APIServer{
+		Process:        deployedscale.ProcessSample{HeapAllocBytes: 20 << 30},
+		HeapInUseBytes: 21 << 30, HeapIdleBytes: 9 << 30, HeapReleasedBytes: 1 << 30,
+		InflightRequests: 42,
+	}
+
+	got := LowestHeap([]APIServer{fat, lean, fat})
+	if got.Process.HeapAllocBytes != 5<<30 {
+		t.Errorf("heap = %s, want the lowest read's", humanBytes(got.Process.HeapAllocBytes))
+	}
+	if got.HeapInUseBytes != 6<<30 || got.HeapIdleBytes != 2<<30 {
+		t.Errorf("the breakdown came from a different read than the heap: in use %s, idle %s",
+			humanBytes(got.HeapInUseBytes), humanBytes(got.HeapIdleBytes))
+	}
+	// Counters still come from the freshest read: they are current, not
+	// sawtoothed.
+	if got.InflightRequests != 42 {
+		t.Errorf("in-flight requests = %d, want the freshest read's", got.InflightRequests)
+	}
+}
