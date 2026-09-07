@@ -921,6 +921,16 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+The managers' own leader-election window is the same one the ClusterClass gives
+`kube-controller-manager` and `kube-scheduler`: `capiscale-prepare` defaults to
+OpenShift's 137 s lease, 107 s renew deadline and 26 s retry period
+(`-leader-elect-lease-duration`, `-leader-elect-renew-deadline`,
+`-leader-elect-retry-period`). It used to give them a minute, 40 s and 5 s, and
+the bootstrap manager lost its lease during a 40 s store stall at 2000 clusters
+while the control plane's own components, on the longer window, did not. Every
+leader-elected process on the cluster now tolerates the same pause, so a failure
+line can be read without first asking which fuse was shortest.
+
 ### A control plane shedding itself is the ceiling, not a caveat
 
 A rung at 1500 clusters ended with `kube-controller-manager` exiting 1, and the
@@ -1154,9 +1164,9 @@ not a runbook entry.
 ### Every rung's etcd line carries what changed, not just what is
 
 A rung reports the store's state — size, keys, mean latencies, leader — and then
-what happened to it since the run's baseline: leader changes, slow applies,
-failed proposals, syncs past 128ms, and the commit and fsync means *over the
-run* rather than over the member's life.
+what happened to it since the defragmentation before that rung: leader changes,
+slow applies, failed proposals, syncs past 128ms, and the commit and fsync means
+*over the interval* rather than over the member's life.
 
 Both halves, because the state half is not enough and a run proved it. A report
 showing `wal fsync 1.7ms, commit 3.5ms` unchanged across 500, 1000, 1500 and
@@ -1173,6 +1183,47 @@ and a half million syncs a stall does not move a lifetime mean, so a line
 carrying only the mean invites exactly that misreading. `EtcdSince` in
 `internal/upstreamscale/etcdstrain.go` computes the differences; the rung line
 appends them whenever there is something to say.
+
+The baseline those differences are taken against is retaken after **every**
+defragmentation, not once at the start. A defragmentation is strain of its own —
+a rewrite of the backend file, during which the member answers nothing — and
+the first version of this line charged it to the rung that followed: the 2500
+rung's failure line carried slow applies and a leader change that the
+2000-to-2500 defragmentation had caused, and read as though the climb had done
+it. The defragmentation line itself now says how long each member took and
+whether it was the raft leader at the time, because those two together are the
+size of the perturbation. On a follower a two-minute rewrite is one member out
+for two minutes; on the leader it is every write in the cluster waiting.
+
+```
+defragmented between rungs: etcd-...-fl8pl reclaimed 850.3 MiB (2.0 GiB to 1.2 GiB) in 4s;
+etcd-...-thnhv reclaimed 850.5 MiB (2.0 GiB to 1.2 GiB) in 1m52s as the leader; ...
+```
+
+### Each rung records where the leader, the leases and the VIP sit
+
+A control plane node died under the 2000-cluster fleet, and establishing what
+had been on it took three commands by hand afterwards: it had held the raft
+leader, `kube-controller-manager`'s lease and kube-vip's VIP at once, so one
+node's loss took the API endpoint, the garbage collector and the store's leader
+in a single event. By then everything had re-elected and the evidence was gone.
+
+Every sample now carries a `placement@` fact:
+
+```
+etcd leader etcd-capi-scale-pddjz-thnhv on capi-scale-pddjz-thnhv;
+kube-controller-manager lease on capi-scale-pddjz-thnhv;
+kube-scheduler lease on capi-scale-pddjz-br7vn;
+kube-vip (plndr-cp-lock) on capi-scale-pddjz-thnhv
+— the raft leader, the controller manager and the VIP share capi-scale-pddjz-thnhv, ...
+```
+
+It is a record, not a verdict. Leader election puts these wherever it puts them
+and a production cluster is no different; the point is that a rung which met a
+node failure can say what that node was holding, rather than the next reader
+having to guess. The etcd leader comes from `etcd_server_is_leader` on each
+member, the rest from the leases in `kube-system`. kube-vip's is `plndr-cp-lock`,
+the default name CAREN's template leaves it at.
 
 ### kcp cannot split its store, so a split stock store is a separate experiment
 
@@ -1307,6 +1358,63 @@ If you see it anyway, the manager is the place to look, not the fleet:
 kubectl -n capi-system get pods
 kubectl -n capi-system logs deploy/capi-controller-manager --previous | tail -40
 ```
+
+### A death is checked before the count is believed
+
+The 2000-cluster rung was declared converged, and the kubeadm bootstrap manager
+had died inside it — at 21:09:10, losing a 40 s lease renewal during a store
+stall, eleven minutes before the count reached its target. The remaining
+managers finished the fleet, the wait returned on the count without looking at
+the pods, and the death surfaced as the **2500** rung's failure thirty-one
+seconds in: a rung that had barely started took the blame, and the rung that
+killed the process stood in the report as a success with a pace figure.
+
+The poll now asks whether anything died *before* it believes a count that says
+done. A fleet that arrived over a dead process did not converge; it was
+finished by whatever was left, and that is the failure, at the rung it happened
+in.
+
+### A control plane counts only when every replica is ready
+
+The 2000-cluster rung's readiness went backwards on most polls, and the first
+explanation written into the harness — Cluster API's per-cluster health probes
+timing out — was wrong. Twelve samples in a row of the control planes going
+backwards showed the same thing:
+
+```
+2/1 Available=NotAvailable,EtcdClusterHealthy=NotHealthy
+  ... Etcd member ... does not have a corresponding Machine
+```
+
+`KubeadmControlPlane` marks a one-member control plane Available the moment its
+first member answers, then withdraws it while the second joins — for the length
+of that join the etcd cluster is two members with one Machine. A count of
+Available control planes therefore rose at 1 of 3, fell at 2 of 3 and rose again
+at 3 of 3 for every cluster in the rung. That is not readiness failing to hold;
+it is control planes that had not finished being built, counted too early.
+
+`Converged` now counts a control plane when it is Available **and**
+`status.controlPlane.readyReplicas` has reached `desiredReplicas`. A control
+plane that reports no replica counts is judged on Available alone, since there
+is nothing for it to be at full strength against. What can still register as a
+fall is a control plane that had every replica and then lost Available — KCP
+withdrawing it because a cluster's etcd or control plane stopped answering, or
+during a remediation — and the `Steadiness` line now says that rather than
+blaming probes.
+
+### The soak holds the fleet it is labelled with
+
+Rungs are cumulative: each keeps the fleet below it and adds to it. So when the
+2500 rung failed, the cluster was holding 2500 clusters, and the soak that
+followed labelled them 2000 — every drift figure and the readiness count at the
+end were about a fleet nobody had measured, partly converged and a quarter
+larger than the report said.
+
+Before the soak begins the run now tears down the tenants the failed rung
+added — the difference between what its `Create` returned and what the last
+converged rung's did — waits for them to go, and records a `soakFleet` fact
+saying so. If that teardown does not finish, the fact says that instead and the
+soak still runs: a soak with a caveat on the line is worth more than none.
 
 ### A container that exited 137 was not necessarily OOM killed
 

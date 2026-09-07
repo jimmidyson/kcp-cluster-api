@@ -31,6 +31,7 @@ etcd_mvcc_db_total_size_in_use_in_bytes 2.147483648e+09
 etcd_debugging_mvcc_keys_total 412000
 etcd_server_quota_backend_bytes 8.589934592e+09
 etcd_server_has_leader 1
+etcd_server_is_leader 1
 etcd_server_leader_changes_seen_total 2
 etcd_server_slow_apply_total 1841
 etcd_server_slow_read_indexes_total 7
@@ -57,6 +58,12 @@ func TestEtcdIsMeasuredAgainstItsCeiling(t *testing.T) {
 	}
 	if got.Keys != 412000 {
 		t.Errorf("keys = %d", got.Keys)
+	}
+	// Which member this is matters as much as whether it has a leader: a
+	// defragmentation or a slow disk on the leader stalls the whole cluster,
+	// and on a follower stalls one member.
+	if !got.IsLeader {
+		t.Error("the member that reports etcd_server_is_leader 1 is not read as the leader")
 	}
 
 	// The two latencies that say the disk is the limit rather than the fleet.

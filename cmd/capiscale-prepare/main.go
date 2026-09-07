@@ -82,14 +82,21 @@ func main() {
 				"absorb it — etcd timed out lease renewals, managers exited, and no rung finished. "+
 				"Raise it once a run reaches a ceiling with the managers visibly throttling and "+
 				"nothing else giving way, and record that the run was taken with it raised.")
-		clientBurst   = fs.Int("kube-api-burst", 200, "Client-side burst for each manager.")
-		leaseDuration = fs.Duration("leader-elect-lease-duration", time.Minute,
-			"How long a manager's leadership lease is held.")
-		renewDeadline = fs.Duration("leader-elect-renew-deadline", 40*time.Second,
+		clientBurst = fs.Int("kube-api-burst", 200, "Client-side burst for each manager.")
+		// OpenShift's values, which are built for a 78-second API server
+		// outage — a control plane node rebooting under the VIP — and which
+		// the ClusterClass already gives kube-controller-manager and
+		// kube-scheduler. The same numbers on the managers, so that every
+		// leader-elected process on the cluster tolerates the same pause and
+		// a failure line can be read without asking which fuse was shortest.
+		leaseDuration = fs.Duration("leader-elect-lease-duration", 137*time.Second,
+			"How long a manager's leadership lease is held. OpenShift's value, matching what the "+
+				"ClusterClass gives the Kubernetes control plane's own components.")
+		renewDeadline = fs.Duration("leader-elect-renew-deadline", 107*time.Second,
 			"How long a manager has to renew that lease before it stops leading and exits. The default "+
 				"10s is shorter than the pauses a loaded API server takes, and a lost lease is an "+
 				"orderly exit that says nothing about running out of anything.")
-		retryPeriod = fs.Duration("leader-elect-retry-period", 5*time.Second,
+		retryPeriod = fs.Duration("leader-elect-retry-period", 26*time.Second,
 			"How often it retries the renewal.")
 
 		probeTimeout = fs.Int("probe-timeout-seconds", 5,

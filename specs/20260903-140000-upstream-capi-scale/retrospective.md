@@ -191,12 +191,20 @@ did not keep up". The kcp runs measured forced collections as CPU precisely
 because it was not negligible. `died` needs only pod status, which
 `PodFactsFrom` already provides without touching pprof.
 
-**2. The soak still holds the failed rung's fleet.** Rungs are cumulative and
-nothing removes the rung that failed before the soak begins, so a climb that
-fails at 3200 soaks 3200 partially converged clusters under a label of 1600.
-The drift figures and the readiness count are then about the wrong fleet.
-Delete the failed rung's tenants and wait for them to go, or soak before each
-climb.
+**2. ~~The soak still holds the failed rung's fleet.~~ Fixed.** Rungs are
+cumulative and nothing removed the rung that failed before the soak began, so a
+climb that failed at 2500 soaked 2500 partially converged clusters under a
+label of 2000. The run now tears down the failed rung's own tenants before the
+soak and records a `soakFleet` fact. Three more harness faults the 2000-cluster
+runs exposed were fixed at the same time: the wait believed a converged count
+before checking whether a process had died inside the rung (the bootstrap
+manager's death at 21:09 was charged to the next rung); the etcd strain baseline
+was taken once rather than after every defragmentation, so a rung's line
+carried the defragmentation before it; and a control plane was counted ready on
+`Available` alone, which KubeadmControlPlane grants at one member and withdraws
+while the second joins, so every rung's readiness appeared to flap. A control
+plane now counts only at full replicas, and each sample records where the etcd
+leader, the controller manager's lease and kube-vip's VIP sit.
 
 **3. The poll lists every Machine, unpaginated, as full objects.** At 16,000
 Machines that is tens of megabytes decoded into typed structs every fifteen
@@ -362,11 +370,12 @@ the fix.
   server. Audit lease and probe timeouts on everything that tolerates the
   control-plane taint, and lengthen the ones that would take a management
   cluster down for being busy.
-- **Leader election for a busy API server.** A minute's lease and a
-  proportionally longer renew deadline, as the prepare tool now sets, and the
-  lease FlowSchema. A manager that has already tolerated half a minute of an
-  unavailable store and still lost is not short of patience; past that, the
-  store is the fix.
+- **Leader election for a busy API server.** OpenShift's 137 s lease, 107 s
+  renew deadline and 26 s retry, which the ClusterClass gives the control
+  plane's own components and the prepare tool now gives the four managers too,
+  and the lease FlowSchema. A manager that has already tolerated well over a
+  minute of an unavailable store and still lost is not short of patience; past
+  that, the store is the fix.
 - **Restart cost as a measured number.** The most dangerous event on a
   management cluster at scale is a controller or API server restart and the
   re-list that follows. Restart the core manager during the soak and time the

@@ -46,10 +46,26 @@ type Convergence struct {
 // Machines still coming up. Counting only Machines would call it converged
 // before a control plane had a chance to fail. Both, or the number means less
 // than it appears to.
+//
+// # Why a control plane is ready only at full strength
+//
+// Available is not enough on its own. KubeadmControlPlane marks a control
+// plane Available the moment one member answers, and takes it back while the
+// second joins: for the length of that join the etcd cluster is two members
+// with one Machine, and KCP says so —
+//
+//	2/1 Available=NotAvailable,EtcdClusterHealthy=NotHealthy ... Etcd member
+//	does not have a corresponding Machine
+//
+// So a count of Available control planes rose at 1 of 3, fell at 2 of 3 and
+// rose again at 3 of 3 for every cluster in a rung, and the rung read as
+// readiness that would not hold when it was control planes that had not
+// finished being built. A control plane counts when it is Available and every
+// replica it was asked for is ready. See controlPlaneReady.
 func Converged(clusters []clusterv1.Cluster, machines []clusterv1.Machine, wantClusters, wantMachines int) Convergence {
 	out := Convergence{ControlPlanesWant: wantClusters, MachinesWant: wantMachines}
 	for i := range clusters {
-		if conditionTrue(clusters[i].Status.Conditions, clusterv1.ClusterControlPlaneAvailableCondition) {
+		if controlPlaneReady(&clusters[i]) {
 			out.ControlPlanesReady++
 		}
 	}
@@ -71,6 +87,27 @@ func Converged(clusters []clusterv1.Cluster, machines []clusterv1.Machine, wantC
 func (c Convergence) Describe() string {
 	return fmt.Sprintf("%d of %d control planes ready, %d of %d Machines ready",
 		c.ControlPlanesReady, c.ControlPlanesWant, c.MachinesReady, c.MachinesWant)
+}
+
+// controlPlaneReady is Available with every desired replica ready.
+//
+// A control plane that reports no replica counts — a provider without the
+// notion — is judged on Available alone, because there is nothing for it to be
+// at full strength against and waiting for a number it will never publish
+// would wait for ever.
+func controlPlaneReady(c *clusterv1.Cluster) bool {
+	if !conditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneAvailableCondition) {
+		return false
+	}
+	cp := c.Status.ControlPlane
+	if cp == nil || cp.DesiredReplicas == nil {
+		return true
+	}
+	ready := int32(0)
+	if cp.ReadyReplicas != nil {
+		ready = *cp.ReadyReplicas
+	}
+	return ready >= *cp.DesiredReplicas
 }
 
 func conditionTrue(conditions []metav1.Condition, name string) bool {
@@ -99,11 +136,21 @@ func conditionTrue(conditions []metav1.Condition, name string) bool {
 // so a rung that ran out of time reported the final count as though the fleet
 // had been stuck there.
 //
-// A control plane's availability is not derived from objects the way a
-// Machine's readiness is: Cluster API probes each workload cluster through its
-// ClusterCache and marks the control plane unavailable when the probe fails.
-// So a count that oscillates says the probes are failing intermittently, not
-// that the fleet is failing to arrive.
+// # What a fall means, and what it turned out to mean
+//
+// The first reading of that sequence was that Cluster API's per-cluster health
+// probes were timing out, and it was wrong. Sampled twelve times in a row, the
+// control planes going backwards were ones KubeadmControlPlane had marked
+// Available at one member and unavailable again while the second joined —
+// control planes still being built, counted too early. Converged now counts a
+// control plane only once every replica it asked for is ready, so that fall no
+// longer registers here at all.
+//
+// What can still register is a control plane that had every replica ready and
+// then lost Available: KubeadmControlPlane withdraws it when a cluster's etcd
+// or a control plane component stops answering it, or while a machine is
+// remediated. That is Cluster API's judgement of the workload cluster rather
+// than a fleet still arriving, and the two are still different findings.
 //
 // # Why the difference decides what the rung means
 //
@@ -179,7 +226,9 @@ func (s Steadiness) Describe() string {
 	}
 	return fmt.Sprintf("readiness did not hold: ready control planes fell from %d to %d at worst "+
 		"and peaked at %d, going backwards on %d of %d polls — the fleet is not failing to arrive, "+
-		"it is failing to be ready all at once, which is what Cluster API's per-cluster health "+
-		"probes report when they start timing out",
+		"it is failing to stay ready: a control plane is counted only once every replica is "+
+		"ready and Available, so each fall is one that had arrived and then lost Available, "+
+		"which KubeadmControlPlane withdraws when a cluster's etcd or control plane stops "+
+		"answering it or while it remediates a machine",
 		s.DropFrom, s.DropTo, s.Peak, s.Regressions, s.Polls)
 }

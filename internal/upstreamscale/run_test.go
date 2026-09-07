@@ -20,10 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -41,6 +44,10 @@ type fakeTarget struct {
 	failAt int
 	// createErrAt is the cluster count whose creation half-fails.
 	createErrAt int
+	// dieAt is the cluster count at which a control plane pod on host is
+	// found restarted at the same moment the fleet arrives, zero for never.
+	dieAt int
+	host  client.Client
 
 	created  []string
 	planned  []int
@@ -87,7 +94,22 @@ func (f *fakeTarget) Create(_ context.Context, fleet Fleet, _ int) ([]string, er
 	return made, nil
 }
 
-func (f *fakeTarget) Converged(_ context.Context, wantClusters, wantMachines int) (Convergence, error) {
+func (f *fakeTarget) Converged(ctx context.Context, wantClusters, wantMachines int) (Convergence, error) {
+	if f.dieAt != 0 && wantClusters == f.dieAt {
+		// The fleet arrives and the API server has already died: the count
+		// says Done and the pod says restarted, in the same poll.
+		var pod corev1.Pod
+		if err := f.host.Get(ctx, client.ObjectKey{Namespace: "kube-system", Name: "kube-apiserver-cp-0"}, &pod); err != nil {
+			return Convergence{}, err
+		}
+		pod.Status.ContainerStatuses[0].RestartCount = 1
+		pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"},
+		}
+		if err := f.host.Status().Update(ctx, &pod); err != nil {
+			return Convergence{}, err
+		}
+	}
 	if f.failAt != 0 && wantClusters == f.failAt {
 		return Convergence{ControlPlanesWant: wantClusters, MachinesWant: wantMachines}, nil
 	}
@@ -105,7 +127,7 @@ func (f *fakeTarget) Teardown(_ context.Context, created []string, _, _ time.Dur
 	return nil
 }
 
-func testRunner(t *testing.T, target Target, start, max int) *Runner {
+func testRunner(t *testing.T, target Target, start, max int, host ...client.Object) *Runner {
 	t.Helper()
 	s, err := Scheme()
 	if err != nil {
@@ -113,7 +135,7 @@ func testRunner(t *testing.T, target Target, start, max int) *Runner {
 	}
 	return &Runner{
 		Target:       target,
-		Host:         fake.NewClientBuilder().WithScheme(s).Build(),
+		Host:         fake.NewClientBuilder().WithScheme(s).WithObjects(host...).Build(),
 		Sampler:      &Sampler{},
 		Defragmenter: NewDefragmenter(nil, nil),
 		Options: RunOptions{
@@ -283,13 +305,133 @@ func TestTheBaselineIsSampledBeforeAnythingIsCreated(t *testing.T) {
 // failure they were not on it.
 func TestAFailureLineCarriesEveryNoteThatHasSomethingToSay(t *testing.T) {
 	got := annotate("kube-vip restarted 1 time(s)", "", "beside the control plane, nothing",
-		"", "etcd, since the run began — etcd-2: 1 failed raft proposal(s)")
+		"", "etcd, since its last defragmentation — etcd-2: 1 failed raft proposal(s)")
 	want := "kube-vip restarted 1 time(s) — beside the control plane, nothing — " +
-		"etcd, since the run began — etcd-2: 1 failed raft proposal(s)"
+		"etcd, since its last defragmentation — etcd-2: 1 failed raft proposal(s)"
 	if got != want {
 		t.Errorf("annotate() = %q, want %q", got, want)
 	}
 	if got := annotate("the fleet did not arrive"); got != "the fleet did not arrive" {
 		t.Errorf("a line with nothing to add was changed: %q", got)
+	}
+}
+
+// controlPlaneOnHost is a one-node kubeadm control plane as the host cluster
+// sees it: a labelled node and a static API server pod that has never
+// restarted.
+func controlPlaneOnHost() []client.Object {
+	return []client.Object{
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{
+			Name: "cp-0", Labels: map[string]string{ControlPlaneNodeLabel: ""},
+		}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "kube-apiserver-cp-0", Namespace: "kube-system",
+				Annotations: map[string]string{deployedscale.MirrorPodAnnotation: "x"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName:   "cp-0",
+				Containers: []corev1.Container{{Name: "kube-apiserver"}},
+			},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "kube-apiserver", Ready: true}},
+			},
+		},
+	}
+}
+
+// TestAFleetThatArrivedOverADeadProcessDidNotConverge.
+//
+// The run this is from: the 2000-cluster rung was declared converged, and the
+// kubeadm bootstrap manager had died inside it, eleven minutes before the
+// count reached its target. The wait returned on the count before it looked
+// at the pods, so the death surfaced as the next rung's failure after
+// thirty-one seconds — charged to a rung that had barely started, with the
+// rung that actually killed it recorded as a success.
+func TestAFleetThatArrivedOverADeadProcessDidNotConverge(t *testing.T) {
+	target := &fakeTarget{name: "stock", tenant: "Namespace", dieAt: 4}
+	runner := testRunner(t, target, 2, 8, controlPlaneOnHost()...)
+	target.host = runner.Host
+
+	_, ceiling, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("a climb that reached a rung is not an error: %v", err)
+	}
+	if ceiling.LastGood == nil || ceiling.LastGood.Clusters != 2 {
+		t.Fatalf("last good rung = %+v, want 2 clusters", ceiling.LastGood)
+	}
+	if ceiling.Failed == nil || ceiling.Failed.Clusters != 4 {
+		t.Fatalf("failed rung = %+v, want the rung the process died in", ceiling.Failed)
+	}
+	if !strings.Contains(ceiling.Failed.Failure, "kube-apiserver-cp-0 restarted") {
+		t.Errorf("the failure does not name the process that died: %q", ceiling.Failed.Failure)
+	}
+	for _, planned := range target.planned {
+		if planned == 8 {
+			t.Error("the climb went on past the rung whose process died")
+		}
+	}
+}
+
+// TestTheFailedRungIsRemovedBeforeTheSoak.
+//
+// Rungs are cumulative, so when the 2500 rung fails the cluster is holding
+// 2500 clusters, and the soak that follows labels them 2000. Every drift
+// figure and the readiness count at the end are then about the wrong fleet.
+// The tenants the failed rung added — and only those — are torn down first.
+func TestTheFailedRungIsRemovedBeforeTheSoak(t *testing.T) {
+	target := &fakeTarget{name: "stock", tenant: "Namespace", failAt: 40}
+	runner := testRunner(t, target, 10, 40)
+	runner.Options.Soak = 3 * time.Millisecond
+	runner.Options.SoakInterval = time.Millisecond
+
+	report, ceiling, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if ceiling.LastGood == nil || ceiling.LastGood.Clusters != 20 {
+		t.Fatalf("last good rung = %+v, want 20 clusters", ceiling.LastGood)
+	}
+
+	// Ten clusters to a namespace: rung 20 is 0000 and 0001, rung 40 added
+	// 0002 and 0003, and those two are what went before the soak.
+	want := []string{NamespaceName(2), NamespaceName(3)}
+	if strings.Join(target.tornDown, ",") != strings.Join(want, ",") {
+		t.Errorf("torn down before the soak: %v, want %v", target.tornDown, want)
+	}
+	for _, name := range runner.Created {
+		if name == NamespaceName(2) || name == NamespaceName(3) {
+			t.Errorf("%s was torn down and is still recorded as created", name)
+		}
+	}
+	for _, name := range []string{NamespaceName(0), NamespaceName(1)} {
+		if !slices.Contains(runner.Created, name) {
+			t.Errorf("%s is part of the held fleet and was forgotten", name)
+		}
+	}
+	fact, ok := report.Facts["soakFleet"]
+	if !ok || !strings.Contains(fact, "2 tenants") {
+		t.Errorf("the report does not say the soak's fleet was trimmed: %q", fact)
+	}
+}
+
+// TestASoakAfterACleanClimbRemovesNothing: a climb that never failed has
+// nothing above its last good rung to remove.
+func TestASoakAfterACleanClimbRemovesNothing(t *testing.T) {
+	target := &fakeTarget{name: "stock", tenant: "Namespace"}
+	runner := testRunner(t, target, 10, 20)
+	runner.Options.Soak = 3 * time.Millisecond
+	runner.Options.SoakInterval = time.Millisecond
+
+	report, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(target.tornDown) != 0 {
+		t.Errorf("a clean climb tore down %v before its soak", target.tornDown)
+	}
+	if _, ok := report.Facts["soakFleet"]; ok {
+		t.Error("a soak of the whole fleet claims to have trimmed it")
 	}
 }

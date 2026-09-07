@@ -198,6 +198,15 @@ type DefragResult struct {
 	AfterFreeBytes uint64 `json:"afterFreeBytes"`
 	Settled        bool   `json:"settled"`
 
+	// Took is how long the member spent rewriting its file, and Leader says
+	// whether it was the raft leader while it did. Together they are the
+	// perturbation: a follower that took four seconds cost one member four
+	// seconds, and a leader that took two minutes cost every write in the
+	// cluster two minutes. A run whose next rung failed on lease renewals
+	// needs to see that on the line before it. Zero when it was not timed.
+	Took   time.Duration `json:"took,omitempty"`
+	Leader bool          `json:"leader,omitempty"`
+
 	Err string `json:"error,omitempty"`
 }
 
@@ -249,8 +258,12 @@ func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sam
 		result := DefragResult{Pod: pod.Name}
 		if before, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
 			result.BeforeBytes = before.DBTotalBytes
+			result.Leader = before.IsLeader
 		}
-		if err := d.exec(ctx, store, pod.Name); err != nil {
+		started := time.Now()
+		err := d.exec(ctx, store, pod.Name)
+		result.Took = time.Since(started)
+		if err != nil {
 			result.Err = err.Error()
 			out = append(out, result)
 			continue
@@ -298,7 +311,11 @@ func DescribeDefrag(results []DefragResult) string {
 	var parts []string
 	for _, r := range results {
 		if r.Err != "" {
-			parts = append(parts, fmt.Sprintf("%s failed (%s)", r.Pod, r.Err))
+			part := r.Pod + " failed"
+			if r.Took > 0 {
+				part += " after " + r.Took.Round(time.Second).String()
+			}
+			parts = append(parts, fmt.Sprintf("%s (%s)%s", part, r.Err, asLeader(r)))
 			continue
 		}
 		if !r.Measured() {
@@ -311,6 +328,10 @@ func DescribeDefrag(results []DefragResult) string {
 		}
 		part := fmt.Sprintf("%s reclaimed %s (%s to %s)",
 			r.Pod, humanBytes(r.Reclaimed()), humanBytes(r.BeforeBytes), humanBytes(r.AfterBytes))
+		if r.Took > 0 {
+			part += " in " + r.Took.Round(time.Second).String()
+		}
+		part += asLeader(r)
 		if !r.Settled {
 			part += fmt.Sprintf(" — **the size did not settle**: %s of the file is still free "+
 				"after defragmenting, so this reading is the gauge lagging rather than the store "+
@@ -319,6 +340,14 @@ func DescribeDefrag(results []DefragResult) string {
 		parts = append(parts, part)
 	}
 	return "defragmented between rungs: " + strings.Join(parts, "; ")
+}
+
+// asLeader is the clause that turns a member's pause into the cluster's.
+func asLeader(r DefragResult) string {
+	if !r.Leader {
+		return ""
+	}
+	return " as the leader"
 }
 
 // settleTimeout and settlePoll bound how long a member is given to publish the

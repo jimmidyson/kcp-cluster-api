@@ -260,8 +260,8 @@ func (c Ceiling) Describe() string {
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane ready and every Machine "+
-		"Ready, %s.", c.LastGood.Clusters, c.LastGood.Machines, c.LastGood.Timing())
+	fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane at full strength and every "+
+		"Machine Ready, %s.", c.LastGood.Clusters, c.LastGood.Machines, c.LastGood.Timing())
 	if c.Failed == nil {
 		b.WriteString(" **That is a floor, not a ceiling**: no rung failed, so the largest fleet " +
 			"tried is the largest measured and not the largest possible.")

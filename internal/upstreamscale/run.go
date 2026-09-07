@@ -73,10 +73,13 @@ type Runner struct {
 	// readout is a scrape of three nodes and one is enough. See Restarted.
 	cpRestartsAtStart map[string]int32
 
-	// etcdAtStart is the same for the store, and for the same reason: every
+	// etcdBaseline is the same for the store, and for the same reason: every
 	// counter here is cumulative over a member's process life, so on a
-	// long-lived cluster the raw numbers are mostly other runs.
-	etcdAtStart map[string]Etcd
+	// long-lived cluster the raw numbers are mostly other runs. Retaken after
+	// every defragmentation rather than once, because a defragmentation is
+	// strain of its own and a rung should not carry the one before it. See
+	// EtcdSince.
+	etcdBaseline map[string]Etcd
 	// store is where that etcd is, kept so a failure can be diagnosed from
 	// wherever it is noticed rather than only where the ladder can see it.
 	store StoreLocation
@@ -107,7 +110,8 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	for k, v := range r.Target.Facts() {
 		report.AddFact(k, v)
 	}
-	report.AddFact("endState", "every control plane ready and every Machine Ready")
+	report.AddFact("endState", "every control plane Available with every replica ready, and every "+
+		"Machine Ready")
 	report.AddFact("nodesPerCluster", fmt.Sprint(opts.NodesPerCluster))
 	report.AddFact("heapSample", "every controller's is read through pprof with gc=1, so live heap is "+
 		"the retained set; the control plane's line says for itself, since the collection it needs is a "+
@@ -157,7 +161,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			// read as "etcd was never the problem" on a run whose managers
 			// were dying to "etcdserver: request timed out". See EtcdSince.
 			described := DescribeEtcdMembers(members)
-			if since := EtcdSince(r.etcdAtStart, members); since != "" {
+			if since := EtcdSince(r.etcdBaseline, members); since != "" {
 				described += " — " + since
 			}
 			report.AddFact("etcd@"+label, described)
@@ -165,6 +169,11 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 				if member.NearQuota() {
 					r.logf("WARNING at %s: %s %s", label, name, member.Describe())
 				}
+			}
+			// Where the single points of failure sit, which decides what one
+			// node's loss costs and which nothing else in the sample says.
+			if placed := ReadPlacement(ctx, r.Host, store, members).Describe(); placed != "" {
+				report.AddFact("placement@"+label, placed)
 			}
 		}
 		if err != nil {
@@ -222,17 +231,8 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			"run will not be noticed as one", err)
 	}
 
-	r.defragment(ctx, report, store, "baseline")
-
-	// After the defragmentation, so that the rewrite it just did is not
-	// counted as strain the climb caused.
 	r.store = store
-	if members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, store); err == nil {
-		r.etcdAtStart = members
-	} else {
-		r.logf("NOTE: could not read etcd's counters (%v), so a store that stalls under the "+
-			"fleet will not be reported as the reason", err)
-	}
+	r.defragment(ctx, report, store, "baseline")
 
 	// The baseline, before any fleet exists. Every slope this run reports is a
 	// difference between two large numbers, and without this the smaller of
@@ -252,6 +252,11 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	var rungs []RungResult
 	held := 0
+	// The tenants of the fleet that converged, and of the rung that did not.
+	// Create returns every tenant a rung's fleet has, the ones already there
+	// included, so the difference between the two is exactly what the failed
+	// rung added. See soak.
+	var heldTenants, failedTenants []string
 	for i, clusters := range Ladder(opts.StartClusters, opts.MaxClusters, opts.RungStep) {
 		fleet, err := r.Target.Plan(clusters)
 		if err != nil {
@@ -295,6 +300,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 				CreatedIn: time.Since(startedCreate),
 				Failure:   failure,
 			})
+			failedTenants = madeTenants
 			break
 		}
 		createdIn := time.Since(startedCreate)
@@ -313,6 +319,9 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		if !converged {
 			rung.Failure = why
 			label += " (did not converge)"
+			failedTenants = madeTenants
+		} else {
+			heldTenants = madeTenants
 		}
 		sample(label, clusters, machines)
 		report.AddFact(fmt.Sprintf("rung@%d", clusters), rung.Timing())
@@ -329,6 +338,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	// Reaching a fleet and holding it are different questions.
 	if ceiling.LastGood != nil && opts.Soak > 0 {
+		r.trimToHeld(ctx, report, heldTenants, failedTenants)
 		r.soak(ctx, report, sample, ceiling)
 	}
 
@@ -342,14 +352,75 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 // reclaimed, either way: a store that would not defragment is the one whose
 // file reaches the quota first, which is worth knowing and is not a reason to
 // abandon a climb.
+//
+// Then it retakes the store's baseline, whether or not the defragmentation
+// ran, so that the rewrite it just did is not counted as strain the next rung
+// caused. Every rung's strain line is therefore measured from the
+// defragmentation before it — see EtcdSince.
 func (r *Runner) defragment(ctx context.Context, report *deployedscale.Report, store StoreLocation, at string) {
 	results, err := r.Defragmenter.AllAt(ctx, r.Host, r.Sampler, store)
 	if err != nil {
 		r.logf("NOTE: could not defragment before %s: %v", at, err)
+	} else {
+		report.AddFact("defrag@"+at, DescribeDefrag(results))
+		r.logf("%s", DescribeDefrag(results))
+	}
+
+	if members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, store); err == nil {
+		r.etcdBaseline = members
+	} else if r.etcdBaseline == nil {
+		r.logf("NOTE: could not read etcd's counters (%v), so a store that stalls under the "+
+			"fleet will not be reported as the reason", err)
+	} else {
+		r.logf("NOTE: could not retake etcd's baseline before %s (%v), so the next strain line "+
+			"is measured from the defragmentation before this one", at, err)
+	}
+}
+
+// trimToHeld removes what the failed rung added, so that the soak holds the
+// fleet it is labelled with.
+//
+// Rungs are cumulative: a rung keeps the fleet below it and adds to it, so when
+// the 2500 rung fails the cluster is holding 2500 clusters, and a soak that
+// followed labelled them 2000. Every drift figure and the readiness count at
+// the end were then about a fleet nobody had measured — partly converged, and
+// larger than the one the report said it held.
+//
+// Only the failed rung's own tenants go: the difference between what its
+// Create returned and what the last converged rung's did. A teardown that does
+// not finish is recorded and the soak still runs, because a soak with a caveat
+// is worth more than none and the caveat is on the line.
+func (r *Runner) trimToHeld(ctx context.Context, report *deployedscale.Report, held, failed []string) {
+	extra := notIn(failed, held)
+	if len(extra) == 0 {
 		return
 	}
-	report.AddFact("defrag@"+at, DescribeDefrag(results))
-	r.logf("%s", DescribeDefrag(results))
+	r.logf("=== removing the %d tenants the failed rung added before the soak", len(extra))
+	if err := r.Target.Teardown(ctx, extra, r.Options.TeardownTimeout, r.Options.PollInterval, r.Logf); err != nil {
+		report.AddFact("soakFleet", fmt.Sprintf("the failed rung's %d tenants could not all be removed "+
+			"before the soak (%v), so the soak holds more than the fleet it is labelled with",
+			len(extra), err))
+		r.logf("NOTE: %s", report.Facts["soakFleet"])
+		return
+	}
+	r.Created = notIn(r.Created, extra)
+	report.AddFact("soakFleet", fmt.Sprintf("the failed rung's %d tenants were removed before the "+
+		"soak, so the soak holds the last fleet that converged and nothing above it", len(extra)))
+}
+
+// notIn is the names in all that are not in some, in the order all has them.
+func notIn(all, some []string) []string {
+	skip := make(map[string]bool, len(some))
+	for _, name := range some {
+		skip[name] = true
+	}
+	var out []string
+	for _, name := range all {
+		if !skip[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // died reports the first component that has stopped since this run began, or
@@ -432,14 +503,14 @@ func (r *Runner) beside(ctx context.Context) string {
 }
 
 func (r *Runner) strain(ctx context.Context) string {
-	if r.etcdAtStart == nil {
+	if r.etcdBaseline == nil {
 		return ""
 	}
 	members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, r.store)
 	if err != nil {
 		return ""
 	}
-	return EtcdSince(r.etcdAtStart, members)
+	return EtcdSince(r.etcdBaseline, members)
 }
 
 // annotate appends every note that has something to say to a failure line,
@@ -471,14 +542,20 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		if err != nil {
 			return false, "counting the fleet: " + err.Error()
 		}
-		if last.Done {
-			return true, ""
-		}
 		steady.Observe(last)
 
 		// A component that died is why the fleet has not arrived, rather than
 		// a second thing that went wrong. Checked every poll so that a kill is
 		// reported when it happens rather than after the step timeout.
+		//
+		// Before the count is believed, not after. A fleet can arrive over a
+		// dead process — the managers that are left finish the work — and the
+		// 2000-cluster rung did exactly that: the bootstrap manager died
+		// eleven minutes before the count reached its target, the wait
+		// returned on the count without looking, and the death surfaced as
+		// the next rung's failure thirty-one seconds in, charged to a rung
+		// that had barely started while the one that killed it stood as a
+		// success.
 		//
 		// With what the store was doing, the same as a timeout carries. A
 		// process that dies under load usually died of the store — a lease it
@@ -487,6 +564,9 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		// off the line.
 		if why := r.died(ctx, controllers); why != "" {
 			return false, annotate(why, r.beside(ctx), r.strain(ctx))
+		}
+		if last.Done {
+			return true, ""
 		}
 
 		if time.Now().After(deadline) {

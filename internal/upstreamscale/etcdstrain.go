@@ -23,7 +23,15 @@ import (
 )
 
 // EtcdSince says what the store did while the run was climbing, against the
-// baseline taken before any fleet existed.
+// baseline taken after its last defragmentation — before the first rung, and
+// again before every rung after it.
+//
+// After the defragmentation rather than after the run began, because a
+// defragmentation is itself strain: a two-minute rewrite on the leader is two
+// minutes of slow applies and a leader change or two, and a baseline taken
+// before it charges all of that to the rung that follows. The rung that failed
+// at 2500 clusters carried the 2000-to-2500 defragmentation's counters on its
+// line, and the line read as though the climb had done it.
 //
 // # The failure this is the answer to
 //
@@ -140,7 +148,7 @@ func EtcdSince(before, now map[string]Etcd) string {
 	if len(strained) == 0 {
 		return ""
 	}
-	return "etcd, since the run began — " + strings.Join(strained, "; ")
+	return "etcd, since its last defragmentation — " + strings.Join(strained, "; ")
 }
 
 // sinceMeanMillis is the mean over the run rather than over the member's life.

@@ -102,7 +102,11 @@ type Etcd struct {
 
 	// Health. A leader change under load is etcd struggling, not a topology
 	// event.
-	HasLeader     bool   `json:"hasLeader"`
+	HasLeader bool `json:"hasLeader"`
+	// IsLeader says whether this member is the one every write goes through.
+	// A defragmentation or a slow disk here stalls the cluster; on a follower
+	// it stalls one member. The report needs to know which it was looking at.
+	IsLeader      bool   `json:"isLeader"`
 	LeaderChanges uint64 `json:"leaderChanges"`
 	SlowApplies   uint64 `json:"slowApplies"`
 	SlowReads     uint64 `json:"slowReadIndexes"`
@@ -504,6 +508,8 @@ func ParseEtcd(r io.Reader) (Etcd, error) {
 			out.BackendCommitCount = uint64(value)
 		case "etcd_server_has_leader":
 			out.HasLeader = value > 0
+		case "etcd_server_is_leader":
+			out.IsLeader = value > 0
 		case "etcd_server_leader_changes_seen_total":
 			out.LeaderChanges = uint64(value)
 		case "etcd_server_slow_apply_total":

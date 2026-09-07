@@ -27,12 +27,26 @@ import (
 func cluster(name string, controlPlaneReady bool) clusterv1.Cluster {
 	c := clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "capi-scale-0000"}}
 	status := metav1.ConditionFalse
+	ready := int32(0)
 	if controlPlaneReady {
 		status = metav1.ConditionTrue
+		ready = 1
 	}
 	c.Status.Conditions = []metav1.Condition{
 		{Type: clusterv1.ClusterControlPlaneAvailableCondition, Status: status},
 	}
+	c.Status.ControlPlane = &clusterv1.ClusterControlPlaneStatus{
+		DesiredReplicas: ptr[int32](1), ReadyReplicas: ptr(ready),
+	}
+	return c
+}
+
+// scalingUp is a Cluster whose control plane is Available on the replicas it
+// has and is still short of the replicas it was asked for.
+func scalingUp(name string, ready, desired int32) clusterv1.Cluster {
+	c := cluster(name, true)
+	c.Status.ControlPlane.DesiredReplicas = ptr(desired)
+	c.Status.ControlPlane.ReadyReplicas = ptr(ready)
 	return c
 }
 
@@ -83,6 +97,54 @@ func TestConvergenceIsBothHalves(t *testing.T) {
 	}
 }
 
+// TestAControlPlaneStillScalingUpIsNotReady.
+//
+// The flapping this is from, at a rung of 2000, twelve samples of a Cluster's
+// control plane in a row:
+//
+//	2/1 Available=NotAvailable,EtcdClusterHealthy=NotHealthy ... Etcd member
+//	does not have a corresponding Machine
+//
+// KubeadmControlPlane marks a one-member control plane Available the moment
+// its first member answers, then takes it back while the second member joins
+// and the etcd cluster is two members with one Machine. Counting Available
+// alone counted every cluster at 1 of 3, lost it at 2 of 3 and counted it
+// again at 3 of 3 — which is not readiness that would not hold, it is a
+// control plane that had not finished being built. Full replicas, or it is
+// still arriving.
+func TestAControlPlaneStillScalingUpIsNotReady(t *testing.T) {
+	clusters := []clusterv1.Cluster{scalingUp("c0000", 1, 3), scalingUp("c0001", 3, 3)}
+	got := Converged(clusters, nil, 2, 0)
+	if got.ControlPlanesReady != 1 {
+		t.Errorf("%d control planes ready, want only the one at full strength", got.ControlPlanesReady)
+	}
+	if got.Done {
+		t.Error("a fleet with a control plane still scaling up was called converged")
+	}
+	// A control plane that has every replica and has lost Available is not
+	// ready either: the count needs both.
+	lost := scalingUp("c0002", 3, 3)
+	lost.Status.Conditions[0].Status = metav1.ConditionFalse
+	if Converged([]clusterv1.Cluster{lost}, nil, 1, 0).ControlPlanesReady != 0 {
+		t.Error("a full control plane that is not Available was counted ready")
+	}
+}
+
+// TestAControlPlaneThatReportsNoReplicasIsJudgedOnAvailabilityAlone. A
+// control plane provider without a replica count has nothing to be at full
+// strength against, and refusing to count it would wait for ever.
+func TestAControlPlaneThatReportsNoReplicasIsJudgedOnAvailabilityAlone(t *testing.T) {
+	c := cluster("c0000", true)
+	c.Status.ControlPlane = nil
+	if Converged([]clusterv1.Cluster{c}, nil, 1, 0).ControlPlanesReady != 1 {
+		t.Error("an Available control plane with no replica counts was not counted")
+	}
+	c.Status.ControlPlane = &clusterv1.ClusterControlPlaneStatus{}
+	if Converged([]clusterv1.Cluster{c}, nil, 1, 0).ControlPlanesReady != 1 {
+		t.Error("an Available control plane with empty replica counts was not counted")
+	}
+}
+
 // TestReadinessThatGoesBackwardsIsNotAFleetStillArriving.
 //
 // The polls this is from, at a rung of 500:
@@ -108,6 +170,12 @@ func TestReadinessThatGoesBackwardsIsNotAFleetStillArriving(t *testing.T) {
 	}
 	if !strings.Contains(got, "failing to arrive") {
 		t.Errorf("the line does not separate the two findings: %q", got)
+	}
+	// A control plane is counted only at full strength, so a count that
+	// falls is one that had arrived and lost Available afterwards — which is
+	// KubeadmControlPlane's judgement of the cluster, not a probe timing out.
+	if strings.Contains(got, "timing out") || !strings.Contains(got, "Available") {
+		t.Errorf("the line still explains a fall as probes timing out: %q", got)
 	}
 	if !strings.Contains(timedOutBecause(s), "did not fail to arrive") {
 		t.Errorf("a timeout on a flapping fleet still blames reconciliation: %q", timedOutBecause(s))

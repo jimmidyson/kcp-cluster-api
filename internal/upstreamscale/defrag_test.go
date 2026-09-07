@@ -20,6 +20,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -256,5 +257,40 @@ func TestFragmentationIsWhatSettlingIsJudgedOn(t *testing.T) {
 	// The stale reading: a gigabyte allocated, a quarter of it in use.
 	if !(Etcd{DBTotalBytes: 1 << 30, DBInUseBytes: 256 << 20}).Fragmented() {
 		t.Error("a file three quarters free was not called fragmented")
+	}
+}
+
+// TestADefragmentationSaysHowLongItTookAndWhoItStalled.
+//
+// A defragmentation is a stop-the-world rewrite on the member it runs against.
+// On a follower that is one member not answering; on the leader it is every
+// write in the cluster waiting, and a run whose next rung failed on lease
+// renewals thirty seconds later needs to be able to see that the defrag before
+// it took two minutes on the leader. The line said only what was reclaimed.
+func TestADefragmentationSaysHowLongItTookAndWhoItStalled(t *testing.T) {
+	got := DescribeDefrag([]DefragResult{
+		{Pod: "etcd-0", BeforeBytes: 2 << 30, AfterBytes: 1 << 30, Settled: true,
+			Took: 4*time.Second + 300*time.Millisecond},
+		{Pod: "etcd-1", BeforeBytes: 2 << 30, AfterBytes: 1 << 30, Settled: true,
+			Took: 112 * time.Second, Leader: true},
+		{Pod: "etcd-2", Err: "context deadline exceeded", Took: 5 * time.Minute},
+	})
+	if !strings.Contains(got, "etcd-0 reclaimed 1.0 GiB (2.0 GiB to 1.0 GiB) in 4s") {
+		t.Errorf("a follower's duration is missing or misplaced: %q", got)
+	}
+	if !strings.Contains(got, "etcd-1 reclaimed 1.0 GiB (2.0 GiB to 1.0 GiB) in 1m52s as the leader") {
+		t.Errorf("the leader is not named as the one that stalled the cluster: %q", got)
+	}
+	if !strings.Contains(got, "etcd-2 failed after 5m0s") {
+		t.Errorf("a failed member does not say how long it was tried for: %q", got)
+	}
+}
+
+// TestADefragmentationWithNoClockKeepsTheOldLine, so a result that was never
+// timed does not claim to have taken no time at all.
+func TestADefragmentationWithNoClockKeepsTheOldLine(t *testing.T) {
+	got := DescribeDefrag([]DefragResult{{Pod: "etcd-0", BeforeBytes: 2 << 30, AfterBytes: 1 << 30, Settled: true}})
+	if strings.Contains(got, " in 0s") || strings.Contains(got, "after 0s") {
+		t.Errorf("an untimed result reports a duration: %q", got)
 	}
 }
