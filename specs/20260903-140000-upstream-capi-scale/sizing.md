@@ -81,7 +81,14 @@ so the database is not large — but the **default 2 GiB backend quota** is a
 cliff, and revisions between compactions are what fill it during a climb.
 
 - `--quota-backend-bytes=8589934592` (8 GiB)
-- Keep the default 5-minute auto-compaction; do not turn it off for a soak.
+- Compaction is the API server's job, not etcd's — `--etcd-compaction-interval`
+  — and the provisioning script sets it to **1m** rather than the 5m default.
+  One five-minute compaction at a converging fleet's write rate walked 163,000
+  revisions, took 1m41s on a page cache the API server had squeezed out, and
+  blocked the store for 59 seconds, which is longer than every stock lease on
+  the control plane. Five compactions of a fifth the size bound that at seconds.
+  Never turn compaction off, for a soak or otherwise: the revisions between
+  compactions are what fill the quota.
 - Fast local SSD. etcd's fsync latency is the quietest way for a scale test to
   turn into a latency test.
 

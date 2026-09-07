@@ -293,6 +293,67 @@ kubectl -n kube-system get pod -l component=etcd \
 All three members, because a quota is per member and a rolled control plane
 picks them up one at a time.
 
+## The API server's etcd compaction interval, and why it is one minute
+
+`clusterclass` also appends `--etcd-compaction-interval=1m` to the API server's
+arguments, `APISERVER_ETCD_COMPACTION_INTERVAL` to change it and empty to leave
+kube-apiserver on its 5-minute default, which is what the recorded runs used.
+
+The reason is a 1500-cluster rung that ended with the controller manager,
+scheduler and API server on one control plane node all restarting inside two
+minutes, and this in that node's etcd log:
+
+```
+15:05:05  scheduled compaction starts: 163,243 revisions, five minutes' worth at a converging fleet's write rate
+15:05:09  every apply slow, reads included — the store's apply loop is blocked
+15:05:43  kube-controller-manager's lease GET times out at 5 s; it exits
+          the five slowest applies in the window: 58.5 to 59.0 seconds
+15:06:46  "finished scheduled compaction" took=1m41s
+15:06:49  the kubelet kills the API server for failing /livez
+```
+
+Same cluster, same 1.4 GB of live data, a warm page cache: compaction takes 4 to
+5 seconds. The 101-second one ran while the API server was at its largest and
+the controller manager leader was on the same node, and the kernel had evicted
+etcd's database from the page cache to make room. Every page the compaction
+touched was a random read from the vdisk at about 340 µs, and the arithmetic
+over a third of the file's 594,730 pages is the minute and a half. The disk's
+write path was never the problem: fsync tails on all three members are healthy
+and agree.
+
+A smaller interval does not make the compaction cheaper. It makes each one a
+fifth the size, so the worst case with a cold cache is seconds rather than a
+minute, and no lease on the control plane expires behind it. The memory fix is
+the real one and is separate; this bounds the damage while the cache is cold.
+
+**Why this patch works when the profiling patch did not.** The argument is
+*appended* — `add` at index `-`, the one array index the patch validator
+permits — under a name CAREN's class does not set, so the "extraArgs name must
+be unique" refusal does not apply. And it is the last patch in `spec.patches`,
+so it renders after CAREN's runtime extension and lands on the list that
+extension produced instead of replacing it. All three of the profiling attempts
+below were trying to *change* an argument CAREN already sets, which is a
+different problem and is still not possible from here.
+
+On a cluster that already exists this rolls the control plane, one machine at a
+time, as any change to the copy does — see the next section. Check it took, all
+three members, because the roll picks them up one at a time:
+
+```sh
+kubectl -n kube-system get pod -l component=kube-apiserver \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].command}{"\n"}{end}' \
+  | tr ' ' '\n' | grep -E 'kube-apiserver-|etcd-compaction'
+```
+
+And to see what a compaction costs on a given cluster, etcd logs every one with
+its duration. Seconds is healthy; anything past ten is the cache going cold
+under the API server, and the node's memory is the thing to look at:
+
+```sh
+kubectl -n kube-system logs etcd-<leader> | grep 'finished scheduled compaction' \
+  | jq -r '"\(.ts)  took=\(.took)  in-use=\(."current-db-size-in-use")"' | tail
+```
+
 ## Changing the ClusterClass on a cluster that already exists
 
 The etcd patches live in the ClusterClass copy, and the Cluster names that copy.
@@ -1104,7 +1165,11 @@ like a fixable mistake and the third was not:
    unique"*. A repeated flag would take the last value on a command line, and
    never gets one, because the object is rejected at admission. The refusal
    surfaces on the `KubeadmControlPlane`, as the topology controller's server
-   side apply dry-run, not on the ClusterClass that caused it.
+   side apply dry-run, not on the ClusterClass that caused it. Note what this
+   does and does not rule out: the append itself landed, in the same list as
+   CAREN's `profiling`, which is why the uniqueness rule saw it. Appending an
+   argument CAREN does *not* set works, and is how the etcd compaction
+   interval is applied above.
 2. **Replace that entry in place.** Refused:
    `core/webhooks/admission/patch_validation.go` permits an array index of only
    `0` or `-` on `add`, and forbids any index at all on `replace` and `remove` —

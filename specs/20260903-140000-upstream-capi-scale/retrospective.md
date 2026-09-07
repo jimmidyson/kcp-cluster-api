@@ -274,9 +274,24 @@ that same server, and readiness flaps for the same reason.
 ### The store, which is where 2000 clusters stopped
 
 At 2000 clusters etcd timed out lease renewals with fsync means unchanged, so
-the disk was not chronically slow. The candidates the README names are a
-stall on another member's disk, peer round-trip time, and sheer proposal
-volume. Everything here reduces proposals or isolates the small ones.
+the disk was not chronically slow. A 1500-cluster rung on 2026-09-07 found
+the mechanism: the API server's five-minute compaction walked 163,000
+revisions on a page cache the API server's heap had evicted, took 1m41s, and
+blocked the store's apply loop for 59 seconds, which is longer than every
+stock lease on the control plane. Fsync tails on all three members were
+healthy, the vdisk's random reads were fast, and the host was not contended.
+The store did not fail; it was starved of memory by the process in front of
+it. Everything here reduces proposals, shortens what one compaction can hold,
+or isolates the small writes.
+
+- **Compact every minute, not every five.** `--etcd-compaction-interval=1m`
+  on the API servers makes each compaction a fifth the size, so a cold-cache
+  compaction holds the store for seconds rather than a minute. The
+  provisioning script now appends it through the ClusterClass copy; see
+  `hack/upstream-capi-scale/README.md`.
+- **Keep etcd's database in the page cache**, which is the memory ceiling on
+  the API server from the section below, and keep the etcd leader off the
+  node that holds the controller-manager leader.
 
 - **Move leases and events to their own etcd.** The kube-apiserver flag
   `--etcd-servers-overrides` routes a resource to a separate store. Leases are

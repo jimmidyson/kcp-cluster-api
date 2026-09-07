@@ -3,7 +3,7 @@
 #
 #   config       resolve and print every input, touching nothing
 #   bootstrap    a local kind cluster, with CAPX and CAREN on it
-#   clusterclass copy CAREN's ClusterClass and add the etcd backend quota
+#   clusterclass copy CAREN's ClusterClass; add the etcd quota, its metrics port, and the API server's compaction interval
 #   create       create the workload cluster and wait for it
 #   kubeconfig   write the workload cluster's kubeconfig
 #   install      clusterctl init the scale test's own providers, and prepare them
@@ -73,6 +73,15 @@ BOOTSTRAP_CAPI_VERSION="${BOOTSTRAP_CAPI_VERSION:-v1.12.5}"
 # etcd's default 2 GiB backend quota is a cliff a climbing fleet walks off, and
 # CAREN has no variable for it — hence the ClusterClass copy below.
 ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
+
+# How often the API server asks etcd to compact, and so how many revisions each
+# compaction has to walk. kube-apiserver's default is 5m; at a converging
+# fleet's write rate that was 163,000 revisions per compaction, and one such
+# compaction took 1m41s on a cold page cache and held the store's apply loop
+# for 59 seconds — long enough for every lease on the control plane to expire.
+# Five compactions of a fifth the size bound the worst case at seconds. Empty
+# leaves the API server on its default, which is what the recorded runs used.
+APISERVER_ETCD_COMPACTION_INTERVAL="${APISERVER_ETCD_COMPACTION_INTERVAL-1m}"
 
 
 # The CAREN ClusterClass to copy, and the template to generate the Cluster from.
@@ -147,6 +156,8 @@ config() {
   # its own apostrophe.
   local capx="${CAPX_VERSION}"
   [[ -n "${capx}" ]] || capx="unpinned, clusterctl takes its latest (set CAPX_VERSION to pin)"
+  local compaction="${APISERVER_ETCD_COMPACTION_INTERVAL}"
+  if [[ -n "${compaction}" ]]; then compaction="${compaction} (the API server's --etcd-compaction-interval)"; else compaction="kube-apiserver's default, 5m (APISERVER_ETCD_COMPACTION_INTERVAL is empty)"; fi
   cat <<CONFIG
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
   kubeconfig             ${BOOTSTRAP_KUBECONFIG}
@@ -163,6 +174,7 @@ CAREN                    ${CAREN_VERSION}
 Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
 Cluster API under test   ${CAPI_VERSION}
 etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
+etcd compaction interval ${compaction}
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
   control plane pool       ${CONTROL_PLANE_POOL_WORKERS} of ${WORKER_COUNT} workers (0 = one unlabelled pool)
 CONFIG
@@ -302,12 +314,27 @@ NOTE
   # The metrics port carries no data and no authentication — it is etcd's
   # /metrics, not its client API — which is a fair trade on a throwaway scale
   # cluster and would not be on anything else.
+  #
+  # And one change to the API server, made differently: its etcd compaction
+  # interval is *appended* to apiServer.extraArgs rather than the list being
+  # replaced. The README records three failed attempts to change an argument
+  # CAREN already sets; this is not that. The name is new, so the uniqueness
+  # rule that refused the first attempt does not apply; "-" is the one array
+  # index the patch validator allows on add, so the second attempt's refusal
+  # does not either; and because this patch is last in spec.patches it renders
+  # after CAREN's runtime extension and lands on the list that extension
+  # produced, rather than replacing it — which is what broke a control plane on
+  # the third attempt.
   log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
+  [[ -z "${APISERVER_ETCD_COMPACTION_INTERVAL}" ]] \
+    || log "  and the API server's etcd compaction interval at ${APISERVER_ETCD_COMPACTION_INTERVAL}"
   kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
     get clusterclass "${src}" -o json \
-    | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" '
+    | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
+         --arg compaction "${APISERVER_ETCD_COMPACTION_INTERVAL}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
+        | (.spec.controlPlane.templateRef) as $cp
         | .spec.patches = ((.spec.patches // []) + [{
             name: "etcdBackendQuota",
             description: "Raise etcd quota-backend-bytes, and open its metrics port. The 2 GiB default is a cliff a climbing fleet walks off, and kubeadm points --listen-metrics-urls at 127.0.0.1, which no scraper outside the node can reach. CAREN has a variable for neither.",
@@ -326,7 +353,23 @@ NOTE
                 ]}}
               }]
             }]
-          }])' \
+          }]
+          + (if $compaction == "" then [] else [{
+            name: "apiServerEtcdCompaction",
+            description: "Append --etcd-compaction-interval to the API server. kube-apiserver compacts etcd every 5m by default; at the write rate of a converging fleet one compaction walked 163,000 revisions, took 1m41s on a cold page cache, and blocked the apply loop of the store for 59 seconds. Appended, not replaced: this lands on the list produced by the CAREN runtime extension.",
+            definitions: [{
+              selector: {
+                apiVersion: $cp.apiVersion,
+                kind: $cp.kind,
+                matchResources: {controlPlane: true}
+              },
+              jsonPatches: [{
+                op: "add",
+                path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs/-",
+                value: {name: "etcd-compaction-interval", value: $compaction}
+              }]
+            }]
+          }] end))' \
     | kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f -
 
   cat <<NOTE
@@ -335,13 +378,23 @@ Applied as ClusterClass ${dst}. Two things to check against your CAREN version:
 
   * extraArgs is a list of {name, value} in the v1beta2 kubeadm API this
     Cluster API uses. If your CAREN ClusterClass is on an older API where
-    extraArgs is a map, the patch above needs the map form instead.
-  * the patch replaces .etcd wholesale. If your ClusterClass already patches
-    etcd, merge the two rather than stacking them.
+    extraArgs is a map, the patches above need the map form instead.
+  * the etcd patch replaces .etcd wholesale. If your ClusterClass already
+    patches etcd, merge the two rather than stacking them.
+  * the API server patch appends etcd-compaction-interval to apiServer.extraArgs.
+    If your ClusterClass already sets that argument, the KubeadmControlPlane
+    will be refused at admission ("extraArgs name must be unique") and the fix
+    is APISERVER_ETCD_COMPACTION_INTERVAL= to leave it alone.
 
-Nothing here patches the API server. See the README: turning its profiling back
-on cannot be done from a ClusterClass patch on a CAREN class, and trying broke a
-control plane rather than failing cleanly.
+Nothing else on the API server is patched. See the README: changing an argument
+CAREN already sets, profiling among them, cannot be done from a ClusterClass
+patch on a CAREN class, and trying broke a control plane rather than failing
+cleanly. Appending a new one can.
+
+On a cluster that already exists this rolls the control plane, one machine at a
+time — see the README, "Changing the ClusterClass on a cluster that already
+exists". The API servers come back fresh, which is the baseline a measured run
+wants anyway.
 NOTE
 }
 
