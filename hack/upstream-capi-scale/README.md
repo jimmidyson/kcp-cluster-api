@@ -625,6 +625,60 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+### Every rung's etcd line carries what changed, not just what is
+
+A rung reports the store's state — size, keys, mean latencies, leader — and then
+what happened to it since the run's baseline: leader changes, slow applies,
+failed proposals, syncs past 128ms, and the commit and fsync means *over the
+run* rather than over the member's life.
+
+Both halves, because the state half is not enough and a run proved it. A report
+showing `wal fsync 1.7ms, commit 3.5ms` unchanged across 500, 1000, 1500 and
+2000 clusters was read as "etcd was never the problem" — while the managers were
+dying with:
+
+```
+"Failed to update lease optimistically, falling back to slow path"
+  err="etcdserver: request timed out"
+```
+
+A failed proposal is etcd's own word for a write it could not commit. Over three
+and a half million syncs a stall does not move a lifetime mean, so a line
+carrying only the mean invites exactly that misreading. `EtcdSince` in
+`internal/upstreamscale/etcdstrain.go` computes the differences; the rung line
+appends them whenever there is something to say.
+
+### kcp cannot split its store, so a split stock store is a separate experiment
+
+Moving leases and events to their own etcd is the obvious answer to a lease that
+cannot be committed:
+
+```
+--etcd-servers-overrides=coordination.k8s.io/leases#https://lease-etcd:2379,/events#https://events-etcd:2379
+```
+
+kcp has no equivalent. Its entire storage surface is one flag:
+
+```
+$ kcp start --help | grep -i etcd
+      --etcd-servers strings   List of etcd servers to connect with ...
+```
+
+No overrides, no per-resource routing — "storage" and "override" appear nowhere
+else in its help.
+
+kcp's own answer to store pressure is sharding: many shards, each with its own
+store, rather than one store split by resource. That is a real answer, and it is
+**not what this harness measures**. It runs one shard with three replicas
+against one external etcd, deliberately, to mirror three kube-apiservers behind
+a VIP — so today both sides put the whole fleet through a single store.
+
+So a stock run with split stores is not comparable with the kcp runs as
+configured, and must be recorded as its own result: *what a tuned control plane
+holds*, beside *what a stock one holds*. Comparing split-store stock against
+multi-shard kcp would be the fair version of that experiment, and it needs
+multi-shard support here first.
+
 ### When the store is the ceiling, the managers report it as their own death
 
 The manager log to recognise:

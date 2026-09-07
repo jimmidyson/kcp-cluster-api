@@ -124,7 +124,17 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		// reclaim are each one machine's.
 		members, err := r.Sampler.EveryEtcdMember(ctx, r.Host, store)
 		if len(members) > 0 {
-			report.AddFact("etcd@"+label, DescribeEtcdMembers(members))
+			// State, then what changed to get here. Every counter etcd keeps
+			// is cumulative over a member's process life, so the state line's
+			// means and sizes describe the store now and say nothing about
+			// what this rung did to it — which is how "wal fsync 1.7ms" was
+			// read as "etcd was never the problem" on a run whose managers
+			// were dying to "etcdserver: request timed out". See EtcdSince.
+			described := DescribeEtcdMembers(members)
+			if since := EtcdSince(r.etcdAtStart, members); since != "" {
+				described += " — " + since
+			}
+			report.AddFact("etcd@"+label, described)
 			for name, member := range members {
 				if member.NearQuota() {
 					r.logf("WARNING at %s: %s %s", label, name, member.Describe())

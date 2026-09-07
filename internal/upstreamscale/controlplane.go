@@ -169,6 +169,7 @@ func (e Etcd) Describe() string {
 	fmt.Fprintf(&b, "%s of %s backend quota (%.0f%%), %d keys, wal fsync %.1fms, commit %.1fms",
 		humanBytes(e.DBTotalBytes), humanBytes(e.QuotaBytes), 100*e.QuotaUsed(),
 		e.Keys, e.WALFsyncMeanMillis(), e.BackendCommitMeanMillis())
+
 	if e.FreeBytes() > 0 {
 		fmt.Fprintf(&b, ", %s reclaimable", humanBytes(e.FreeBytes()))
 	}
