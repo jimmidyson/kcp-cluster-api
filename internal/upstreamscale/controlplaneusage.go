@@ -35,21 +35,50 @@ const ControlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
 
 // ControlPlaneNodes is the nodes the control plane runs on.
 func ControlPlaneNodes(ctx context.Context, cl client.Client) ([]string, error) {
+	names, _, err := controlPlaneNodes(ctx, cl)
+	return names, err
+}
+
+// ControlPlaneAllocatable is how much memory the control plane's nodes offer
+// workloads, summed.
+//
+// # Why a total without it is not a finding
+//
+// A run reported "78.8 GiB resident in total" at 1500 clusters and read as
+// though the number stood on its own. The nodes were 32 GiB each: 78.8 of 96
+// is 82% full, and the rung above it failed. Nobody saw that, because the
+// report carried the numerator and not the denominator — and a fleet cost
+// without the capacity it is spent against cannot answer the only question a
+// scale run is asked, which is how much further this goes.
+//
+// Allocatable rather than capacity: capacity includes what the kubelet and the
+// OS have already reserved, and a workload cannot have it.
+func ControlPlaneAllocatable(ctx context.Context, cl client.Client) (uint64, error) {
+	_, allocatable, err := controlPlaneNodes(ctx, cl)
+	return allocatable, err
+}
+
+func controlPlaneNodes(ctx context.Context, cl client.Client) ([]string, uint64, error) {
 	var nodes corev1.NodeList
 	if err := cl.List(ctx, &nodes, client.HasLabels{ControlPlaneNodeLabel}); err != nil {
-		return nil, fmt.Errorf("listing control plane nodes: %w", err)
+		return nil, 0, fmt.Errorf("listing control plane nodes: %w", err)
 	}
+	var allocatable uint64
 	out := make([]string, 0, len(nodes.Items))
 	for i := range nodes.Items {
 		out = append(out, nodes.Items[i].Name)
+		if memory := nodes.Items[i].Status.Allocatable.Memory(); memory != nil {
+			//nolint:gosec // A node's allocatable memory is not negative.
+			allocatable += uint64(memory.Value())
+		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no node carries %s: on a managed control plane the machines are not "+
+		return nil, 0, fmt.Errorf("no node carries %s: on a managed control plane the machines are not "+
 			"in this cluster's node list, and what runs on them cannot be measured from here",
 			ControlPlaneNodeLabel)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, allocatable, nil
 }
 
 // ControlPlaneUsage turns one scrape of the control plane's nodes into the
@@ -136,11 +165,12 @@ func (s *Sampler) NodeUsage(ctx context.Context, node string) (map[string]PodUsa
 // proxy carries the caller's identity, so this reads what the pod proxy cannot.
 func (s *Sampler) ControlPlaneNodeUsage(ctx context.Context, cl client.Client,
 ) (ControlPlaneReadout, error) {
-	nodes, err := ControlPlaneNodes(ctx, cl)
+	nodes, allocatable, err := controlPlaneNodes(ctx, cl)
 	if err != nil {
 		return ControlPlaneReadout{}, err
 	}
-	readout := ControlPlaneReadout{Nodes: nodes, Usage: map[string]PodUsage{}}
+	readout := ControlPlaneReadout{Nodes: nodes, AllocatableBytes: allocatable,
+		Usage: map[string]PodUsage{}}
 
 	var why []string
 	for _, node := range nodes {
@@ -181,6 +211,11 @@ type ControlPlaneReadout struct {
 	// answer this time.
 	Nodes  []string
 	Missed []string
+
+	// AllocatableBytes is what those machines offer workloads in total, and
+	// the denominator every resident figure here needs. See
+	// ControlPlaneAllocatable.
+	AllocatableBytes uint64
 
 	// Usage is every pod on those machines, keyed "namespace/pod".
 	Usage map[string]PodUsage
@@ -275,8 +310,15 @@ func (r ControlPlaneReadout) Describe() string {
 	} else {
 		fmt.Fprintf(&b, "%d nodes", len(r.Nodes))
 	}
-	fmt.Fprintf(&b, ", %d processes, %s resident in total, %.0f CPU-seconds",
-		len(r.Usage), humanBytes(resident), cpu)
+	fmt.Fprintf(&b, ", %d processes, %s resident in total", len(r.Usage), humanBytes(resident))
+	// The denominator, whenever the cluster will say what it is. A total on its
+	// own reads as a cost; a total against the capacity it is spent from reads
+	// as how much further the run can go, which is the question being asked.
+	if r.AllocatableBytes > 0 {
+		fmt.Fprintf(&b, " of %s allocatable (%.0f%%)",
+			humanBytes(r.AllocatableBytes), 100*float64(resident)/float64(r.AllocatableBytes))
+	}
+	fmt.Fprintf(&b, ", %.0f CPU-seconds", cpu)
 
 	roles := r.Roles()
 	parts := make([]string, 0, len(roles))

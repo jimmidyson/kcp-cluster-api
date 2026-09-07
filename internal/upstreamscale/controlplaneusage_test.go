@@ -431,3 +431,40 @@ func TestAStaticPodIsRecognisedByItsMirrorAnnotation(t *testing.T) {
 		t.Error("a pod that merely labels itself control-plane was read as a static pod")
 	}
 }
+
+// TestATotalWithoutItsCapacityIsNotAFinding.
+//
+// A run reported "78.8 GiB resident in total" at 1500 clusters and it read as
+// though it stood on its own. The nodes were 32 GiB each — 78.8 of 96 is 82%
+// full, and the rung above it failed. Nobody saw that, because the report
+// carried the numerator and not the denominator.
+func TestATotalWithoutItsCapacityIsNotAFinding(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes:            []string{"cp-0", "cp-1", "cp-2"},
+		AllocatableBytes: 96 << 30,
+		Usage: map[string]PodUsage{
+			"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(40<<30, 10), Node: "cp-0"},
+			"kube-system/kube-apiserver-cp-1": {ContainerUsage: usageOf(38<<30, 10), Node: "cp-1"},
+		},
+	}
+	got := readout.Describe()
+	if !strings.Contains(got, "of 96.0 GiB allocatable") {
+		t.Errorf("the capacity the total is spent from is missing: %q", got)
+	}
+	if !strings.Contains(got, "(81%)") {
+		t.Errorf("how full the control plane is was not worked out for the reader: %q", got)
+	}
+}
+
+// TestACapacityTheClusterWillNotStateIsNotInvented, so a managed control plane
+// whose machines are not in the node list gets a total with no denominator
+// rather than a denominator of zero and a percentage of infinity.
+func TestACapacityTheClusterWillNotStateIsNotInvented(t *testing.T) {
+	readout := ControlPlaneReadout{
+		Nodes: []string{"cp-0"},
+		Usage: map[string]PodUsage{"kube-system/kube-apiserver-cp-0": {ContainerUsage: usageOf(1<<30, 1)}},
+	}
+	if got := readout.Describe(); strings.Contains(got, "allocatable") {
+		t.Errorf("a capacity the cluster did not report was printed anyway: %q", got)
+	}
+}
