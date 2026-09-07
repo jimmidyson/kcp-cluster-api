@@ -468,3 +468,80 @@ func TestACapacityTheClusterWillNotStateIsNotInvented(t *testing.T) {
 		t.Errorf("a capacity the cluster did not report was printed anyway: %q", got)
 	}
 }
+
+// TestAManagerThatDiedYesterdayDoesNotFailEveryRunAfterIt.
+//
+// This cost two runs. capi-controller-manager lost its leader election during
+// a 2000-cluster rung, and from then on every rung of every subsequent run
+// aborted within seconds reporting that manager as having died — a restart from
+// the previous day, presented as this run's ceiling, complete with a throttling
+// figure exonerating a process that was never in trouble.
+//
+// The control plane had a baseline for exactly this reason and the managers did
+// not. It gave itself away in the timestamps: `logs --previous` returned a log
+// from the day before, because the process had never restarted again.
+func TestAManagerThatDiedYesterdayDoesNotFailEveryRunAfterIt(t *testing.T) {
+	yesterday := []deployedscale.ComponentSample{{
+		Component: "capi-controller-manager",
+		Pod:       deployedscale.PodFacts{RestartCount: 1, LastExitCode: 1, LastReason: "Error"},
+	}}
+	baseline := ManagerRestarts(yesterday)
+
+	// Nothing has happened since. The same facts, read again.
+	if since := ManagersSince(baseline, yesterday); len(since) != 0 {
+		t.Errorf("a restart from before the run was reported as this run's: %v", since)
+	}
+	if why := Classify(ManagersSince(baseline, yesterday), false); why != "" {
+		t.Errorf("the rung would still have been failed by it: %q", why)
+	}
+}
+
+// TestARestartDuringTheRunIsStillCaught, which is the whole point of looking.
+func TestARestartDuringTheRunIsStillCaught(t *testing.T) {
+	baseline := ManagerRestarts([]deployedscale.ComponentSample{{
+		Component: "capi-controller-manager",
+		Pod:       deployedscale.PodFacts{RestartCount: 1},
+	}})
+	now := []deployedscale.ComponentSample{{
+		Component: "capi-controller-manager",
+		Pod:       deployedscale.PodFacts{RestartCount: 3, LastExitCode: 1, LastReason: "Error"},
+	}}
+
+	since := ManagersSince(baseline, now)
+	if len(since) != 1 {
+		t.Fatalf("a manager that restarted twice during the run was not reported: %v", since)
+	}
+	if since[0].Pod.RestartCount != 2 {
+		t.Errorf("restarts = %d, want the two this run caused rather than all three",
+			since[0].Pod.RestartCount)
+	}
+	if !strings.Contains(Classify(since, false), "capi-controller-manager") {
+		t.Error("the rung was not failed by a manager that died during it")
+	}
+}
+
+// TestAnOldOomDoesNotHauntTheNextRun. OOMKilled and the last termination travel
+// with a restart that has already been counted, so a manager killed for memory
+// yesterday would otherwise keep announcing it today.
+func TestAnOldOomDoesNotHauntTheNextRun(t *testing.T) {
+	killed := []deployedscale.ComponentSample{{
+		Component: "capd-controller-manager",
+		Pod: deployedscale.PodFacts{RestartCount: 1, OOMKilled: true,
+			LastReason: deployedscale.ReasonOOMKilled, MemoryLimitBytes: 24 << 30},
+	}}
+	if why := Classify(ManagersSince(ManagerRestarts(killed), killed), false); why != "" {
+		t.Errorf("yesterday's OOM kill was reported as this run's: %q", why)
+	}
+}
+
+// TestAManagerThisRunHasNotSeenBeforeIsJudgedFromZero, so a deployment rolled
+// mid-run — a new pod name, no baseline entry — is not silently exempt.
+func TestAManagerThisRunHasNotSeenBeforeIsJudgedFromZero(t *testing.T) {
+	fresh := []deployedscale.ComponentSample{{
+		Component: "capi-controller-manager-extra",
+		Pod:       deployedscale.PodFacts{RestartCount: 1, LastExitCode: 1, LastReason: "Error"},
+	}}
+	if len(ManagersSince(map[string]int32{}, fresh)) != 1 {
+		t.Error("a component with no baseline was treated as having restarted before the run")
+	}
+}

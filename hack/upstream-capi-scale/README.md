@@ -663,6 +663,41 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+### A manager that died in a previous run is not this run's ceiling
+
+The control plane was given a restart baseline early, because a kubeadm static
+pod restarted at any point in a node's life would otherwise fail the first rung.
+The managers were left reading their raw restart count, and the same thing
+happened to them a day later.
+
+`capi-controller-manager` lost its leader election during a 2000-cluster rung.
+From then on **every rung of every subsequent run aborted within seconds**,
+naming that manager as having died — a restart from the previous day, presented
+as this run's ceiling, complete with a throttling figure exonerating a process
+that had never been in trouble:
+
+```
+This run measured nothing: the smallest fleet it tried did not converge
+(capi-controller-manager restarted 1 time(s) — exited 1 of its own accord ... —
+1.7% of CFS periods throttled, so it was not short of CPU)
+```
+
+Two runs measured nothing on that basis, and both were read as the cluster
+getting worse. It gave itself away in a timestamp: `kubectl logs --previous` on
+the manager returned a log from the day before, because the process had never
+restarted again.
+
+`ManagersSince` now diffs against a baseline taken before the climb, exactly as
+`HealthSince` does for the control plane, and the baseline note says what the
+managers had already been through. The restart count is not the only thing
+carried forward — `OOMKilled` and the last termination travel with a restart
+that has already been counted, so a manager killed for memory yesterday would
+otherwise keep announcing it today.
+
+A manager only restarts on its own account, so its baseline is nearly always
+zero and this looks like it can never matter. It matters exactly once, and then
+it matters for every run afterwards until somebody rolls the deployment.
+
 ### Restart the API servers before a measured run, or the baseline is the last one
 
 Measured on this cluster, both readings against an API with **no Clusters, no

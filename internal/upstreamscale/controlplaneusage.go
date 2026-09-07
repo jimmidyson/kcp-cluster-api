@@ -491,6 +491,54 @@ func HealthSince(baseline, current map[string]deployedscale.PodFacts) []deployed
 	return HealthOf(changed)
 }
 
+// ManagersSince is HealthSince for the managers, whose samples arrive as
+// components rather than as a map of pod facts.
+//
+// # Why the managers needed this too, and did not have it
+//
+// The control plane got a baseline because a kubeadm static pod restarted at
+// any point in the node's life would otherwise fail the first rung. The
+// managers were left reading their raw restart count, and the same thing
+// happened to them a day later: capi-controller-manager lost its leader
+// election during a 2000-cluster rung, and from then on **every rung of every
+// subsequent run aborted within seconds**, reporting that manager as having
+// died — a restart from the previous day, reported as this run's ceiling.
+//
+// Two runs measured nothing on that basis before the timestamps in a
+// `logs --previous` gave it away: the log was a day old, because the process
+// had never restarted again.
+//
+// A manager only restarts on its own account, so its baseline is almost always
+// zero and this looks like it can never matter. It matters exactly once, and
+// then it matters for every run afterwards until somebody rolls the deployment.
+func ManagersSince(baseline map[string]int32,
+	current []deployedscale.ComponentSample,
+) []deployedscale.ComponentSample {
+	out := make([]deployedscale.ComponentSample, 0, len(current))
+	for _, c := range current {
+		if c.Pod.RestartCount <= baseline[c.Component] {
+			// Not just the count: OOMKilled and the last termination travel
+			// with a restart that has already been counted, so a manager OOM
+			// killed yesterday would keep reporting itself as OOM killed
+			// today with a restart count of zero.
+			continue
+		}
+		since := c
+		since.Pod.RestartCount = c.Pod.RestartCount - baseline[c.Component]
+		out = append(out, since)
+	}
+	return out
+}
+
+// ManagerRestarts is the baseline ManagersSince is measured against.
+func ManagerRestarts(components []deployedscale.ComponentSample) map[string]int32 {
+	out := make(map[string]int32, len(components))
+	for _, c := range components {
+		out[c.Component] = c.Pod.RestartCount
+	}
+	return out
+}
+
 // ControlPlaneFacts is the pod facts for everything on the control plane's
 // nodes, which is what a baseline for HealthSince is made of.
 // ControlPlaneFacts splits the pods on the control plane's nodes into the ones

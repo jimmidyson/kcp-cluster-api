@@ -60,6 +60,11 @@ type Runner struct {
 	// apart because a death there is worth reporting and is not this run's
 	// ceiling. See IsControlPlaneComponent.
 	besideAtStart map[string]deployedscale.PodFacts
+	// managersAtStart is the same for the managers. They were left out when
+	// the control plane got one, and a manager that lost its leader election
+	// in one run then failed every rung of every run after it. See
+	// ManagersSince.
+	managersAtStart map[string]int32
 
 	// etcdAtStart is the same for the store, and for the same reason: every
 	// counter here is cumulative over a member's process life, so on a
@@ -166,6 +171,19 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	} else {
 		report.AddFact("baseline", settle.Describe())
 		r.logf("%s", settle.Describe())
+	}
+
+	// What the managers have already been through. A restart from a previous
+	// run is not this run's ceiling, and reading the raw count made it one.
+	if components, _, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+		r.managersAtStart = ManagerRestarts(components)
+		if restarted := Classify(components, false); restarted != "" {
+			report.AddFact("managerHistory", restarted)
+			r.logf("NOTE: the managers carry history from before this run: %s", restarted)
+		}
+	} else {
+		r.logf("NOTE: could not read the managers before the climb (%v), so a restart from a "+
+			"previous run may be reported as this one's", err)
 	}
 
 	// What the control plane has already been through, before anything is
@@ -337,7 +355,10 @@ func (r *Runner) defragment(ctx context.Context, report *deployedscale.Report, s
 // second failure would bury the first.
 func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 	if components, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
-		if why := Classify(components, false); why != "" {
+		// Against the baseline, exactly as the control plane is. A manager
+		// that died in a previous run otherwise fails every rung of every run
+		// afterwards, for ever. See ManagersSince.
+		if why := Classify(ManagersSince(r.managersAtStart, components), false); why != "" {
 			// With the kernel's own accounting for the component that died.
 			// A manager killed while starved of quota and one killed with CPU
 			// to spare are different findings, and the sample already carries
