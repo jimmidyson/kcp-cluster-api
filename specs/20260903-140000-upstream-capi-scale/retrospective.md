@@ -320,8 +320,9 @@ or isolates the small writes.
   absorbs, and 100/200 is close to it on three-node kubeadm etcd.
 - **Sample peer round-trip time.** It is the one etcd signal the run does not
   read and the one that distinguishes a slow peer from a slow disk.
-- **A disk of its own for `/var/lib/etcd`**, which the provisioning script
-  now attaches through the ClusterClass copy. On CAREN's template etcd shared
+- **A disk of its own for etcd's data directory**, which the provisioning
+  script now attaches through the ClusterClass copy, mounted one level above
+  the data directory so kubeadm's preflight does not trip on `lost+found`. On CAREN's template etcd shared
   the root disk with the API server's audit log, tens of thousands of records
   per burst on the vdisk the WAL fsyncs to. The 8 GiB quota stays as
   sizing.md has it. A held fleet turns over a gigabyte of reclaimable pages an

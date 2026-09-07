@@ -458,9 +458,17 @@ Two halves, because the disk is attached by one provider and used by another:
   system disk. This needs CAPX v1.5 or later.
 - **cloud-init partitions, formats and mounts it before kubeadm runs**, through
   `diskSetup` and `mounts` on the kubeadm config: one GPT partition, ext4 with
-  the label `etcd`, mounted by that label on `/var/lib/etcd`. By label rather
-  than by device, because nothing guarantees a device name, and `nofail` so a
-  missing disk cannot hang the boot.
+  the label `etcd`, mounted by that label on `/var/lib/etcddisk`
+  (`ETCD_DISK_MOUNT`). By label rather than by device, because nothing
+  guarantees a device name, and `nofail` so a missing disk cannot hang the boot.
+- **kubeadm is pointed at a subdirectory of the mount**, `etcd.local.dataDir:
+  /var/lib/etcddisk/etcd`, rather than the disk being mounted on `/var/lib/etcd`
+  itself. The first attempt did the latter and every new node failed preflight
+  with `DirAvailable--var-lib-etcd: /var/lib/etcd is not empty`: `mke2fs` puts a
+  `lost+found` directory on every filesystem it makes, and kubeadm refuses a
+  data directory with anything in it. A subdirectory does not exist until
+  kubeadm creates it, so the check passes and nothing has to be ignored. This is
+  the arrangement Cluster API's Azure provider documents for its etcd disk.
 
 `nofail` is what makes the third piece necessary. A node whose disk did not
 mount would boot, run kubeadm, and put etcd on the root disk without a word,
@@ -475,13 +483,17 @@ Check it after the roll, on every control plane node:
 export KUBECONFIG=../../bin/capi-scale.kubeconfig
 for n in $(kubectl get nodes -l node-role.kubernetes.io/control-plane -o name); do
   kubectl debug "$n" -it --profile=sysadmin --image=busybox -- chroot /host sh -c \
-    'hostname; findmnt -T /var/lib/etcd -o TARGET,SOURCE,FSTYPE,OPTIONS; lsblk -o NAME,SIZE,LABEL,MOUNTPOINT'
+    'hostname; findmnt /var/lib/etcddisk -o TARGET,SOURCE,FSTYPE,OPTIONS; lsblk -o NAME,SIZE,LABEL,MOUNTPOINT; ls /var/lib/etcddisk/etcd'
 done
+kubectl -n kube-system get pod -l component=etcd \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].command}{"\n"}{end}' | tr ' ' '\n' | grep -E 'etcd-|data-dir'
 ```
 
-`SOURCE` should be the data disk's partition, not the root filesystem, with
-`LABEL=etcd` on it. If it is the root filesystem, the guard did not fire and
-the manifest that reached the node is not the one this step wrote.
+`SOURCE` should be the data disk's partition with `LABEL=etcd` on it, the
+`etcd` directory under the mount should hold `member/`, and every member's
+`--data-dir` should be `/var/lib/etcddisk/etcd`. If the mount is missing, the
+guard did not fire and the manifest that reached the node is not the one this
+step wrote.
 
 ## Debugging a control plane node that never joined
 
@@ -508,7 +520,7 @@ sudo cloud-init status --long                  # done, error, or still running, 
 sudo tail -50 /var/log/cloud-init-output.log   # the guard's own message is here if it fired
 sudo grep -iE 'error|fail|warn' /var/log/cloud-init.log | tail -30
 lsblk -o NAME,SIZE,TYPE,LABEL,MOUNTPOINT       # is the data disk there, and under which name
-findmnt -T /var/lib/etcd -o TARGET,SOURCE      # is etcd's directory on it
+findmnt /var/lib/etcddisk -o TARGET,SOURCE     # is the disk mounted where kubeadm was told etcd lives
 sudo journalctl -u kubelet --no-pager | tail -30
 ```
 
@@ -524,6 +536,11 @@ What the disk change can fail on, in the order to check:
 - **cloud-init failed before the mount.** `cloud-init status --long` names the
   module; `disk_setup` refusing an already-partitioned device is the usual one
   on a reused disk, and `overwrite: false` is deliberate.
+- **kubeadm's preflight refused the data directory.** `DirAvailable--var-lib-etcd:
+  /var/lib/etcd is not empty` in `cloud-init-output.log`, with `lost+found` as
+  the only thing in it, is a disk mounted on the data directory itself. The
+  patch mounts one level up for exactly this reason; a class copy made before
+  it did not, and needs `clusterclass` re-run.
 
 A node without a login cannot be read this way, and the console in Prism has no
 password to offer. Delete the stuck Machine on the bootstrap cluster and the

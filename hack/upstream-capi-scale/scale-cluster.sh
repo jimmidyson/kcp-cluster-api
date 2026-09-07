@@ -117,6 +117,14 @@ ETCD_DISK_SIZE="${ETCD_DISK_SIZE-32Gi}"
 # the name, which is why the filesystem is labelled and mounted by label and
 # the mount is checked before kubeadm runs.
 ETCD_DISK_DEVICE="${ETCD_DISK_DEVICE:-/dev/sdb}"
+# Where the disk is mounted — and it is not /var/lib/etcd. mke2fs puts a
+# lost+found directory on every new filesystem, and kubeadm's preflight refuses
+# an etcd data directory that is not empty, so a disk mounted on /var/lib/etcd
+# fails every node with "DirAvailable--var-lib-etcd: /var/lib/etcd is not
+# empty". The disk is mounted here and kubeadm is told to use the etcd
+# subdirectory of it, which does not exist until kubeadm creates it. The same
+# arrangement as Cluster API's Azure provider documents for its etcd disk.
+ETCD_DISK_MOUNT="${ETCD_DISK_MOUNT:-/var/lib/etcddisk}"
 # The storage container to create it in. Empty leaves the choice to Prism.
 ETCD_DISK_STORAGE_CONTAINER="${ETCD_DISK_STORAGE_CONTAINER-${NUTANIX_STORAGE_CONTAINER_NAME:-}}"
 
@@ -212,7 +220,7 @@ config() {
   [[ -z "${NUTANIX_SSH_AUTHORIZED_KEY:-}" ]] || sshlogin="user ${SSH_USER}, key ${NUTANIX_SSH_AUTHORIZED_KEY##* } (from NUTANIX_SSH_AUTHORIZED_KEY, via CAREN's users variable)"
   local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
   if [[ -n "${ETCD_DISK_SIZE}" ]]; then
-    etcddisk="${ETCD_DISK_SIZE} as ${ETCD_DISK_DEVICE}, mounted on /var/lib/etcd"
+    etcddisk="${ETCD_DISK_SIZE} as ${ETCD_DISK_DEVICE}, mounted on ${ETCD_DISK_MOUNT}, etcd data in ${ETCD_DISK_MOUNT}/etcd"
     [[ -z "${ETCD_DISK_STORAGE_CONTAINER}" ]] || etcddisk="${etcddisk}, in storage container ${ETCD_DISK_STORAGE_CONTAINER}"
   fi
   cat <<CONFIG
@@ -442,7 +450,7 @@ PATCH
      --arg retry "${LEADER_ELECT_RETRY_PERIOD}" \
      --arg patchdir "${patch_dir}" --argjson setpatchdir "${set_patch_dir}" \
      --arg probe "${probe}" \
-     --arg disksize "${ETCD_DISK_SIZE}" --arg diskdev "${ETCD_DISK_DEVICE}" \
+     --arg disksize "${ETCD_DISK_SIZE}" --arg diskdev "${ETCD_DISK_DEVICE}" --arg diskmount "${ETCD_DISK_MOUNT}" \
      --arg diskcontainer "${ETCD_DISK_STORAGE_CONTAINER}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
@@ -486,10 +494,10 @@ PATCH
               jsonPatches: [{
                 op: "add",
                 path: "\($k)/clusterConfiguration/etcd",
-                value: {local: {extraArgs: [
+                value: {local: ({extraArgs: [
                   {name: "quota-backend-bytes", value: $quota},
                   {name: "listen-metrics-urls", value: "http://0.0.0.0:2381"}
-                ]}}
+                ]} + (if $disksize == "" then {} else {dataDir: "\($diskmount)/etcd"} end))}
               }]
             }]
           }]
@@ -507,7 +515,7 @@ PATCH
           }] end)
           + (if $disksize == "" then [] else [{
             name: "etcdDisk",
-            description: "etcd on a disk of its own. The template puts /var/lib/etcd on the root disk beside the API server audit log and the container logs, so under a burst the WAL fsyncs behind tens of thousands of audit records on one vdisk. CAPX attaches the disk, cloud-init partitions, formats and mounts it by label before kubeadm runs, and a node whose disk is not mounted refuses to run kubeadm rather than putting etcd on the root disk quietly.",
+            description: "etcd on a disk of its own. The template puts /var/lib/etcd on the root disk beside the API server audit log and the container logs, so under a burst the WAL fsyncs behind tens of thousands of audit records on one vdisk. CAPX attaches the disk, cloud-init partitions, formats and mounts it by label before kubeadm runs, kubeadm is pointed at the etcd subdirectory of the mount (the mount itself carries lost+found, which the preflight refuses), and a node whose disk is not mounted refuses to run kubeadm rather than putting etcd on the root disk quietly.",
             definitions: [{
               selector: {
                 apiVersion: $cpinfra.apiVersion,
@@ -541,11 +549,11 @@ PATCH
               }, {
                 op: "add",
                 path: "\($k)/mounts",
-                value: [["LABEL=etcd", "/var/lib/etcd", "ext4", "defaults,noatime,nofail"]]
+                value: [["LABEL=etcd", $diskmount, "ext4", "defaults,noatime,nofail"]]
               }, {
                 op: "add",
                 path: "\($k)/preKubeadmCommands/-",
-                value: "mountpoint -q /var/lib/etcd || { echo \"etcd disk is not mounted on /var/lib/etcd; refusing to run kubeadm on the root disk\" >&2; exit 1; }"
+                value: "mountpoint -q \($diskmount) || { echo \"etcd disk is not mounted on \($diskmount); refusing to run kubeadm with etcd on the root disk\" >&2; exit 1; }"
               }]
             }]
           }] end))' <<<"${class_json}" \
@@ -571,9 +579,10 @@ Applied as ClusterClass ${dst}. Things to check against your CAREN version:
     template (CAPX v1.5 or later), and diskSetup, mounts and a
     preKubeadmCommands guard on the kubeadm config. If the template already
     carries any of those three, the add replaces it — merge by hand instead.
-    After the roll, "findmnt /var/lib/etcd" on a control plane node must show
-    the data disk; a node that fails the guard never runs kubeadm and its
-    Machine stays unready, which is the failure to look for.
+    After the roll, "findmnt ${ETCD_DISK_MOUNT}" on a control plane node must
+    show the data disk and etcd's --data-dir must be ${ETCD_DISK_MOUNT}/etcd; a
+    node that fails the guard never runs kubeadm and its Machine stays unready,
+    which is the failure to look for.
 
 Nothing else on the API server is patched. See the README: changing an argument
 CAREN already sets, profiling among them, cannot be done from a ClusterClass
