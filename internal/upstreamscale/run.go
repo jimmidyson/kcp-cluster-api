@@ -106,6 +106,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	controllers := r.Target.Controllers()
 	store := r.Target.Store()
+	started := time.Now()
 
 	sample := func(label string, clusters, machines int) {
 		components, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers)
@@ -199,6 +200,17 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	// difference between two large numbers, and without this the smaller of
 	// them is still a fleet.
 	sample("baseline (no clusters)", 0, 0)
+
+	// And whether that baseline is this run's. A process that was already
+	// running holds whatever it served last, which on one measured cluster was
+	// twenty-three times the fleet's own cost. See Inherited.
+	if len(report.Samples) > 0 {
+		base := report.Samples[len(report.Samples)-1]
+		if note := DescribeInherited(Inherited(base.Components, started)); note != "" {
+			report.AddFact("inheritedBaseline", note)
+			r.logf("WARNING: %s", note)
+		}
+	}
 
 	var rungs []RungResult
 	held := 0

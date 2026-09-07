@@ -503,6 +503,8 @@ func ParseAPIServer(r io.Reader) (APIServer, error) {
 		switch name {
 		case "go_goroutines":
 			out.Process.Goroutines, sawGoroutines = int(value), true
+		case "process_start_time_seconds":
+			out.Process.StartUnix = value
 		case "go_memstats_heap_inuse_bytes":
 			out.HeapInUseBytes = uint64(value)
 		case "go_memstats_heap_idle_bytes":

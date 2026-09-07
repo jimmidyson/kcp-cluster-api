@@ -663,6 +663,59 @@ If the run reports `shedding load: N request(s) rejected by priority and
 fairness`, flow control is doing its job — a 429 with `Retry-After` is a client
 backing off, which is a better outcome than the timeouts it replaces.
 
+### Restart the API servers before a measured run, or the baseline is the last one
+
+Measured on this cluster, both readings against an API with **no Clusters, no
+Machines and no events left in it**:
+
+| | served 1500 clusters yesterday | restarted | ratio |
+|---|--:|--:|--:|
+| `heap_alloc` (live) | 4.91 GiB | **216 MiB** | 23x |
+| `heap_inuse` | 8.69 GiB | 256 MiB | 34x |
+| `sys` | 26.1 GiB | 345 MiB | 78x |
+
+Same cluster, same CRDs installed, same nothing to serve. So having Cluster
+API's CRDs installed costs about **200 MiB**, not 5 GiB, and the rest was one
+fleet's history — live heap, still referenced, after the objects were deleted
+and their events expired.
+
+That contaminated every absolute memory figure recorded before it. A run
+reported the control plane "82% full at 1500 clusters" and the node was
+concluded to be the binding constraint; most of that fullness was a fleet that
+no longer existed. Slopes taken as differences between rungs probably survive.
+Levels do not.
+
+**`kubectl delete pod` does not restart a static pod.** It deletes the mirror
+pod, and the kubelet re-creates the API object from the manifest on disk while
+leaving the process alone — `wait --for=condition=Ready` then passes instantly
+against something that never went away. `sys_bytes` byte-identical across a
+"restart" is the tell. Kill the container instead and let the kubelet rebuild it
+from the untouched manifest:
+
+```sh
+kubectl debug node/<control-plane-node> -it --profile=sysadmin --image=busybox -- \
+  chroot /host sh -c 'crictl stop $(crictl ps --name kube-apiserver -q)'
+```
+
+One node at a time; the other two hold the VIP. Nothing under
+`/etc/kubernetes/manifests/` is touched, so there is no way to leave a node
+whose API server never comes back — which is the failure the ClusterClass
+attempt hit.
+
+Then confirm it is genuinely a new process before trusting anything:
+
+```sh
+kubectl -n kube-system get pod kube-apiserver-<node> \
+  -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}{"\n"}'
+```
+
+The run cannot do this for itself — restarting an API server needs the
+container runtime on the node, which is not something a measurement should
+reach for. What it does instead is refuse to present the number quietly:
+`Inherited` reads `process_start_time_seconds` from every sampled process and
+the baseline carries a warning naming any that were already running, with how
+long for. See `internal/upstreamscale/inherited.go`.
+
 ### Live data or memory nobody handed back — the API server line says which
 
 A run reported an API server at **23.5 GiB resident against 9.7 GiB of heap**,

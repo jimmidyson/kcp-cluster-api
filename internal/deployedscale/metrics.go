@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -39,6 +40,12 @@ const (
 	MetricHeapSys    = "go_memstats_sys_bytes"
 	MetricResident   = "process_resident_memory_bytes"
 	MetricCPUSeconds = "process_cpu_seconds_total"
+	// MetricStartTime is when the process began, as seconds since the epoch.
+	//
+	// Recorded because a heap figure is a fact about a process rather than
+	// about a fleet, and the difference cost a whole run's worth of
+	// conclusions. See ProcessSample.StartedBefore.
+	MetricStartTime = "process_start_time_seconds"
 )
 
 // ProcessSample is one manager's own view of itself, scraped from its metrics
@@ -61,6 +68,42 @@ type ProcessSample struct {
 	HeapSysBytes   uint64  `json:"heapSysBytes"`
 	ResidentBytes  uint64  `json:"residentBytes"`
 	CPUSeconds     float64 `json:"cpuSeconds"`
+
+	// StartUnix is when this process started, in seconds since the epoch.
+	//
+	// # Why a sample carries the age of the thing it sampled
+	//
+	// An API server that had served a 1500-cluster fleet the day before held
+	// 4.91 GiB of live heap against an API with no Clusters, no Machines and
+	// no events in it. Restarted, on the same cluster with the same CRDs
+	// installed and the same nothing to serve, it held 216 MiB.
+	//
+	// So better than nine tenths of every memory figure a run had recorded was
+	// the previous run, and nothing in the report said which run it was
+	// measuring. A baseline is supposed to be what the fleet is measured
+	// against; a baseline taken from a process that already served another
+	// fleet is that fleet, still there.
+	StartUnix float64 `json:"startUnix,omitempty"`
+}
+
+// StartedBefore reports whether this process was already running at a given
+// moment — the run's own start, in practice.
+//
+// False when the start time is unknown rather than true: a process that did not
+// publish process_start_time_seconds should read as "cannot tell", and a check
+// that treats silence as contamination cries wolf on every endpoint that omits
+// it.
+func (s ProcessSample) StartedBefore(t time.Time) bool {
+	return s.StartUnix > 0 && s.StartUnix < float64(t.Unix())
+}
+
+// Age is how long this process had been running when the sample was taken.
+// Zero when the start time is unknown.
+func (s ProcessSample) Age(at time.Time) time.Duration {
+	if s.StartUnix <= 0 {
+		return 0
+	}
+	return at.Sub(time.Unix(int64(s.StartUnix), 0))
 }
 
 // ResidentToHeapRatio is the multiplier
@@ -130,6 +173,20 @@ func ParseProcessSample(r io.Reader) (ProcessSample, error) {
 		}
 		return v
 	}
+	// Optional, unlike the rest. Every metric above is one the measurement
+	// cannot proceed without, and a missing one is a process that is not
+	// registering the runtime collectors at all. The start time is a caveat on
+	// figures rather than one of them: a process that does not publish it gets
+	// a sample with no age, and StartedBefore reads that as "cannot tell"
+	// rather than as "started at the epoch" — which would flag every process
+	// in every run as inherited.
+	optional := func(name string) float64 {
+		v, err := value(name)
+		if err != nil {
+			return 0
+		}
+		return v
+	}
 
 	sample := ProcessSample{
 		Goroutines:     int(read(MetricGoroutines)),
@@ -137,6 +194,7 @@ func ParseProcessSample(r io.Reader) (ProcessSample, error) {
 		HeapSysBytes:   uint64(read(MetricHeapSys)),
 		ResidentBytes:  uint64(read(MetricResident)),
 		CPUSeconds:     read(MetricCPUSeconds),
+		StartUnix:      optional(MetricStartTime),
 	}
 	if err := errors.Join(errs...); err != nil {
 		return ProcessSample{}, err

@@ -1,0 +1,90 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package upstreamscale
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
+)
+
+// inheritedGrace is how far a process may predate a run before its baseline is
+// treated as somebody else's.
+//
+// Generous, because starting a run involves patching the managers and waiting
+// for them to settle, and a process that came up two minutes before the first
+// sample is this run's by any reasonable reading. The case being caught is a
+// process measured in hours, not one measured in minutes.
+const inheritedGrace = 10 * time.Minute
+
+// Inherited names the processes whose baseline is a previous run's.
+//
+// # What this is worth
+//
+// An API server that had served a 1500-cluster fleet the day before held
+// 4.91 GiB of live heap against an API with no Clusters, no Machines and no
+// events left in it. The same process restarted, on the same cluster, with the
+// same CRDs installed and the same nothing to serve, held 216 MiB.
+//
+// Twenty-three times. So better than nine tenths of every memory figure the
+// run had recorded was the fleet before it, and the report said nothing —
+// which turned into a conclusion, stated with a percentage: the control plane
+// was "82% full at 1500 clusters" and the node was therefore the binding
+// constraint. Most of that fullness was a fleet that no longer existed.
+//
+// A run cannot fix this on its own — restarting an API server needs the
+// container runtime on the node, which is not something a measurement should
+// reach for. What it can do is refuse to present the number quietly. A
+// baseline is what everything else is measured against, and one inherited from
+// another run is the other run, still sitting there.
+//
+// # Why every process and not just the API server
+//
+// A manager that has been up for a day carries the same thing for the same
+// reason, and the managers are half of what the report is about. The check is
+// on the sample rather than on the component, so a process that publishes
+// process_start_time_seconds is covered whatever it is.
+func Inherited(components []deployedscale.ComponentSample, runStart time.Time) []string {
+	cutoff := runStart.Add(-inheritedGrace)
+
+	var old []string
+	for _, c := range components {
+		if !c.Process.StartedBefore(cutoff) {
+			continue
+		}
+		old = append(old, fmt.Sprintf("%s (running %s)",
+			c.Component, c.Process.Age(runStart).Round(time.Minute)))
+	}
+	sort.Strings(old)
+	return old
+}
+
+// DescribeInherited is the note a baseline carries when it is not its own.
+func DescribeInherited(old []string) string {
+	if len(old) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("this baseline is not this run's: %s were already running before it began, "+
+		"so their heap holds whatever they served last. An API server that had served 1500 clusters "+
+		"the day before read 4.91 GiB against an empty API and 216 MiB once restarted, so a figure "+
+		"taken this way can be twenty times the fleet's own cost — restart them and take the "+
+		"baseline again before quoting anything absolute from this run",
+		strings.Join(old, ", "))
+}
