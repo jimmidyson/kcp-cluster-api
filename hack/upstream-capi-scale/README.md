@@ -428,9 +428,13 @@ does, and a store with its own disk is one fewer thing a rung can fail on for a
 reason that is not the fleet.
 
 `clusterclass` adds it as a third patch on the copy, `etcdDisk`. `ETCD_DISK_SIZE`
-is the size, `50Gi` by default and empty to leave etcd on the root disk, which
-is what the recorded runs used; `ETCD_DISK_DEVICE` is the name the guest gives
-it, `/dev/sdb`; `ETCD_DISK_STORAGE_CONTAINER` is the container to create it in,
+is the size, `32Gi` by default and empty to leave etcd on the root disk, which
+is what the recorded runs used. The size is derived: the backend file at its
+8 GiB quota, a second copy of it while `defrag` rewrites the file beside the
+old one before swapping, the WAL segments and snapshots at under a gigabyte,
+and room. Below about 17 GiB a defragmentation between rungs can fail with the
+disk full, which would present as the quota. The vdisk is thin-provisioned, so
+the figure is a ceiling rather than a cost. `ETCD_DISK_DEVICE` is the name the guest gives it, `/dev/sdb`; `ETCD_DISK_STORAGE_CONTAINER` is the container to create it in,
 defaulting to `NUTANIX_STORAGE_CONTAINER_NAME` from the environment and empty
 to leave the choice to Prism. `config` prints all of it.
 

@@ -106,7 +106,12 @@ LEADER_ELECT_RETRY_PERIOD="${LEADER_ELECT_RETRY_PERIOD-26s}"
 # cloud-init before kubeadm runs, and a node whose disk is not mounted refuses
 # to run kubeadm at all rather than quietly putting etcd on the root disk.
 # Empty leaves etcd on the root disk, which is what the recorded runs used.
-ETCD_DISK_SIZE="${ETCD_DISK_SIZE-50Gi}"
+#
+# 32Gi is derived, not round: the backend file at its 8 GiB quota, a second
+# copy of it while defrag rewrites the file beside the old one, the WAL and
+# snapshots under a gigabyte, and room. Below about 17 GiB a defragmentation
+# between rungs can fail with the disk full, which would look like the quota.
+ETCD_DISK_SIZE="${ETCD_DISK_SIZE-32Gi}"
 # The device the guest sees the disk as. The system disk is SCSI index 0 and
 # this one is index 1, which Linux names /dev/sdb on AHV; nothing guarantees
 # the name, which is why the filesystem is labelled and mounted by label and

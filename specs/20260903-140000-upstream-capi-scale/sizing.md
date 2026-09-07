@@ -91,8 +91,8 @@ cliff, and revisions between compactions are what fill it during a climb.
 - Fast local SSD, **on a disk of its own**. etcd's fsync latency is the quietest
   way for a scale test to turn into a latency test, and on CAREN's template
   `/var/lib/etcd` shares the root disk with the API server's audit log and the
-  container logs. The provisioning script attaches a 50 GiB data disk and mounts
-  it there; see `hack/upstream-capi-scale/README.md`, "etcd on a disk of its
+  container logs. The provisioning script attaches a 32 GiB data disk and mounts
+  it there — twice the quota for a defragmentation's second copy, plus the WAL; see `hack/upstream-capi-scale/README.md`, "etcd on a disk of its
   own".
 
 ### Where each component lands, and why the report says so
