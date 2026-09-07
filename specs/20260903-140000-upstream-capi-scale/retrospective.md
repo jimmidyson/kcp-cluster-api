@@ -294,9 +294,10 @@ or isolates the small writes.
   liveness probe of `/livez?exclude=etcd` so the kubelet does not kill an API
   server for a slow store, 9-second etcd health and ready check timeouts, and
   137/107/26-second leader election on the controller manager and scheduler,
-  built for a 78-second API server outage. The arguments append through the
-  ClusterClass copy; the probe goes through kubeadm's patch directory, which
-  CAREN's class already uses. See `hack/upstream-capi-scale/README.md`.
+  built for a 78-second API server outage. The provisioning script now
+  applies all three through the ClusterClass copy: the arguments as appends,
+  the probe as a kubeadm patch file in the directory CAREN's class already
+  uses. See `hack/upstream-capi-scale/README.md`.
 - **Keep etcd's database in the page cache**, which is the memory ceiling on
   the API server from the section below, and keep the etcd leader off the
   node that holds the controller-manager leader.

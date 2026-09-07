@@ -3,7 +3,7 @@
 #
 #   config       resolve and print every input, touching nothing
 #   bootstrap    a local kind cluster, with CAPX and CAREN on it
-#   clusterclass copy CAREN's ClusterClass and add the etcd backend quota
+#   clusterclass copy CAREN's ClusterClass; add the etcd quota and the control plane tolerances
 #   create       create the workload cluster and wait for it
 #   kubeconfig   write the workload cluster's kubeconfig
 #   install      clusterctl init the scale test's own providers, and prepare them
@@ -73,6 +73,29 @@ BOOTSTRAP_CAPI_VERSION="${BOOTSTRAP_CAPI_VERSION:-v1.12.5}"
 # etcd's default 2 GiB backend quota is a cliff a climbing fleet walks off, and
 # CAREN has no variable for it — hence the ClusterClass copy below.
 ETCD_QUOTA_BYTES="${ETCD_QUOTA_BYTES:-8589934592}"
+
+# The three tolerances OpenShift ships as production defaults, applied here for
+# the reason it applies them: a store that is slow for a minute should cost a
+# slow minute, not three process deaths. Measured on this cluster, a five-minute
+# compaction on a cold page cache held the etcd apply loop for 59 seconds, and
+# kubeadm's defaults turned that into the kubelet killing the API server for
+# failing /livez while the controller manager and scheduler lost their leases
+# to a 5s GET. Each knob is empty to keep kubeadm's default, and config prints
+# which. See the README, "The compaction stall".
+#
+# The API server's etcd health and ready check timeouts, both, against kubeadm's
+# 2s. A check that gives up in two seconds reports a slow store as a dead one.
+APISERVER_ETCD_CHECK_TIMEOUT="${APISERVER_ETCD_CHECK_TIMEOUT-9s}"
+# Take the etcd check out of the API server's liveness probe, so a slow store
+# makes the API server unready — it drops out of the VIP — rather than killed.
+# Readiness keeps the check. Anything but "true" keeps kubeadm's /livez.
+APISERVER_LIVEZ_EXCLUDE_ETCD="${APISERVER_LIVEZ_EXCLUDE_ETCD-true}"
+# Leader election on kube-controller-manager and kube-scheduler, against
+# kubeadm's 15s/10s/2s: built to ride out a 78s API server outage. All three or
+# none — each validates against the others.
+LEADER_ELECT_LEASE_DURATION="${LEADER_ELECT_LEASE_DURATION-137s}"
+LEADER_ELECT_RENEW_DEADLINE="${LEADER_ELECT_RENEW_DEADLINE-107s}"
+LEADER_ELECT_RETRY_PERIOD="${LEADER_ELECT_RETRY_PERIOD-26s}"
 
 
 # The CAREN ClusterClass to copy, and the template to generate the Cluster from.
@@ -147,6 +170,12 @@ config() {
   # its own apostrophe.
   local capx="${CAPX_VERSION}"
   [[ -n "${capx}" ]] || capx="unpinned, clusterctl takes its latest (set CAPX_VERSION to pin)"
+  local etcdcheck="${APISERVER_ETCD_CHECK_TIMEOUT}"
+  [[ -n "${etcdcheck}" ]] || etcdcheck="kubeadm default, 2s (APISERVER_ETCD_CHECK_TIMEOUT is empty)"
+  local livez="/livez?exclude=etcd (a slow store makes the API server unready, not dead)"
+  [[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] || livez="kubeadm default, /livez including the etcd check"
+  local leader="lease ${LEADER_ELECT_LEASE_DURATION}, renew ${LEADER_ELECT_RENEW_DEADLINE}, retry ${LEADER_ELECT_RETRY_PERIOD} (OpenShift; kubeadm is 15s/10s/2s)"
+  [[ -n "${LEADER_ELECT_LEASE_DURATION}" ]] || leader="kubeadm default, 15s/10s/2s (LEADER_ELECT_LEASE_DURATION is empty)"
   cat <<CONFIG
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
   kubeconfig             ${BOOTSTRAP_KUBECONFIG}
@@ -163,6 +192,9 @@ CAREN                    ${CAREN_VERSION}
 Cluster API on bootstrap ${BOOTSTRAP_CAPI_VERSION}
 Cluster API under test   ${CAPI_VERSION}
 etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
+API server etcd checks   ${etcdcheck}
+API server liveness      ${livez}
+leader election          ${leader} — on kube-controller-manager and kube-scheduler
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
   control plane pool       ${CONTROL_PLANE_POOL_WORKERS} of ${WORKER_COUNT} workers (0 = one unlabelled pool)
 CONFIG
@@ -302,46 +334,161 @@ NOTE
   # The metrics port carries no data and no authentication — it is etcd's
   # /metrics, not its client API — which is a fair trade on a throwaway scale
   # cluster and would not be on anything else.
+  #
+  # And the three OpenShift tolerances on the control plane, made differently
+  # from the etcd patch: every argument is *appended* to the list the template
+  # already carries rather than the list being replaced. The README records
+  # three failed attempts to change an argument CAREN already sets; these are
+  # not that. The names are new, so the uniqueness rule that refused the first
+  # attempt does not apply; "-" is the one array index the patch validator
+  # allows on add, so the second attempt's refusal does not either; and this
+  # patch is last in spec.patches, so it renders after CAREN's runtime
+  # extension and lands on the lists that extension produced rather than
+  # replacing them, which is what broke a control plane on the third attempt.
+  #
+  # The liveness probe is not an argument. kubeadm generates the probes and has
+  # no knob for them, but it applies patch files to the static pod manifests it
+  # writes, from the directory initConfiguration.patches names — and CAREN's
+  # class already names one and writes its kubelet patches there. So the probe
+  # is one more file appended to kubeadmConfigSpec.files, and no post-kubeadm
+  # command is needed.
+  if [[ -n "${LEADER_ELECT_LEASE_DURATION}${LEADER_ELECT_RENEW_DEADLINE}${LEADER_ELECT_RETRY_PERIOD}" ]] \
+     && [[ -z "${LEADER_ELECT_LEASE_DURATION}" || -z "${LEADER_ELECT_RENEW_DEADLINE}" || -z "${LEADER_ELECT_RETRY_PERIOD}" ]]; then
+    die "set all three of LEADER_ELECT_LEASE_DURATION, LEADER_ELECT_RENEW_DEADLINE and LEADER_ELECT_RETRY_PERIOD, or none: each validates against the others"
+  fi
+
+  local class_json kcpt patch_dir set_patch_dir=false
+  class_json="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+    get clusterclass "${src}" -o json)"
+  kcpt="$(jq -r '.spec.controlPlane.templateRef.name' <<<"${class_json}")"
+
+  # The patch directory is read from the control plane template rather than
+  # assumed. Naming a different one would silently drop every patch CAREN
+  # writes to its own, which is how a kubelet comes up without the hardening
+  # it was given. Only a template that names none gets the default, and then
+  # both init and join are told, since control plane nodes after the first
+  # join.
+  patch_dir="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+    get kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io "${kcpt}" \
+    -o jsonpath='{.spec.template.spec.kubeadmConfigSpec.initConfiguration.patches.directory}')"
+  if [[ -z "${patch_dir}" ]]; then
+    patch_dir=/etc/kubernetes/patches
+    set_patch_dir=true
+  fi
+
+  # A strategic merge patch against the Pod kubeadm generates. Containers merge
+  # by name, so only the probe path changes; host, port and scheme stay as
+  # kubeadm wrote them. The file name is what kubeadm matches on: target,
+  # an alphanumeric suffix, and the patch type.
+  local probe
+  probe="$(cat <<'PATCH'
+spec:
+  containers:
+    - name: kube-apiserver
+      livenessProbe:
+        httpGet:
+          path: /livez?exclude=etcd
+PATCH
+)"
+
   log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
-  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
-    get clusterclass "${src}" -o json \
-    | jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" '
+  log "  API server etcd checks ${APISERVER_ETCD_CHECK_TIMEOUT:-kubeadm default}, liveness $([[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] && echo '/livez?exclude=etcd' || echo 'kubeadm default'), leader election ${LEADER_ELECT_LEASE_DURATION:-kubeadm default}/${LEADER_ELECT_RENEW_DEADLINE:-}/${LEADER_ELECT_RETRY_PERIOD:-} (patches in ${patch_dir})"
+  jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
+     --arg etcdcheck "${APISERVER_ETCD_CHECK_TIMEOUT}" \
+     --arg livez "${APISERVER_LIVEZ_EXCLUDE_ETCD}" \
+     --arg lease "${LEADER_ELECT_LEASE_DURATION}" \
+     --arg renew "${LEADER_ELECT_RENEW_DEADLINE}" \
+     --arg retry "${LEADER_ELECT_RETRY_PERIOD}" \
+     --arg patchdir "${patch_dir}" --argjson setpatchdir "${set_patch_dir}" \
+     --arg probe "${probe}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
+        | (.spec.controlPlane.templateRef) as $cp
+        | "/spec/template/spec/kubeadmConfigSpec" as $k
+        | (
+            (if $etcdcheck == "" then [] else [
+              {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraArgs/-",
+               value: {name: "etcd-healthcheck-timeout", value: $etcdcheck}},
+              {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraArgs/-",
+               value: {name: "etcd-readycheck-timeout", value: $etcdcheck}}
+            ] end)
+            + (if $lease == "" then [] else
+                (["controllerManager", "scheduler"] | map(
+                  {op: "add", path: "\($k)/clusterConfiguration/\(.)/extraArgs/-",
+                   value: {name: "leader-elect-lease-duration", value: $lease}},
+                  {op: "add", path: "\($k)/clusterConfiguration/\(.)/extraArgs/-",
+                   value: {name: "leader-elect-renew-deadline", value: $renew}},
+                  {op: "add", path: "\($k)/clusterConfiguration/\(.)/extraArgs/-",
+                   value: {name: "leader-elect-retry-period", value: $retry}}
+                )) end)
+            + (if $livez != "true" then [] else
+                [{op: "add", path: "\($k)/files/-",
+                  value: {path: "\($patchdir)/kube-apiserver1+strategic.yaml", permissions: "0600", content: $probe}}]
+                + (if $setpatchdir then [
+                    {op: "add", path: "\($k)/initConfiguration/patches", value: {directory: $patchdir}},
+                    {op: "add", path: "\($k)/joinConfiguration/patches", value: {directory: $patchdir}}
+                  ] else [] end)
+              end)
+          ) as $tolerances
         | .spec.patches = ((.spec.patches // []) + [{
             name: "etcdBackendQuota",
             description: "Raise etcd quota-backend-bytes, and open its metrics port. The 2 GiB default is a cliff a climbing fleet walks off, and kubeadm points --listen-metrics-urls at 127.0.0.1, which no scraper outside the node can reach. CAREN has a variable for neither.",
             definitions: [{
               selector: {
-                apiVersion: .spec.controlPlane.templateRef.apiVersion,
-                kind: .spec.controlPlane.templateRef.kind,
+                apiVersion: $cp.apiVersion,
+                kind: $cp.kind,
                 matchResources: {controlPlane: true}
               },
               jsonPatches: [{
                 op: "add",
-                path: "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd",
+                path: "\($k)/clusterConfiguration/etcd",
                 value: {local: {extraArgs: [
                   {name: "quota-backend-bytes", value: $quota},
                   {name: "listen-metrics-urls", value: "http://0.0.0.0:2381"}
                 ]}}
               }]
             }]
-          }])' \
+          }]
+          + (if ($tolerances | length) == 0 then [] else [{
+            name: "controlPlaneTolerances",
+            description: "The OpenShift production defaults that let a control plane ride out a slow minute from its store: 9s etcd health and ready checks and a liveness probe that excludes etcd on the API server, and 137s/107s/26s leader election on the controller manager and scheduler. Every argument is appended under a new name, last in the patch order, so it lands on the lists the CAREN runtime extension produced. The probe is a kubeadm patch file, since kubeadm has no knob for probes.",
+            definitions: [{
+              selector: {
+                apiVersion: $cp.apiVersion,
+                kind: $cp.kind,
+                matchResources: {controlPlane: true}
+              },
+              jsonPatches: $tolerances
+            }]
+          }] end))' <<<"${class_json}" \
     | kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f -
 
   cat <<NOTE
 
-Applied as ClusterClass ${dst}. Two things to check against your CAREN version:
+Applied as ClusterClass ${dst}. Things to check against your CAREN version:
 
   * extraArgs is a list of {name, value} in the v1beta2 kubeadm API this
     Cluster API uses. If your CAREN ClusterClass is on an older API where
-    extraArgs is a map, the patch above needs the map form instead.
-  * the patch replaces .etcd wholesale. If your ClusterClass already patches
-    etcd, merge the two rather than stacking them.
+    extraArgs is a map, the patches above need the map form instead.
+  * the etcd patch replaces .etcd wholesale. If your ClusterClass already
+    patches etcd, merge the two rather than stacking them.
+  * the tolerances append to apiServer, controllerManager and scheduler
+    extraArgs, which must already exist on the template (CAREN's carry
+    profiling in all three). If your ClusterClass already sets any of these
+    names, the KubeadmControlPlane is refused at admission with "extraArgs name
+    must be unique", and the fix is to empty that knob.
+  * the probe patch is written to ${patch_dir}, read from the control plane
+    template$([[ "${set_patch_dir}" == true ]] && echo " — the template named none, so both init and join are told" || echo "")".
 
-Nothing here patches the API server. See the README: turning its profiling back
-on cannot be done from a ClusterClass patch on a CAREN class, and trying broke a
-control plane rather than failing cleanly.
+Nothing else on the API server is patched. See the README: changing an argument
+CAREN already sets, profiling among them, cannot be done from a ClusterClass
+patch on a CAREN class, and trying broke a control plane rather than failing
+cleanly. Appending a new one can.
+
+On a cluster that already exists this rolls the control plane, one machine at a
+time — see the README, "Changing the ClusterClass on a cluster that already
+exists". The API servers come back fresh, which is the baseline a measured run
+wants anyway.
 NOTE
 }
 

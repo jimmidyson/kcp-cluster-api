@@ -341,17 +341,62 @@ production default, and each maps onto one link in the chain above:
 | `--etcd-healthcheck-timeout=9s`, `--etcd-readycheck-timeout=9s` | 2 s | readiness on every API server went 500 during the stall |
 | leader election 137 s lease, 107 s renew, 26 s retry on every controller, built for a 78 s API server outage | 15 s, 10 s, 2 s | the controller manager lost its lease to a 5 s GET |
 
+`clusterclass` applies all three, as a second patch on the copy named
+`controlPlaneTolerances`, with OpenShift's values as the defaults. Each knob
+empty keeps kubeadm's default, and `config` prints which:
+
+| knob | default | what it sets |
+|---|---|---|
+| `APISERVER_ETCD_CHECK_TIMEOUT` | `9s` | `--etcd-healthcheck-timeout` and `--etcd-readycheck-timeout` on the API server |
+| `APISERVER_LIVEZ_EXCLUDE_ETCD` | `true` | the API server's liveness probe path, `/livez?exclude=etcd` |
+| `LEADER_ELECT_LEASE_DURATION`, `LEADER_ELECT_RENEW_DEADLINE`, `LEADER_ELECT_RETRY_PERIOD` | `137s`, `107s`, `26s` | the three `--leader-elect-*` flags on kube-controller-manager and kube-scheduler, all or none |
+
 The timeouts and the leader election flags are new argument names, so they
-append through the ClusterClass copy exactly as the etcd quota does — see below.
-The probe path is not an argument: kubeadm generates the probes and exposes no
-knob for them, but it does apply **patch files** to the static pod manifests it
-writes, from the directory named by `initConfiguration.patches.directory` and
+append through the ClusterClass copy exactly as the etcd quota does. The probe
+path is not an argument: kubeadm generates the probes and exposes no knob for
+them, but it does apply **patch files** to the static pod manifests it writes,
+from the directory named by `initConfiguration.patches.directory` and
 `joinConfiguration.patches.directory`. CAREN's class already names
 `/etc/kubernetes/patches` in both and writes two `kubeletconfiguration` patches
-there, so a `kube-apiserver1+strategic.yaml` setting the liveness path is one
-more entry appended to `files`, and no post-kubeadm command is needed. The
-memory ceiling on the API server that would have kept the database in cache is
-the root fix, and is a separate question.
+there, so the liveness path is one more file appended to `files`:
+
+```yaml
+# /etc/kubernetes/patches/kube-apiserver1+strategic.yaml
+spec:
+  containers:
+    - name: kube-apiserver
+      livenessProbe:
+        httpGet:
+          path: /livez?exclude=etcd
+```
+
+A strategic merge patch against the Pod kubeadm generates: containers merge by
+name, so only the path changes and the host, port and scheme stay as kubeadm
+wrote them. The file name is what kubeadm matches on — target, an alphanumeric
+suffix, the patch type — and files apply in alphanumeric order. No post-kubeadm
+command: a `sed` over the manifest after kubeadm has written it restarts the API
+server on every fresh node and is invisible to `kubeadm upgrade`, which
+re-applies patches from the directory.
+
+The directory is **read from the control plane template**, not assumed. Naming
+a different one would silently drop every patch CAREN writes to its own, which
+is how a kubelet comes up without the hardening it was given. Only a template
+that names none gets `/etc/kubernetes/patches`, and then both `initConfiguration`
+and `joinConfiguration` are told, since every control plane node after the
+first joins.
+
+The memory ceiling on the API server that would have kept the database in cache
+is the root fix, and is a separate question.
+
+Check all three took, on every node, because the roll picks them up one at a
+time:
+
+```sh
+export KUBECONFIG=../../bin/capi-scale.kubeconfig
+kubectl -n kube-system get pod -l tier=control-plane \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].livenessProbe.httpGet.path}{"\t"}{.spec.containers[0].command}{"\n"}{end}' \
+  | tr ' ' '\n' | grep -E '^(kube-|etcd-)|livez|etcd-(health|ready)check|leader-elect'
+```
 
 **Why an append works when the profiling patch did not.** An argument
 *appended* — `add` at index `-`, the one array index the patch validator
