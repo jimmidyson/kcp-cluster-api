@@ -88,8 +88,12 @@ cliff, and revisions between compactions are what fill it during a climb.
   interruption into a full re-list by every API server. Do not turn it off
   either, for a soak or otherwise; the revisions between compactions are what
   fill the quota.
-- Fast local SSD. etcd's fsync latency is the quietest way for a scale test to
-  turn into a latency test.
+- Fast local SSD, **on a disk of its own**. etcd's fsync latency is the quietest
+  way for a scale test to turn into a latency test, and on CAREN's template
+  `/var/lib/etcd` shares the root disk with the API server's audit log and the
+  container logs. The provisioning script attaches a 50 GiB data disk and mounts
+  it there; see `hack/upstream-capi-scale/README.md`, "etcd on a disk of its
+  own".
 
 ### Where each component lands, and why the report says so
 

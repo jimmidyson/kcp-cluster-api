@@ -416,6 +416,56 @@ kubectl -n kube-system logs etcd-<leader> | grep 'finished scheduled compaction'
   | jq -r '"\(.ts)  took=\(.took)  in-use=\(."current-db-size-in-use")"' | tail
 ```
 
+## etcd on a disk of its own
+
+CAREN's template puts `/var/lib/etcd` on the root disk. So does the API
+server's audit log, which CAREN turns on, and the container logs, and under a
+burst of 500 clusters the audit log alone is tens of thousands of records on
+the same vdisk etcd is fsyncing its WAL to. The leader measured during that
+burst showed a clean fsync tail, so this is not the proven cause of any stall
+here. It is etcd's own guidance, it is what every production control plane
+does, and a store with its own disk is one fewer thing a rung can fail on for a
+reason that is not the fleet.
+
+`clusterclass` adds it as a third patch on the copy, `etcdDisk`. `ETCD_DISK_SIZE`
+is the size, `50Gi` by default and empty to leave etcd on the root disk, which
+is what the recorded runs used; `ETCD_DISK_DEVICE` is the name the guest gives
+it, `/dev/sdb`; `ETCD_DISK_STORAGE_CONTAINER` is the container to create it in,
+defaulting to `NUTANIX_STORAGE_CONTAINER_NAME` from the environment and empty
+to leave the choice to Prism. `config` prints all of it.
+
+Two halves, because the disk is attached by one provider and used by another:
+
+- **CAPX attaches it**, as a `dataDisks` entry on the control plane's
+  `NutanixMachineTemplate`: SCSI, device index 1, which is the slot after the
+  system disk. This needs CAPX v1.5 or later.
+- **cloud-init partitions, formats and mounts it before kubeadm runs**, through
+  `diskSetup` and `mounts` on the kubeadm config: one GPT partition, ext4 with
+  the label `etcd`, mounted by that label on `/var/lib/etcd`. By label rather
+  than by device, because nothing guarantees a device name, and `nofail` so a
+  missing disk cannot hang the boot.
+
+`nofail` is what makes the third piece necessary. A node whose disk did not
+mount would boot, run kubeadm, and put etcd on the root disk without a word,
+and the run would measure a store it thought was on its own disk. So a
+`preKubeadmCommands` guard checks the mount and refuses to run kubeadm without
+it. The failure is then a Machine that never becomes ready, which is loud and
+is the right way round.
+
+Check it after the roll, on every control plane node:
+
+```sh
+export KUBECONFIG=../../bin/capi-scale.kubeconfig
+for n in $(kubectl get nodes -l node-role.kubernetes.io/control-plane -o name); do
+  kubectl debug "$n" -it --profile=sysadmin --image=busybox -- chroot /host sh -c \
+    'hostname; findmnt -T /var/lib/etcd -o TARGET,SOURCE,FSTYPE,OPTIONS; lsblk -o NAME,SIZE,LABEL,MOUNTPOINT'
+done
+```
+
+`SOURCE` should be the data disk's partition, not the root filesystem, with
+`LABEL=etcd` on it. If it is the root filesystem, the guard did not fire and
+the manifest that reached the node is not the one this step wrote.
+
 ## Changing the ClusterClass on a cluster that already exists
 
 The etcd patches live in the ClusterClass copy, and the Cluster names that copy.

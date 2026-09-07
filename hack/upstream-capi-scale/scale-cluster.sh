@@ -3,7 +3,7 @@
 #
 #   config       resolve and print every input, touching nothing
 #   bootstrap    a local kind cluster, with CAPX and CAREN on it
-#   clusterclass copy CAREN's ClusterClass; add the etcd quota and the control plane tolerances
+#   clusterclass copy CAREN's ClusterClass; add the etcd quota, its disk, and the control plane tolerances
 #   create       create the workload cluster and wait for it
 #   kubeconfig   write the workload cluster's kubeconfig
 #   install      clusterctl init the scale test's own providers, and prepare them
@@ -97,6 +97,24 @@ LEADER_ELECT_LEASE_DURATION="${LEADER_ELECT_LEASE_DURATION-137s}"
 LEADER_ELECT_RENEW_DEADLINE="${LEADER_ELECT_RENEW_DEADLINE-107s}"
 LEADER_ELECT_RETRY_PERIOD="${LEADER_ELECT_RETRY_PERIOD-26s}"
 
+# etcd on a disk of its own. On CAREN's template it shares the root disk with
+# the API server's audit log, the container logs and everything else on the
+# node that syncs — and under a burst the audit log alone is a record per
+# object, tens of thousands of them, on the vdisk the WAL is fsyncing to.
+# etcd's own guidance is a dedicated disk and every production control plane
+# gives it one. The disk is attached by CAPX, formatted and mounted by
+# cloud-init before kubeadm runs, and a node whose disk is not mounted refuses
+# to run kubeadm at all rather than quietly putting etcd on the root disk.
+# Empty leaves etcd on the root disk, which is what the recorded runs used.
+ETCD_DISK_SIZE="${ETCD_DISK_SIZE-50Gi}"
+# The device the guest sees the disk as. The system disk is SCSI index 0 and
+# this one is index 1, which Linux names /dev/sdb on AHV; nothing guarantees
+# the name, which is why the filesystem is labelled and mounted by label and
+# the mount is checked before kubeadm runs.
+ETCD_DISK_DEVICE="${ETCD_DISK_DEVICE:-/dev/sdb}"
+# The storage container to create it in. Empty leaves the choice to Prism.
+ETCD_DISK_STORAGE_CONTAINER="${ETCD_DISK_STORAGE_CONTAINER-${NUTANIX_STORAGE_CONTAINER_NAME:-}}"
+
 
 # The CAREN ClusterClass to copy, and the template to generate the Cluster from.
 # Names differ between CAREN versions, so they are inputs rather than
@@ -176,6 +194,11 @@ config() {
   [[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] || livez="kubeadm default, /livez including the etcd check"
   local leader="lease ${LEADER_ELECT_LEASE_DURATION}, renew ${LEADER_ELECT_RENEW_DEADLINE}, retry ${LEADER_ELECT_RETRY_PERIOD} (OpenShift; kubeadm is 15s/10s/2s)"
   [[ -n "${LEADER_ELECT_LEASE_DURATION}" ]] || leader="kubeadm default, 15s/10s/2s (LEADER_ELECT_LEASE_DURATION is empty)"
+  local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
+  if [[ -n "${ETCD_DISK_SIZE}" ]]; then
+    etcddisk="${ETCD_DISK_SIZE} as ${ETCD_DISK_DEVICE}, mounted on /var/lib/etcd"
+    [[ -z "${ETCD_DISK_STORAGE_CONTAINER}" ]] || etcddisk="${etcddisk}, in storage container ${ETCD_DISK_STORAGE_CONTAINER}"
+  fi
   cat <<CONFIG
 bootstrap cluster        ${BOOTSTRAP_CLUSTER}
   kubeconfig             ${BOOTSTRAP_KUBECONFIG}
@@ -195,6 +218,7 @@ etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
 API server etcd checks   ${etcdcheck}
 API server liveness      ${livez}
 leader election          ${leader} — on kube-controller-manager and kube-scheduler
+etcd disk                ${etcddisk}
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
   control plane pool       ${CONTROL_PLANE_POOL_WORKERS} of ${WORKER_COUNT} workers (0 = one unlabelled pool)
 CONFIG
@@ -400,10 +424,13 @@ PATCH
      --arg renew "${LEADER_ELECT_RENEW_DEADLINE}" \
      --arg retry "${LEADER_ELECT_RETRY_PERIOD}" \
      --arg patchdir "${patch_dir}" --argjson setpatchdir "${set_patch_dir}" \
-     --arg probe "${probe}" '
+     --arg probe "${probe}" \
+     --arg disksize "${ETCD_DISK_SIZE}" --arg diskdev "${ETCD_DISK_DEVICE}" \
+     --arg diskcontainer "${ETCD_DISK_STORAGE_CONTAINER}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
         | del(.status)
         | (.spec.controlPlane.templateRef) as $cp
+        | (.spec.controlPlane.machineInfrastructure.templateRef) as $cpinfra
         | "/spec/template/spec/kubeadmConfigSpec" as $k
         | (
             (if $etcdcheck == "" then [] else [
@@ -460,6 +487,50 @@ PATCH
               },
               jsonPatches: $tolerances
             }]
+          }] end)
+          + (if $disksize == "" then [] else [{
+            name: "etcdDisk",
+            description: "etcd on a disk of its own. The template puts /var/lib/etcd on the root disk beside the API server audit log and the container logs, so under a burst the WAL fsyncs behind tens of thousands of audit records on one vdisk. CAPX attaches the disk, cloud-init partitions, formats and mounts it by label before kubeadm runs, and a node whose disk is not mounted refuses to run kubeadm rather than putting etcd on the root disk quietly.",
+            definitions: [{
+              selector: {
+                apiVersion: $cpinfra.apiVersion,
+                kind: $cpinfra.kind,
+                matchResources: {controlPlane: true}
+              },
+              jsonPatches: [{
+                op: "add",
+                path: "/spec/template/spec/dataDisks",
+                value: [({
+                  diskSize: $disksize,
+                  deviceProperties: {deviceType: "Disk", adapterType: "SCSI", deviceIndex: 1}
+                } + (if $diskcontainer == "" then {} else {
+                  storageConfig: {diskMode: "Standard", storageContainer: {type: "name", name: $diskcontainer}}
+                } end))]
+              }]
+            }, {
+              selector: {
+                apiVersion: $cp.apiVersion,
+                kind: $cp.kind,
+                matchResources: {controlPlane: true}
+              },
+              jsonPatches: [{
+                op: "add",
+                path: "\($k)/diskSetup",
+                value: {
+                  partitions: [{device: $diskdev, layout: true, overwrite: false, tableType: "gpt"}],
+                  filesystems: [{device: $diskdev, filesystem: "ext4", label: "etcd",
+                                 extraOpts: ["-F", "-E", "lazy_itable_init=1,lazy_journal_init=1"]}]
+                }
+              }, {
+                op: "add",
+                path: "\($k)/mounts",
+                value: [["LABEL=etcd", "/var/lib/etcd", "ext4", "defaults,noatime,nofail"]]
+              }, {
+                op: "add",
+                path: "\($k)/preKubeadmCommands/-",
+                value: "mountpoint -q /var/lib/etcd || { echo \"etcd disk is not mounted on /var/lib/etcd; refusing to run kubeadm on the root disk\" >&2; exit 1; }"
+              }]
+            }]
           }] end))' <<<"${class_json}" \
     | kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f -
 
@@ -479,6 +550,13 @@ Applied as ClusterClass ${dst}. Things to check against your CAREN version:
     must be unique", and the fix is to empty that knob.
   * the probe patch is written to ${patch_dir}, read from the control plane
     template$([[ "${set_patch_dir}" == true ]] && echo " — the template named none, so both init and join are told" || echo "")".
+  * the etcd disk is a CAPX dataDisks entry on the control plane machine
+    template (CAPX v1.5 or later), and diskSetup, mounts and a
+    preKubeadmCommands guard on the kubeadm config. If the template already
+    carries any of those three, the add replaces it — merge by hand instead.
+    After the roll, "findmnt /var/lib/etcd" on a control plane node must show
+    the data disk; a node that fails the guard never runs kubeadm and its
+    Machine stays unready, which is the failure to look for.
 
 Nothing else on the API server is patched. See the README: changing an argument
 CAREN already sets, profiling among them, cannot be done from a ClusterClass
