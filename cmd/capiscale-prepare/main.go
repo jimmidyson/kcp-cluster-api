@@ -16,8 +16,9 @@ limitations under the License.
 
 // Command capiscale-prepare makes a clusterctl-installed Cluster API ready to
 // be measured: Guaranteed resources and a memory ceiling on every controller, a
-// pprof endpoint on every controller, and — for the DevCluster provider alone —
-// the Docker socket taken away.
+// pprof endpoint on every controller, every controller kept off the control
+// plane nodes, and — for the DevCluster provider alone — the Docker socket
+// taken away.
 //
 // # Why a command rather than a few lines of kubectl patch
 //
@@ -222,6 +223,15 @@ func run(ctx context.Context, kubeconfig, kubecontext, profilerAddr string, dryR
 		if upstreamscale.LeaderElectionDeadlines(&d, tune.Lease, tune.Renew, tune.Retry) {
 			did = append(did, fmt.Sprintf("leader election given %s to renew within a %s lease",
 				tune.Renew, tune.Lease))
+		}
+		// Off the control plane nodes, every one of them. clusterctl's
+		// manifests tolerate the control plane taint and kubeadm's API server
+		// has no memory request, so a control plane node holding a 20 GiB API
+		// server is the emptiest node the scheduler can see — and the etcd
+		// member there pays for whatever lands beside it in page cache. See
+		// upstreamscale.KeepOffControlPlane.
+		if upstreamscale.KeepOffControlPlane(&d) {
+			did = append(did, "kept off the control plane nodes")
 		}
 		if upstreamscale.ProbePatience(&d, tune.ProbeTimeout, tune.ProbeFailures) {
 			did = append(did, fmt.Sprintf("health checks given %ds and %d failures",

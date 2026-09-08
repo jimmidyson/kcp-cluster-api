@@ -24,6 +24,8 @@ import (
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
 // KubeVIPLease is the Lease kube-vip elects its VIP holder through, under the
@@ -147,4 +149,33 @@ func (p Placement) Describe() string {
 			"losing that node loses all three at once", p.EtcdLeaderNode)
 	}
 	return line
+}
+
+// OnControlPlane names the managers that are running on a control plane node,
+// or "" when none is.
+//
+// A warning rather than a failure, and one the report carries at every sample:
+// the samples always named the node each manager ran on, and the DevCluster
+// provider spent a whole run on a control plane node without anybody reading
+// that name as one. The cost is not the provider's own memory. It is the page
+// cache it takes from the etcd member beside it, whose compactions then read
+// from disk — see KeepOffControlPlane.
+func OnControlPlane(components []deployedscale.ComponentSample, controlPlaneNodes []string) string {
+	on := make(map[string]bool, len(controlPlaneNodes))
+	for _, node := range controlPlaneNodes {
+		on[node] = true
+	}
+	var found []string
+	for _, c := range components {
+		if c.Pod.StaticPod || !on[c.Pod.Node] {
+			continue
+		}
+		found = append(found, c.Component+" on "+c.Pod.Node)
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return "running on a control plane node: " + strings.Join(found, ", ") + " — its memory comes " +
+		"out of the page cache the etcd member on that node needs for its backend file, and a member " +
+		"whose compactions read from disk stalls every write through it"
 }

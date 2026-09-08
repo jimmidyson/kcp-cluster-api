@@ -931,6 +931,38 @@ while the control plane's own components, on the longer window, did not. Every
 leader-elected process on the cluster now tolerates the same pause, so a failure
 line can be read without first asking which fuse was shortest.
 
+### The managers are kept off the control plane nodes
+
+A fresh cluster held 1000 clusters and lost the VIP at 1500. kube-vip on
+`skv5v` could not renew its lease because that node's etcd member had stalled
+for about eighty seconds on a compaction its two peers finished in three and
+ten seconds; the next compaction on the same member took **1m11s** against 9 s
+on the leader. Same disk type, same file, same minute. The difference was what
+else was on the node: the DevCluster provider, a 24 GiB Guaranteed pod, sitting
+beside a kube-apiserver already at 20 GiB resident on 32 GiB. With etcd,
+Cilium and the kubelet, about 3 GiB was left for the page cache, and etcd's
+2 GB backend file did not fit — so compaction read it from disk while the apply
+loop waited, and every write through that member, kube-vip's lease renewal on
+localhost included, timed out.
+
+The provider was there for a reason the scheduler cannot see. clusterctl's
+manifests tolerate `node-role.kubernetes.io/control-plane` so a provider can run
+on a single-node bootstrap cluster, and kubeadm gives kube-apiserver a CPU
+request and no memory request, so a control plane node holding a 20 GiB API
+server looks like the emptiest node in the cluster.
+
+`capiscale-prepare` now puts a required node affinity away from the control
+plane label on all four managers (`KeepOffControlPlane`). Affinity rather than
+removing the toleration, because the toleration only matters while the taint
+is there and the affinity says what is meant either way. It is not tuning: a
+management cluster's controllers do not belong on its control plane nodes, and
+no production layout puts them there.
+
+The report also warns when it finds one there anyway, with a
+`managersOnControlPlane@` fact at every sample, because the samples always
+carried the node name and nobody read `capi-scale-vtgjn-skv5v` as a control
+plane node until the member on it had stalled twice.
+
 ### A control plane shedding itself is the ceiling, not a caveat
 
 A rung at 1500 clusters ended with `kube-controller-manager` exiting 1, and the

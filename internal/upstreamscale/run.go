@@ -136,6 +136,15 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		// the report keeps carry this run's restarts too — the report's own
 		// "a container restarted during this run" banner reads them.
 		components = RestartsSince(r.managersAtStart, components)
+		// Which of them shares a node with the control plane, said at every
+		// sample rather than once, because a rescheduled manager can land
+		// there at any rung. See OnControlPlane.
+		if nodes, err := ControlPlaneNodes(ctx, r.Host); err == nil {
+			if warning := OnControlPlane(components, nodes); warning != "" {
+				report.AddFact("managersOnControlPlane@"+label, warning)
+				r.logf("WARNING at %s: %s", label, warning)
+			}
+		}
 		if cp, described, err := r.Target.ControlPlane(ctx, r.Host, opts.APIHeapSamples, opts.APIHeapGap); err == nil {
 			if r.cpRestartsAtStart == nil {
 				r.cpRestartsAtStart = ManagerRestarts(cp)

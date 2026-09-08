@@ -25,6 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
 
 func lease(name, holder string) *coordinationv1.Lease {
@@ -124,5 +126,29 @@ func TestPlacementSaysNothingItDoesNotKnow(t *testing.T) {
 	}
 	if !strings.Contains(got.Describe(), "etcd leader etcd-0") || strings.Contains(got.Describe(), " on ") {
 		t.Errorf("a leader with no known node was described with one: %q", got.Describe())
+	}
+}
+
+// TestAManagerOnAControlPlaneNodeIsNamed, because that is where the DevCluster
+// provider was for a whole run and nothing said so: every sample carried the
+// node name, and the reader had to know which names were control plane nodes.
+func TestAManagerOnAControlPlaneNodeIsNamed(t *testing.T) {
+	components := []deployedscale.ComponentSample{
+		{Component: "capi-controller-manager", Pod: deployedscale.PodFacts{Node: "md-0-a"}},
+		{Component: "capd-controller-manager", Pod: deployedscale.PodFacts{Node: "cp-1"}},
+		{Component: "capi-kubeadm-bootstrap-controller-manager", Pod: deployedscale.PodFacts{Node: "md-0-b"}},
+	}
+	got := OnControlPlane(components, []string{"cp-0", "cp-1", "cp-2"})
+	if !strings.Contains(got, "capd-controller-manager on cp-1") {
+		t.Errorf("the provider on a control plane node is not named: %q", got)
+	}
+	if strings.Contains(got, "capi-controller-manager") {
+		t.Errorf("a manager on a worker was named: %q", got)
+	}
+	if !strings.Contains(got, "page cache") {
+		t.Errorf("the line does not say why it matters: %q", got)
+	}
+	if OnControlPlane(components[:1], []string{"cp-0"}) != "" {
+		t.Error("managers all on workers produced a warning")
 	}
 }

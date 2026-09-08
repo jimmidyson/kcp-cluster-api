@@ -38,7 +38,13 @@ What is left is smaller than it looks:
 
 - **The provider gets a node to itself anyway.** It asks for 24 GiB of a 32 GiB
   node. After kubelet and system reservations nothing else of consequence fits
-  beside it, so the scheduler gives it one without being told to.
+  beside it, so the scheduler gives it one without being told to. With one
+  correction the first fresh-cluster run paid for: a control plane node counts
+  as empty to the scheduler, since kubeadm's API server has no memory request,
+  and clusterctl's provider tolerates the control plane taint. The prepare
+  tool now keeps every manager off those nodes with a required node affinity;
+  see `hack/upstream-capi-scale/README.md`, "The managers are kept off the
+  control plane nodes".
 - **The fourth node is the headroom.** The loop this run is built around is
   raise-the-limit-and-retry, and on a full node there is nowhere to raise it to
   without evicting a neighbour — which resets that neighbour's process metrics

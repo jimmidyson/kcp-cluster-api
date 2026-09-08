@@ -365,6 +365,14 @@ the fix.
 
 ### Resilience, as distinct from capacity
 
+- **Nothing but the control plane on the control plane nodes.** The first
+  fresh-cluster run put the DevCluster provider beside a 20 GiB API server on
+  a 32 GiB control plane node, because clusterctl's manifests tolerate the
+  taint and kubeadm's API server has no memory request. The etcd member on
+  that node lost its page cache, its compactions went from seconds to over a
+  minute, and kube-vip's lease through it timed out. The prepare tool now
+  pins every manager away from the control plane label; a production
+  installation should do the same for everything it lets tolerate that taint.
 - **Every neighbour with a short lease is a fuse.** The cloud controller
   manager's 5 s PUT timeout made it the first process to give up on a slow API
   server. Audit lease and probe timeouts on everything that tolerates the

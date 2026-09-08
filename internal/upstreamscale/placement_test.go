@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -133,4 +134,79 @@ func TestBurstableIsNamedAsSuch(t *testing.T) {
 	if got := QoSClass(bare); got != "BestEffort" {
 		t.Errorf("QoS = %s, want BestEffort", got)
 	}
+}
+
+// TestTheManagersAreKeptOffTheControlPlaneNodes.
+//
+// The run this is from: the DevCluster provider, a 24 GiB Guaranteed pod, was
+// scheduled onto a control plane node beside a kube-apiserver that was already
+// 20 GiB resident, because clusterctl's manifests tolerate the control plane
+// taint and kubeadm gives the API server no memory request — so to the
+// scheduler that node was the emptiest in the cluster. What was left for the
+// page cache was not enough for etcd's backend file, and that member's
+// compactions took a minute against seconds on its peers. The managers belong
+// on the workers, and this is what puts them there.
+func TestTheManagersAreKeptOffTheControlPlaneNodes(t *testing.T) {
+	d := released()
+	if !KeepOffControlPlane(d) {
+		t.Fatal("adding the affinity reported no change")
+	}
+	if !avoidsControlPlane(d) {
+		t.Fatalf("no required affinity away from control plane nodes: %+v", d.Spec.Template.Spec.Affinity)
+	}
+	// Idempotent, so a re-applied prepare does not roll the manager.
+	if KeepOffControlPlane(d) {
+		t.Error("a second pass reported a change")
+	}
+	if terms := d.Spec.Template.Spec.Affinity.NodeAffinity.
+		RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms; len(terms) != 1 {
+		t.Errorf("the requirement was duplicated: %+v", terms)
+	}
+}
+
+// TestTheAffinityJoinsWhatWasAlreadyThere rather than replacing it: a
+// deployment that already selects a node pool keeps selecting it, and now
+// also stays off the control plane.
+func TestTheAffinityJoinsWhatWasAlreadyThere(t *testing.T) {
+	d := released()
+	d.Spec.Template.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{
+				{Key: "scale-role", Operator: corev1.NodeSelectorOpIn, Values: []string{"devcluster"}},
+			}}},
+		},
+	}}
+	if !KeepOffControlPlane(d) {
+		t.Fatal("adding the affinity reported no change")
+	}
+	terms := d.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	// Terms are ORed and expressions within a term are ANDed, so the
+	// requirement has to join each existing term rather than be a term of its
+	// own — a separate term would let the scheduler satisfy either.
+	if len(terms) != 1 || len(terms[0].MatchExpressions) != 2 {
+		t.Fatalf("the requirement was not ANDed into the existing term: %+v", terms)
+	}
+	if !avoidsControlPlane(d) {
+		t.Errorf("the control plane requirement is missing: %+v", terms)
+	}
+}
+
+func avoidsControlPlane(d *appsv1.Deployment) bool {
+	affinity := d.Spec.Template.Spec.Affinity
+	if affinity == nil || affinity.NodeAffinity == nil ||
+		affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return false
+	}
+	for _, term := range affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		found := false
+		for _, expr := range term.MatchExpressions {
+			if expr.Key == ControlPlaneNodeLabel && expr.Operator == corev1.NodeSelectorOpDoesNotExist {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

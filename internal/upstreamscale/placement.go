@@ -95,6 +95,75 @@ func Dedicate(d *appsv1.Deployment, selector map[string]string, tolerations ...c
 	}
 }
 
+// KeepOffControlPlane requires the deployment to schedule on a node that is
+// not a control plane node, and reports whether anything changed.
+//
+// # The rung this cost
+//
+// A climb reached 1000 clusters and then lost the VIP at 1500: kube-vip on one
+// control plane node could not renew its lease, because that node's etcd
+// member had stalled for eighty seconds on a compaction its two peers finished
+// in three and ten. The member was not on a slower disk. It was on the node
+// where the DevCluster provider had been scheduled — a 24 GiB Guaranteed pod
+// beside a kube-apiserver that was already 20 GiB resident, on a 32 GiB node.
+// What was left for the page cache was not enough for etcd's backend file, so
+// its compaction read the file from disk while its apply loop waited, and
+// every write through that member timed out.
+//
+// It was there for a reason a scheduler cannot see. clusterctl's provider
+// manifests tolerate the control plane taint, so that a provider can run on a
+// single-node bootstrap cluster, and kubeadm gives kube-apiserver a CPU request
+// and no memory request — so to the scheduler a control plane node holding a
+// 20 GiB API server is the emptiest node in the cluster.
+//
+// # Why affinity rather than dropping the toleration
+//
+// Removing the toleration works only while the taint is there, and a cluster
+// whose control plane nodes were untainted would put the provider straight
+// back. A required node affinity away from the control plane label says what is
+// meant, and holds either way.
+//
+// The requirement is ANDed into every existing term rather than added as a
+// term of its own: terms are ORed, so a separate term would let the scheduler
+// satisfy either one.
+func KeepOffControlPlane(d *appsv1.Deployment) bool {
+	want := corev1.NodeSelectorRequirement{Key: ControlPlaneNodeLabel, Operator: corev1.NodeSelectorOpDoesNotExist}
+	spec := &d.Spec.Template.Spec
+	if spec.Affinity == nil {
+		spec.Affinity = &corev1.Affinity{}
+	}
+	if spec.Affinity.NodeAffinity == nil {
+		spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	required := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if required == nil {
+		required = &corev1.NodeSelector{}
+		spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = required
+	}
+	if len(required.NodeSelectorTerms) == 0 {
+		required.NodeSelectorTerms = []corev1.NodeSelectorTerm{{}}
+	}
+
+	changed := false
+	for i := range required.NodeSelectorTerms {
+		term := &required.NodeSelectorTerms[i]
+		if !requires(term.MatchExpressions, want) {
+			term.MatchExpressions = append(term.MatchExpressions, want)
+			changed = true
+		}
+	}
+	return changed
+}
+
+func requires(have []corev1.NodeSelectorRequirement, want corev1.NodeSelectorRequirement) bool {
+	for _, r := range have {
+		if r.Key == want.Key && r.Operator == want.Operator {
+			return true
+		}
+	}
+	return false
+}
+
 // QoSClass is what Kubernetes will assign this pod, worked out from the
 // manifest so that a report can state it rather than a reader having to trust
 // that setting resources worked.
