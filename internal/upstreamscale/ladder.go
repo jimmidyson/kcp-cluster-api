@@ -85,6 +85,14 @@ type RungResult struct {
 	Converged bool   `json:"converged"`
 	Failure   string `json:"failure,omitempty"`
 
+	// Incidents is what died on the control plane's nodes during this rung
+	// without being the control plane or a manager, and came back: kube-vip
+	// losing its lease and moving the VIP, a cloud controller manager stepping
+	// down. A rung with any is not clean, whether or not it converged. See
+	// DescribeIncident for why these do not end a rung, and Ceiling.LastClean
+	// for what they cost it.
+	Incidents []string `json:"incidents,omitempty"`
+
 	// Added is how many clusters this rung created, which is not how many it
 	// holds. The ladder is incremental: a rung keeps the fleet the rung below
 	// it left converged and adds to it, so its WaitedFor is the time the
@@ -135,6 +143,10 @@ func (r RungResult) PerAddedCluster() time.Duration {
 	return r.WaitedFor / time.Duration(r.Added)
 }
 
+// Clean is a rung that converged with nothing on the control plane's nodes
+// lost on the way: the only kind worth recommending a fleet size from.
+func (r RungResult) Clean() bool { return r.Converged && len(r.Incidents) == 0 }
+
 // Timing is what the report carries beside each rung.
 func (r RungResult) Timing() string {
 	created := r.CreatedIn.Round(time.Second)
@@ -144,6 +156,20 @@ func (r RungResult) Timing() string {
 	}
 	return fmt.Sprintf("created in %s, converged in %s (%d clusters added, %s each)",
 		created, waited, r.Added, r.PerAddedCluster().Round(time.Millisecond))
+}
+
+// Outcome is Timing with the rung's incidents on the end, which is the line
+// the report carries for the rung: a rung that converged while the VIP moved
+// must not read like one that simply converged.
+func (r RungResult) Outcome() string {
+	out := r.Timing()
+	if len(r.Incidents) == 0 {
+		return out
+	}
+	if r.Converged {
+		return out + " — converged, and not cleanly: " + strings.Join(r.Incidents, "; ")
+	}
+	return out + " — meanwhile " + strings.Join(r.Incidents, "; ")
 }
 
 // Classify says why a rung did not converge, in the terms an operator acts on.
@@ -219,25 +245,41 @@ func Classify(components []deployedscale.ComponentSample, timedOut bool) string 
 
 // Ceiling is what a climb found.
 type Ceiling struct {
-	// LastGood is the largest fleet that fully converged, or nil when none did.
+	// LastClean is the largest fleet that converged with every rung up to it
+	// clean, or nil when none did. This is the number to recommend.
+	//
+	// Every rung up to it, not just itself. An incident is the control plane
+	// stumbling under that rung's load, and a rung above it that happened to
+	// pass does not unmark it: the stumble was one compaction's timing away
+	// from happening there too.
+	LastClean *RungResult `json:"lastClean,omitempty"`
+	// LastGood is the largest fleet that converged at all, clean or not, or
+	// nil when none did. The soak holds this one, because it is the fleet
+	// that exists; LastClean is the one to quote.
 	LastGood *RungResult `json:"lastGood,omitempty"`
+	// Unclean is every rung that converged with incidents, in climbing order.
+	Unclean []RungResult `json:"unclean,omitempty"`
 	// Failed is the rung that stopped the climb, or nil when none did.
 	Failed *RungResult `json:"failed,omitempty"`
 }
 
-// Summarise reduces a climb to the two numbers worth quoting.
+// Summarise reduces a climb to the numbers worth quoting.
 func Summarise(rungs []RungResult) Ceiling {
 	var c Ceiling
+	tainted := false
 	for i := range rungs {
 		r := rungs[i]
-		switch {
-		case r.Converged:
-			good := r
-			c.LastGood = &good
-		default:
-			failed := r
-			c.Failed = &failed
+		if !r.Converged {
+			c.Failed = &r
 			return c
+		}
+		c.LastGood = &r
+		if len(r.Incidents) > 0 {
+			tainted = true
+			c.Unclean = append(c.Unclean, r)
+		}
+		if !tainted {
+			c.LastClean = &r
 		}
 	}
 	return c
@@ -260,8 +302,24 @@ func (c Ceiling) Describe() string {
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane at full strength and every "+
-		"Machine Ready, %s.", c.LastGood.Clusters, c.LastGood.Machines, c.LastGood.Timing())
+	if c.LastClean != nil {
+		fmt.Fprintf(&b, "Held %d clusters and %d Machines, every control plane at full strength and every "+
+			"Machine Ready, %s.", c.LastClean.Clusters, c.LastClean.Machines, c.LastClean.Timing())
+	} else {
+		b.WriteString("No rung converged cleanly.")
+	}
+	if len(c.Unclean) > 0 {
+		// The largest fleet reached, and every incident on the way to it,
+		// each at the rung it happened on. A reader deciding what to run
+		// needs the clean number; a reader deciding what to fix needs these.
+		var at []string
+		for _, r := range c.Unclean {
+			at = append(at, fmt.Sprintf("at %d clusters, %s", r.Clusters, strings.Join(r.Incidents, "; ")))
+		}
+		fmt.Fprintf(&b, " The climb went on: %d clusters and %d Machines converged, %s, and not cleanly — %s. "+
+			"That is a fleet the cluster reached, not one to recommend.",
+			c.LastGood.Clusters, c.LastGood.Machines, c.LastGood.Timing(), strings.Join(at, "; "))
+	}
 	if c.Failed == nil {
 		b.WriteString(" **That is a floor, not a ceiling**: no rung failed, so the largest fleet " +
 			"tried is the largest measured and not the largest possible.")
@@ -269,6 +327,9 @@ func (c Ceiling) Describe() string {
 	}
 	fmt.Fprintf(&b, " The next rung, %d clusters and %d Machines, did not: %s (%s).",
 		c.Failed.Clusters, c.Failed.Machines, c.Failed.Failure, c.Failed.Timing())
+	if len(c.Failed.Incidents) > 0 {
+		fmt.Fprintf(&b, " Meanwhile %s.", strings.Join(c.Failed.Incidents, "; "))
+	}
 	return b.String()
 }
 

@@ -338,3 +338,76 @@ func TestAnOomOutranksAPlainRestartInBothPlaces(t *testing.T) {
 		t.Errorf("culprit = %q, want the OOM kill Classify reports", got)
 	}
 }
+
+// TestARungWithAnIncidentIsReachedNotRecommended. A rung the VIP moved in
+// converged, and it is not the number to quote; nor is a clean rung above it,
+// because the stumble was that rung's load and the pass above it was luck.
+func TestARungWithAnIncidentIsReachedNotRecommended(t *testing.T) {
+	vip := "kube-vip-a restarted 1 time(s) — terminated: Completed (exit 0)"
+	ceiling := Summarise([]RungResult{
+		{Clusters: 500, Machines: 5000, Converged: true, Added: 500, WaitedFor: 500 * time.Second},
+		{Clusters: 1000, Machines: 10000, Converged: true, Added: 500, Incidents: []string{vip}},
+		{Clusters: 1500, Machines: 15000, Converged: true, Added: 500},
+		{Clusters: 2000, Machines: 20000, Failure: "kube-apiserver-a was OOM killed", Incidents: []string{"ccm restarted 1 time(s)"}},
+	})
+	if ceiling.LastClean == nil || ceiling.LastClean.Clusters != 500 {
+		t.Fatalf("last clean rung = %+v, want 500", ceiling.LastClean)
+	}
+	if ceiling.LastGood == nil || ceiling.LastGood.Clusters != 1500 {
+		t.Fatalf("last good rung = %+v, want 1500", ceiling.LastGood)
+	}
+	if len(ceiling.Unclean) != 1 || ceiling.Unclean[0].Clusters != 1000 {
+		t.Fatalf("unclean rungs = %+v, want the one at 1000", ceiling.Unclean)
+	}
+	got := ceiling.Describe()
+	for _, want := range []string{"Held 500 clusters", "1500 clusters and 15000 Machines converged",
+		"at 1000 clusters, " + vip, "not one to recommend", "The next rung, 2000 clusters", "OOM killed",
+		"Meanwhile ccm restarted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the ceiling does not say %q:\n%s", want, got)
+		}
+	}
+
+	// A clean climb reads as it always did, with the clean and the good rung
+	// the same one.
+	clean := Summarise([]RungResult{
+		{Clusters: 500, Machines: 5000, Converged: true},
+		{Clusters: 1000, Machines: 10000, Failure: "did not arrive"},
+	})
+	if clean.LastClean == nil || clean.LastGood == nil || clean.LastClean.Clusters != clean.LastGood.Clusters {
+		t.Errorf("a clean climb split its ceiling: %+v", clean)
+	}
+	if got := clean.Describe(); strings.Contains(got, "not cleanly") || !strings.HasPrefix(got, "Held 500 clusters") {
+		t.Errorf("a clean climb reads as unclean: %s", got)
+	}
+
+	// And a climb whose every converged rung had an incident recommends
+	// nothing, while still saying what it reached.
+	none := Summarise([]RungResult{{Clusters: 500, Machines: 5000, Converged: true, Incidents: []string{vip}}})
+	if none.LastClean != nil {
+		t.Errorf("a climb with no clean rung recommended one: %+v", none.LastClean)
+	}
+	if got := none.Describe(); !strings.HasPrefix(got, "No rung converged cleanly.") || !strings.Contains(got, "500 clusters and 5000 Machines converged") {
+		t.Errorf("a climb with no clean rung does not say so: %s", got)
+	}
+}
+
+// TestARungsOutcomeCarriesItsIncidents, so that a rung that converged while
+// the VIP moved does not read like one that simply converged.
+func TestARungsOutcomeCarriesItsIncidents(t *testing.T) {
+	converged := RungResult{Converged: true, Added: 2, WaitedFor: 2 * time.Second, Incidents: []string{"kube-vip-a restarted 1 time(s)"}}
+	if got := converged.Outcome(); !strings.Contains(got, "converged in 2s") || !strings.Contains(got, "not cleanly: kube-vip-a restarted") {
+		t.Errorf("Outcome() = %q", got)
+	}
+	if converged.Clean() {
+		t.Error("a rung with an incident is clean")
+	}
+	failed := RungResult{Failure: "did not arrive", Incidents: []string{"ccm restarted 1 time(s)"}}
+	if got := failed.Outcome(); !strings.Contains(got, "gave up") || !strings.Contains(got, "meanwhile ccm restarted") {
+		t.Errorf("Outcome() = %q", got)
+	}
+	plain := RungResult{Converged: true, Added: 1, WaitedFor: time.Second}
+	if got := plain.Outcome(); got != plain.Timing() || !plain.Clean() {
+		t.Errorf("a clean rung's outcome is not its timing: %q", got)
+	}
+}

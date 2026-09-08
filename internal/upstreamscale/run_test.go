@@ -58,6 +58,9 @@ type fakeTarget struct {
 	// killManagerAt is the cluster count at which that manager's pod is found
 	// restarted, zero for never.
 	killManagerAt int
+	// sidecarDiesAt is the cluster count at which kube-vip and the cloud
+	// controller manager on host are found restarted, zero for never.
+	sidecarDiesAt int
 
 	created  []string
 	planned  []int
@@ -131,6 +134,22 @@ func (f *fakeTarget) Converged(ctx context.Context, wantClusters, wantMachines i
 		}
 		if err := f.host.Status().Update(ctx, &pod); err != nil {
 			return Convergence{}, err
+		}
+	}
+	if f.sidecarDiesAt != 0 && wantClusters == f.sidecarDiesAt {
+		// kube-vip exits 0 when it loses its lease; the CCM exits 1.
+		for name, exit := range map[string]int32{"kube-vip-cp-0": 0, "nutanix-cloud-controller-manager-abc": 1} {
+			var pod corev1.Pod
+			if err := f.host.Get(ctx, client.ObjectKey{Namespace: "kube-system", Name: name}, &pod); err != nil {
+				return Convergence{}, err
+			}
+			pod.Status.ContainerStatuses[0].RestartCount = 1
+			pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{ExitCode: exit, Reason: "Error"},
+			}
+			if err := f.host.Status().Update(ctx, &pod); err != nil {
+				return Convergence{}, err
+			}
 		}
 	}
 	if f.failAt != 0 && wantClusters == f.failAt {
@@ -570,5 +589,95 @@ func TestADeathIsProfiledOnce(t *testing.T) {
 	clean, dead := reads(0), reads(4)
 	if dead != clean+1 {
 		t.Errorf("a climb with a death read %d profiles against %d without one, want exactly one more", dead, clean)
+	}
+}
+
+// sidecarsOnHost is what stands beside a kubeadm control plane on its node:
+// kube-vip as a static pod, and a cloud controller manager scheduled there.
+func sidecarsOnHost() []client.Object {
+	return []client.Object{
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "kube-vip-cp-0", Namespace: "kube-system",
+				Annotations: map[string]string{deployedscale.MirrorPodAnnotation: "x"},
+			},
+			Spec: corev1.PodSpec{NodeName: "cp-0", Containers: []corev1.Container{{Name: "kube-vip"}}},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "kube-vip", Ready: true}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "nutanix-cloud-controller-manager-abc", Namespace: "kube-system"},
+			Spec:       corev1.PodSpec{NodeName: "cp-0", Containers: []corev1.Container{{Name: "manager"}}},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "manager", Ready: true}},
+			},
+		},
+	}
+}
+
+// TestASidecarDeathIsAnIncidentNotACeiling.
+//
+// Four runs ended their top rung on kube-vip losing its lease, nine and a half
+// minutes into a rung whose predecessor took ten and three quarters to
+// converge, so none of them learned whether the fleet would have arrived. The
+// rung now runs on and records the death where it happened; the climb goes on
+// above it; and the ceiling names the clean fleet as the one to recommend and
+// the reached fleet as reached.
+func TestASidecarDeathIsAnIncidentNotACeiling(t *testing.T) {
+	target := &fakeTarget{name: "stock", tenant: "Namespace", sidecarDiesAt: 4}
+	runner := testRunner(t, target, 2, 8, append(controlPlaneOnHost(), sidecarsOnHost()...)...)
+	target.host = runner.Host
+
+	report, ceiling, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("a climb that reached a rung is not an error: %v", err)
+	}
+	if ceiling.Failed != nil {
+		t.Fatalf("a sidecar's death ended the climb: %+v", ceiling.Failed)
+	}
+	if !slices.Contains(target.planned, 8) {
+		t.Error("the climb did not go on above the rung whose sidecar died")
+	}
+	if ceiling.LastGood == nil || ceiling.LastGood.Clusters != 8 {
+		t.Fatalf("last good rung = %+v, want 8 clusters", ceiling.LastGood)
+	}
+	if ceiling.LastClean == nil || ceiling.LastClean.Clusters != 2 {
+		t.Fatalf("last clean rung = %+v, want 2 clusters, below the rung the VIP moved in", ceiling.LastClean)
+	}
+	if len(ceiling.Unclean) != 1 || ceiling.Unclean[0].Clusters != 4 {
+		t.Fatalf("unclean rungs = %+v, want the one at 4 clusters", ceiling.Unclean)
+	}
+
+	incidents := strings.Join(ceiling.Unclean[0].Incidents, "\n")
+	for _, want := range []string{"kube-vip-cp-0 restarted 1 time(s)", KubeVIPLease, "endpoint moved",
+		"nutanix-cloud-controller-manager-abc restarted 1 time(s)", "leader election"} {
+		if !strings.Contains(incidents, want) {
+			t.Errorf("the rung's incidents do not say %q:\n%s", want, incidents)
+		}
+	}
+	if strings.Contains(incidents, "not comparable") {
+		t.Errorf("a sidecar was described as a manager whose samples broke: %s", incidents)
+	}
+	// Charged once: the rung above still sees the same restart counts and
+	// must not report them again.
+	if got := ceiling.LastGood.Incidents; len(got) != 0 {
+		t.Errorf("the rung above repeated the incidents below it: %v", got)
+	}
+
+	if fact := report.Facts["rung@4"]; !strings.Contains(fact, "not cleanly") || !strings.Contains(fact, "kube-vip") {
+		t.Errorf("the rung's line does not carry its incident: %q", fact)
+	}
+	if fact := report.Facts["rung@8"]; strings.Contains(fact, "kube-vip") {
+		t.Errorf("the clean rung above carries the incident: %q", fact)
+	}
+	described := report.Facts["ceiling"]
+	for _, want := range []string{"Held 2 clusters", "8 clusters and 8 Machines converged", "not one to recommend",
+		"floor, not a ceiling"} {
+		if !strings.Contains(described, want) {
+			t.Errorf("the ceiling does not say %q: %s", want, described)
+		}
 	}
 }

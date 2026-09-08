@@ -1483,6 +1483,52 @@ kubectl -n capi-system get pods
 kubectl -n capi-system logs deploy/capi-controller-manager --previous | tail -40
 ```
 
+### A sidecar's death is an incident on the rung, not the rung's ceiling
+
+Four runs in a row ended their top rung the same way: kube-vip on the VIP
+holder's node lost its lease when the etcd member beside it stalled, exited,
+and the run stopped. It stopped nine and a half minutes into a rung whose
+predecessor had taken ten and three quarters to converge, so none of the four
+learned whether the fleet would have arrived — which is the question a rung
+exists to answer.
+
+kube-vip is a static pod, written into the same manifests directory as the API
+server's, and the death check drew its line at the mirror annotation. That is
+the right line for "did the control plane die" and the wrong line for "is this
+the ceiling": kube-vip exiting is the VIP moving to another node, and the
+cloud controller manager exiting 1 is a lease lost and taken again. Both are
+availability incidents. Neither is the management cluster failing to manage
+itself.
+
+So the check now separates the control plane from what stands beside it. The
+four kubeadm components — `kube-apiserver`, `etcd`, `kube-controller-manager`,
+`kube-scheduler` — and the Cluster API managers still end a rung when they
+die, for the reasons above. Everything else on a control plane node, static
+pod or not, is recorded as an **incident** on the rung it happened in, named
+in the log as it happens, and the rung runs on. Each incident is charged once:
+a rung reports only what died during it, not what the rung below had already
+recorded.
+
+What it costs the rung is its cleanness. The ceiling now carries three
+numbers rather than two:
+
+- **the clean rung**, the largest fleet that converged with every rung up to
+  it free of incidents. This is the number to recommend a fleet size from. A
+  clean rung *above* an incident does not count: the incident was the control
+  plane stumbling under the lower rung's load, and the pass above it was one
+  compaction's timing away from not happening;
+- **the reached rung**, the largest fleet that converged at all, with every
+  incident on the way to it listed at the rung it happened on. The soak holds
+  this one, because it is the fleet that exists; the report says it is a fleet
+  the cluster reached and not one to recommend;
+- **the failed rung**, as before, with any incidents that happened during it
+  beside its failure.
+
+A rung's own line says the same: `converged in 10m45s (…) — converged, and not
+cleanly: kube-vip-… restarted 1 time(s) — … so the API endpoint moved to
+another node and every connection through it was cut`. A rung with no
+incidents reads exactly as it did.
+
 ### A death is checked before the count is believed
 
 The 2000-cluster rung was declared converged, and the kubeadm bootstrap manager

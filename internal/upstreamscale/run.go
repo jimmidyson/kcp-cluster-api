@@ -83,6 +83,10 @@ type Runner struct {
 	// store is where that etcd is, kept so a failure can be diagnosed from
 	// wherever it is noticed rather than only where the ladder can see it.
 	store StoreLocation
+	// charged is how many restarts of each sidecar on the control plane's
+	// nodes earlier rungs have already recorded as incidents, so that a rung
+	// records only its own. See rungIncidents.
+	charged map[string]int32
 }
 
 func (r *Runner) logf(format string, args ...any) {
@@ -308,11 +312,13 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			if why := r.died(ctx, controllers); why != "" {
 				failure += " — and " + why
 			}
-			failure = annotate(failure, r.beside(ctx), r.strain(ctx))
+			failure = annotate(failure, r.strain(ctx))
+			incidents := r.startIncidents()
+			incidents.poll(ctx)
 			rungs = append(rungs, RungResult{
 				Clusters: clusters, Machines: machines, Added: clusters - held,
 				CreatedIn: time.Since(startedCreate),
-				Failure:   failure,
+				Failure:   failure, Incidents: incidents.close(),
 			})
 			failedTenants = madeTenants
 			break
@@ -321,10 +327,10 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		r.logf("    created in %s", createdIn.Round(time.Second))
 
 		startedWait := time.Now()
-		converged, why := r.wait(ctx, controllers, clusters, machines)
+		converged, why, incidents := r.wait(ctx, controllers, clusters, machines)
 		rung := RungResult{
 			Clusters: clusters, Machines: machines, Added: clusters - held,
-			Converged: converged,
+			Converged: converged, Incidents: incidents,
 			CreatedIn: createdIn, WaitedFor: time.Since(startedWait),
 		}
 		held = clusters
@@ -338,8 +344,8 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 			heldTenants = madeTenants
 		}
 		sample(label, clusters, machines)
-		report.AddFact(fmt.Sprintf("rung@%d", clusters), rung.Timing())
-		r.logf("    %s", rung.Timing())
+		report.AddFact(fmt.Sprintf("rung@%d", clusters), rung.Outcome())
+		r.logf("    %s", rung.Outcome())
 		rungs = append(rungs, rung)
 		if !converged {
 			break
@@ -479,8 +485,13 @@ func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 			return why
 		}
 	}
+	// The control plane itself, and not the static pods that merely stand
+	// beside it: kube-vip is written into the same manifests directory and its
+	// exit is the VIP moving, which the rung records and carries on through.
+	// See SplitSidecars.
 	if facts, _, err := r.Sampler.ControlPlaneFacts(ctx, r.Host); err == nil {
-		if why := Classify(HealthSince(r.controlPlaneAtStart, facts), false); why != "" {
+		core, _ := SplitSidecars(HealthSince(r.controlPlaneAtStart, facts))
+		if why := Classify(core, false); why != "" {
 			return why
 		}
 	}
@@ -498,30 +509,6 @@ func (r *Runner) died(ctx context.Context, controllers []Controller) string {
 //
 // Errors are swallowed for the same reason they are in died: this is a
 // diagnosis attached to a failure that has already happened.
-// beside reports a death among the pods that run on the control plane's nodes
-// without being the control plane, or "" when there was none.
-//
-// A note rather than a verdict. The cloud controller manager that ended a rung
-// at 1500 clusters lost its lease on a PUT with a five-second timeout — a
-// tighter deadline than anything in Cluster API sets, which makes it the first
-// thing to notice an API server that has stopped answering. That is worth
-// having in the failure line and it is not the ceiling: it is not the system
-// under test, and a run that stops when it dies is reporting the fuse length of
-// the most impatient neighbour.
-func (r *Runner) beside(ctx context.Context) string {
-	if r.besideAtStart == nil {
-		return ""
-	}
-	_, beside, err := r.Sampler.ControlPlaneFacts(ctx, r.Host)
-	if err != nil {
-		return ""
-	}
-	if why := Classify(HealthSince(r.besideAtStart, beside), false); why != "" {
-		return "beside the control plane, " + why
-	}
-	return ""
-}
-
 func (r *Runner) strain(ctx context.Context) string {
 	if r.etcdBaseline == nil {
 		return ""
@@ -550,19 +537,30 @@ func annotate(why string, notes ...string) string {
 }
 
 // wait polls until the rung reaches the end state, or a component dies, or
-// time runs out — and says which.
-func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int) (bool, string) {
+// time runs out — and says which, with the incidents the rung collected on
+// the way. See rungIncidents.
+func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, machines int,
+) (converged bool, why string, incidents []string) {
 	deadline := time.Now().Add(r.Options.StepTimeout)
 	var last Convergence
 	var steady Steadiness
+	seen := r.startIncidents()
 
 	for {
 		var err error
 		last, err = r.Target.Converged(ctx, clusters, machines)
 		if err != nil {
-			return false, "counting the fleet: " + err.Error()
+			return false, "counting the fleet: " + err.Error(), seen.close()
 		}
 		steady.Observe(last)
+
+		// What died beside the control plane, recorded and carried on
+		// through: a sidecar losing its lease is an incident on the rung,
+		// not the rung's verdict. Named as it happens, so that a person can
+		// go and read its log while the previous container is still there.
+		for _, fresh := range seen.poll(ctx) {
+			r.logf("    incident: %s", fresh)
+		}
 
 		// A component that died is why the fleet has not arrived, rather than
 		// a second thing that went wrong. Checked every poll so that a kill is
@@ -583,10 +581,10 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		// death path was the only failure path that left the store's counters
 		// off the line.
 		if why := r.died(ctx, controllers); why != "" {
-			return false, annotate(why, r.beside(ctx), r.strain(ctx))
+			return false, annotate(why, r.strain(ctx)), seen.close()
 		}
 		if last.Done {
-			return true, ""
+			return true, "", seen.close()
 		}
 
 		if time.Now().After(deadline) {
@@ -597,7 +595,7 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 			// because the fleet is torn down at the end of the run and the
 			// evidence goes with it.
 			why := fmt.Sprintf("%s (%s)", timedOutBecause(steady), last.Describe())
-			return false, annotate(why, last.DescribeStragglers(), steady.Describe(), r.beside(ctx), r.strain(ctx))
+			return false, annotate(why, last.DescribeStragglers(), steady.Describe(), r.strain(ctx)), seen.close()
 		}
 		r.logf("    %s", last.Describe())
 		// Named while the rung is still waiting, so that a person can go and
@@ -608,7 +606,7 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		}
 		select {
 		case <-ctx.Done():
-			return false, "interrupted: " + last.Describe()
+			return false, "interrupted: " + last.Describe(), seen.close()
 		case <-time.After(r.Options.PollInterval):
 		}
 	}
