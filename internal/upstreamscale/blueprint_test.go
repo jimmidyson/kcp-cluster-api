@@ -18,6 +18,7 @@ package upstreamscale
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,43 @@ func TestAClassThatNeverReconcilesStopsTheRungAndSaysWhy(t *testing.T) {
 		t.Fatal("a class that never reconciled let its Clusters be created")
 	} else if !strings.Contains(err.Error(), "capi-scale-0001") {
 		t.Errorf("the failure does not name the tenant: %v", err)
+	} else if !strings.Contains(err.Error(), "observed generation 1 of 2") ||
+		!strings.Contains(err.Error(), "capi-controller-manager") {
+		// The blueprint namespace is torn down at the end of the run, so
+		// this line is the only record of what the class's status said.
+		t.Errorf("the failure does not carry the class's status: %v", err)
+	}
+}
+
+// TestTheClassStatusSaysWhichOfTwoThingsIsWrong: a controller that never
+// looked, and a controller that looked and refused, are different repairs.
+func TestTheClassStatusSaysWhichOfTwoThingsIsWrong(t *testing.T) {
+	untouched := &clusterv1.ClusterClass{ObjectMeta: metav1.ObjectMeta{Name: "demo", Generation: 1}}
+	if got := DescribeClassStatus(untouched, nil); !strings.Contains(got, "has not reconciled it") ||
+		!strings.Contains(got, "leader election") || !strings.Contains(got, "ClusterTopology") {
+		t.Errorf("an untouched class does not point at the controller: %s", got)
+	}
+
+	refused := &clusterv1.ClusterClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Generation: 1},
+		Status: clusterv1.ClusterClassStatus{ObservedGeneration: 1, Conditions: []metav1.Condition{
+			{Type: "RefVersionsUpToDate", Status: metav1.ConditionTrue, Reason: "UpToDate"},
+			{Type: clusterv1.ClusterClassVariablesReadyCondition, Status: metav1.ConditionFalse,
+				Reason: "VariableDiscoveryFailed", Message: "extension unreachable"},
+		}},
+	}
+	got := DescribeClassStatus(refused, nil)
+	for _, want := range []string{"VariablesReady is False", "VariableDiscoveryFailed", "extension unreachable"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a refused class does not say %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "RefVersionsUpToDate") {
+		t.Errorf("a condition that is met was listed as unmet: %s", got)
+	}
+
+	if got := DescribeClassStatus(untouched, errors.New("the server is busy")); !strings.Contains(got, "the server is busy") {
+		t.Errorf("a failed read does not carry its error: %s", got)
 	}
 }
 

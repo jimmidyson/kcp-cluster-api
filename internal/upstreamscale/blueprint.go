@@ -19,6 +19,7 @@ package upstreamscale
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,16 +87,58 @@ func WaitForBlueprint(ctx context.Context, cl client.Client, namespace, name str
 			return nil
 		}
 
+		// With the class's own status on the line, either way out. The
+		// blueprint namespace is torn down at the end of the run, so the
+		// status is gone by the time anyone reads the report, and a line that
+		// said only "was not reconciled" left a run to be diagnosed against
+		// an empty cluster. See DescribeClassStatus.
 		if time.Now().After(deadline) {
 			return fmt.Errorf("ClusterClass %s was not reconciled within %s, so its Clusters would "+
-				"be admitted without their topologies being validated against it", key, blueprintReady)
+				"be admitted without their topologies being validated against it — %s",
+				key, blueprintReady, DescribeClassStatus(&class, err))
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for ClusterClass %s: %w", key, ctx.Err())
+			return fmt.Errorf("waiting for ClusterClass %s: %w — %s", key, ctx.Err(), DescribeClassStatus(&class, err))
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// DescribeClassStatus says why a ClusterClass does not count as reconciled, from
+// the last read of it and the error that read returned.
+//
+// The two shapes point at different things. A status that has never observed
+// the class's generation means the ClusterClass controller has not touched it
+// at all, which is a manager that is not running, not leading, or not started
+// with the topology feature on. A status that has observed it and carries a
+// False condition means the controller looked and refused, and the reason is
+// in the condition.
+func DescribeClassStatus(class *clusterv1.ClusterClass, readErr error) string {
+	if readErr != nil {
+		return "the last read of it failed: " + readErr.Error()
+	}
+	if class.Status.ObservedGeneration < class.Generation {
+		return fmt.Sprintf("its status has observed generation %d of %d, so the ClusterClass controller "+
+			"has not reconciled it since it was written: check that capi-controller-manager is running, "+
+			"holds its leader election lease, and was started with the ClusterTopology feature gate on",
+			class.Status.ObservedGeneration, class.Generation)
+	}
+	var unmet []string
+	for _, c := range class.Status.Conditions {
+		if c.Status == metav1.ConditionTrue {
+			continue
+		}
+		line := fmt.Sprintf("%s is %s (%s", c.Type, c.Status, c.Reason)
+		if c.Message != "" {
+			line += ": " + c.Message
+		}
+		unmet = append(unmet, line+")")
+	}
+	if len(unmet) == 0 {
+		return "the controller has observed it and reports nothing amiss, which this code did not expect"
+	}
+	return "the controller has observed it and reports " + strings.Join(unmet, "; ")
 }
 
 // ClassReconciled reports whether the controller has caught up with this
