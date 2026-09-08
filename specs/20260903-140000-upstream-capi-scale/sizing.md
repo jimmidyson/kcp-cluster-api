@@ -36,17 +36,19 @@ and etcd on its own disk. They fix the number rather than extrapolate it:
 | Fleet | Outcome on 3 x 32 GiB control plane, 4 x 32 GiB workers |
 |---|---|
 | 500 clusters, 5,000 Machines | converged in 11 min; API servers 14 to 21 GiB each |
-| **1,000 clusters, 10,000 Machines** | **converged in 11 min; API servers 17 to 23.5 GiB each, etcd 1.9 GiB file, 70% of the control plane's allocatable memory in use** |
-| 1,500 clusters, 15,000 Machines | did not hold: API servers 24 to 27 GiB each, and the etcd member under the VIP holder lost its page cache, compacted for 57 s and timed out kube-vip's lease |
+| **1,000 clusters, 10,000 Machines** | **converged in 11 min; API servers 17 to 27 GiB each, etcd 1.9 GiB file, 74% of the control plane's allocatable memory in use** |
+| 1,500 clusters, 15,000 Machines | converged in 11 min once the harness read the fleet from a watch; API servers 22 to 25 GiB each, 77% of allocatable. The two runs before, with the harness listing every Machine through the VIP every fifteen seconds, failed here on the VIP holder's etcd member |
+| 2,000 clusters, 20,000 Machines | did not hold: API servers 23 to 28 GiB each with 212 requests in flight on the VIP instance, and the etcd member under the VIP holder timed out kube-vip's lease eight minutes in |
 
-So **3 x 32 GiB is a suitable control plane for 1,000 clusters of ten nodes**,
-with the qualifications that the VIP holder's API server sits at about 75% of
-its node and that the harness's own polling was part of that load until it
-switched to a watch. It is not suitable for 1,500. The API server's resident
-set grows roughly 3 to 4 GiB per 500 clusters at this point on the curve, and
-what it takes comes out of the page cache etcd's backend file has to live in.
-64 GiB is the ask for anything above 1,000, and the default the provisioning
-script now uses.
+So **3 x 32 GiB is a suitable control plane for 1,000 clusters of ten nodes
+with margin, and holds 1,500 as its edge**. The qualification on 1,500 is that
+it converged once, at 77%, with nothing but the platform on the control plane
+nodes and a harness that costs the API server nothing per poll; a production
+cluster's own external clients enter through the same VIP the harness did.
+It is not suitable for 2,000. The API server's resident set grows roughly 3 to
+4 GiB per 500 clusters at this point on the curve, and what it takes comes out
+of the page cache etcd's backend file has to live in. 64 GiB is the ask for
+anything above 1,000, and the default the provisioning script now uses.
 
 The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
 four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to

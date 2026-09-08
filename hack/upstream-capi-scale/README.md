@@ -1505,6 +1505,12 @@ already does. The report says so in a `convergenceRead` fact. The kcp side
 still lists each workspace per poll, because there is no list across
 workspaces from outside, and its fact says that too.
 
+The first run with the watch converged 1500 clusters at 1.33 s per cluster, the
+same pace as the rungs below it, on the cluster where the two runs before had
+failed at 1500 on the VIP holder's etcd member. The API servers were the same
+size at that rung as before. One run is one run, but it is the difference the
+per-instance request counts predicted.
+
 ### The inherited-baseline check now covers the API servers
 
 `Inherited` judges a process by its start time, and the control plane's samples
