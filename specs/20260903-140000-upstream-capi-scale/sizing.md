@@ -50,6 +50,23 @@ It is not suitable for 2,000. The API server's resident set grows roughly 3 to
 of the page cache etcd's backend file has to live in. 64 GiB is the ask for
 anything above 1,000, and the default the provisioning script now uses.
 
+A further run the same day, with etcd's page cache fenced (`MEMORY_QOS=true`,
+`ETCD_MEMORY_REQUEST=6Gi`, `memory.low` read back at 6 GiB on every member's
+cgroup), moves the failure rather than removing it, which is what settles the
+question. etcd's disk path stayed flat at every rung: WAL fsync 3 ms, backend
+commit 6 to 8 ms, and no member showed the five thousand slow applies that the
+VIP holder's member showed in every unfenced run. What failed instead was the
+node. One control plane node held the etcd leader, the kube-controller-manager
+lease and, from 1,500, the VIP; its API server did two to four times the CPU
+of the other two at every rung and stopped growing at 25.4 GiB from 1,500 on,
+with the whole node at 28 GiB of 30.9 allocatable. At 2,000 that API server's
+CPU halved, kube-controller-manager could not renew its lease against it for
+107 s and stepped down, etcd's peer round trip on all three members went from
+5 ms to 250 to 390 ms, the leader moved, and 788 proposals failed. 1,000 was
+the clean rung; 1,500 converged with the VIP moving once. Fenced or not,
+32 GiB per node is the number that ends the climb between 1,500 and 2,000,
+and the fence is worth keeping for what it does to etcd's own numbers.
+
 The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
 four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to
 3.0 GiB, all within their limits.
