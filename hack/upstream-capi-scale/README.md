@@ -1511,6 +1511,18 @@ failed at 1500 on the VIP holder's etcd member. The API servers were the same
 size at that rung as before. One run is one run, but it is the difference the
 per-instance request counts predicted.
 
+### The death check reads pod status, and profiles once when something died
+
+The other half of the harness's own load. The wait asked whether anything had
+died by taking a full sample of every manager, and a sample reads a heap
+profile with a forced collection: at 1600 clusters, a full collection of a
+multi-gigabyte heap in four processes, four times a minute, for the length of
+every rung, all of it through the VIP. Whether a process died is in its pod
+status. `Sampler.Health` reads that and nothing else, the death check and the
+managers' baseline both use it, and the sample is taken once when a death is
+found, because it carries the kernel's throttling figure that says whether the
+process was short of CPU.
+
 ### The inherited-baseline check now covers the API servers
 
 `Inherited` judges a process by its start time, and the control plane's samples

@@ -213,7 +213,9 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 
 	// What the managers have already been through. A restart from a previous
 	// run is not this run's ceiling, and reading the raw count made it one.
-	if components, _, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+	// Pod status alone, as the death check reads it: the baseline it is
+	// compared against should come from the same instrument.
+	if components, err := r.Sampler.Health(ctx, r.Host, controllers); err == nil {
 		r.managersAtStart = ManagerRestarts(components)
 		if restarted := Classify(components, false); restarted != "" {
 			report.AddFact("managerHistory", restarted)
@@ -440,8 +442,10 @@ func notIn(all, some []string) []string {
 //
 // The managers and the control plane both, because a run aimed at a ceiling has
 // to be able to say the API server was OOM killed rather than that
-// reconciliation stopped keeping up. Cheap by construction: the control-plane
-// half reads pod status and no metrics.
+// reconciliation stopped keeping up. Cheap by construction: both halves read
+// pod status and no metrics, and the managers are profiled once, only when
+// one of them has died, for the throttling figure that says whether it was
+// short of CPU. See Sampler.Health for what the profiling on every poll cost.
 //
 // The control plane is judged against the baseline rather than against zero.
 // Its pods live as long as the node, so their restart counts carry every
@@ -452,20 +456,24 @@ func notIn(all, some []string) []string {
 // already happened, and a run that turned "could not read the pods" into a
 // second failure would bury the first.
 func (r *Runner) died(ctx context.Context, controllers []Controller) string {
-	if components, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+	if health, err := r.Sampler.Health(ctx, r.Host, controllers); err == nil {
 		// Against the baseline, exactly as the control plane is. A manager
 		// that died in a previous run otherwise fails every rung of every run
 		// afterwards, for ever. See ManagersSince.
-		if why := Classify(ManagersSince(r.managersAtStart, components), false); why != "" {
+		since := ManagersSince(r.managersAtStart, health)
+		if why := Classify(since, false); why != "" {
 			// With the kernel's own accounting for the component that died.
 			// A manager killed while starved of quota and one killed with CPU
-			// to spare are different findings, and the sample already carries
-			// the difference — died() used to discard it, so establishing
-			// which was a scrape by hand after the run was over.
-			if th, ok := throttling[Culprit(components)]; ok && th.Periods > 0 {
-				why += " — " + th.Describe()
-				if !th.Significant() {
-					why += ", so it was not short of CPU"
+			// to spare are different findings, and a sample carries the
+			// difference — died() used to discard it, so establishing which
+			// was a scrape by hand after the run was over. One sample, now
+			// that there is a death to explain.
+			if _, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers); err == nil {
+				if th, ok := throttling[Culprit(since)]; ok && th.Periods > 0 {
+					why += " — " + th.Describe()
+					if !th.Significant() {
+						why += ", so it was not short of CPU"
+					}
 				}
 			}
 			return why

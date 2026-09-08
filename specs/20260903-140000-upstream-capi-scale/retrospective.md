@@ -181,15 +181,13 @@ they build is checked to be the same by a test.
 
 Ordered by how much it would distort the next run.
 
-**1. The convergence poll still forces a garbage collection in every
-controller every fifteen seconds.** `Runner.wait` calls `died` each poll,
-`died` calls `Sampler.Sample`, and `Sample` reads every controller's heap
-through `/debug/pprof/heap?gc=1`. At 1600 clusters that is a full collection
-of a multi-gigabyte heap in four processes, four times a minute, for the
-length of a convergence, charged to the rung whose verdict is "reconciliation
-did not keep up". The kcp runs measured forced collections as CPU precisely
-because it was not negligible. `died` needs only pod status, which
-`PodFactsFrom` already provides without touching pprof.
+**1. ~~The convergence poll still forces a garbage collection in every
+controller every fifteen seconds.~~ Fixed.** `Runner.wait` called `died` each
+poll, `died` called `Sampler.Sample`, and `Sample` read every controller's heap
+through `/debug/pprof/heap?gc=1`: a full collection of a multi-gigabyte heap in
+four processes, four times a minute, for the length of every rung, carried
+through the VIP. The death check now reads pod status alone (`Sampler.Health`)
+and takes one sample when a death is found, for the throttling figure.
 
 **2. ~~The soak still holds the failed rung's fleet.~~ Fixed.** Rungs are
 cumulative and nothing removed the rung that failed before the soak began, so a

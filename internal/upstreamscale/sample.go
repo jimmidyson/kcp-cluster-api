@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -56,6 +57,11 @@ const ProfilerPort = deployedscale.ProfilerPort
 // cannot be scheduled into.
 type Sampler struct {
 	clientset kubernetes.Interface
+
+	// profileReads counts the heap profiles this sampler has asked for, each
+	// of which forces a collection in the process it reads. Kept so that a
+	// test can say the death check reads none — see Health.
+	profileReads int
 }
 
 // NewSampler builds a sampler from the cluster's config.
@@ -70,6 +76,10 @@ func NewSampler(cfg *rest.Config) (*Sampler, error) {
 // Process reads one pod's goroutine count and post-collection heap through
 // pprof. See ScrapeProcess for why not /metrics.
 func (s *Sampler) Process(ctx context.Context, namespace, pod string) (deployedscale.ProcessSample, error) {
+	s.profileReads++
+	if s.clientset == nil {
+		return deployedscale.ProcessSample{}, errors.New("no clientset: this sampler was built without a cluster")
+	}
 	port := strconv.Itoa(ProfilerPort)
 
 	// gc=1 forces a collection before the profile is written, so HeapAlloc is
@@ -214,6 +224,40 @@ func (s *Sampler) Sample(ctx context.Context, cl client.Client, controllers []Co
 		}
 	}
 	return samples, throttling, nil
+}
+
+// Health is the pod facts of every manager and nothing else: whether each is
+// ready, how often it has restarted and why. It costs the API server one
+// Deployment read and one pod list per manager, and the managers nothing.
+//
+// # Why the death check stopped sampling
+//
+// The poll asked whether anything had died by taking a full Sample, and a
+// Sample reads a heap profile with a forced collection from every manager. At
+// 1600 clusters that was a full collection of a multi-gigabyte heap in four
+// processes, four times a minute, for the length of every rung — charged to
+// the rung whose verdict was "reconciliation did not keep up", and carried
+// through the VIP to the one API server whose etcd member kept stalling. The
+// question the poll is asking is answered by pod status alone. The profile is
+// read once a death is found, because it also carries the kernel's throttling
+// figure, which is worth one read when there is something to explain.
+func (s *Sampler) Health(ctx context.Context, cl client.Client, controllers []Controller,
+) ([]deployedscale.ComponentSample, error) {
+	out := make([]deployedscale.ComponentSample, 0, len(controllers))
+	for _, c := range controllers {
+		replicas, err := ReplicasOf(ctx, cl, c.Namespace, c.Deployment)
+		if err != nil {
+			return nil, err
+		}
+		if len(replicas) == 0 {
+			return nil, fmt.Errorf("%s has no running pod in %s", c.Name, c.Namespace)
+		}
+		labels := ReplicaNames(c.Deployment, len(replicas))
+		for i := range replicas {
+			out = append(out, deployedscale.ComponentSample{Component: labels[i], Pod: c.PodFacts(&replicas[i])})
+		}
+	}
+	return out, nil
 }
 
 // RunningPodsOf keeps the pods that are actually serving, in name order.

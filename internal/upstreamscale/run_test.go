@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -51,6 +52,12 @@ type fakeTarget struct {
 	// shortAt is the cluster count whose rung arrives one cluster short and
 	// stays there, with the straggler named.
 	shortAt int
+	// managers is what Controllers returns: a manager on host whose pod the
+	// death check reads, when the test has put one there.
+	managers []Controller
+	// killManagerAt is the cluster count at which that manager's pod is found
+	// restarted, zero for never.
+	killManagerAt int
 
 	created  []string
 	planned  []int
@@ -68,7 +75,7 @@ func (f *fakeTarget) Facts() map[string]string {
 }
 
 func (f *fakeTarget) Prepare(context.Context) error { return nil }
-func (f *fakeTarget) Controllers() []Controller     { return nil }
+func (f *fakeTarget) Controllers() []Controller     { return f.managers }
 func (f *fakeTarget) Store() StoreLocation          { return StoreLocation{Namespace: "nowhere"} }
 
 func (f *fakeTarget) ControlPlane(context.Context, client.Client, int, time.Duration,
@@ -108,6 +115,19 @@ func (f *fakeTarget) Converged(ctx context.Context, wantClusters, wantMachines i
 		pod.Status.ContainerStatuses[0].RestartCount = 1
 		pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"},
+		}
+		if err := f.host.Status().Update(ctx, &pod); err != nil {
+			return Convergence{}, err
+		}
+	}
+	if f.killManagerAt != 0 && wantClusters == f.killManagerAt {
+		var pod corev1.Pod
+		if err := f.host.Get(ctx, client.ObjectKey{Namespace: "capi-system", Name: "capi-controller-manager-abc"}, &pod); err != nil {
+			return Convergence{}, err
+		}
+		pod.Status.ContainerStatuses[0].RestartCount = 1
+		pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"},
 		}
 		if err := f.host.Status().Update(ctx, &pod); err != nil {
 			return Convergence{}, err
@@ -474,5 +494,81 @@ func TestAStuckRungNamesWhatItIsStuckOn(t *testing.T) {
 		return strings.Contains(line, "stuck") && strings.Contains(line, "capi-scale-0003/c0039")
 	}) {
 		t.Error("the straggler was not logged while the rung was still waiting")
+	}
+}
+
+// managerOnHost is one manager as the host cluster sees it: a Deployment and
+// its one running pod, never restarted.
+func managerOnHost() ([]client.Object, []Controller) {
+	labels := map[string]string{"control-plane": "controller-manager"}
+	objects := []client.Object{
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "capi-controller-manager", Namespace: "capi-system"},
+			Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "capi-controller-manager-abc", Namespace: "capi-system", Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: "md-0-a", Containers: []corev1.Container{{Name: "manager"}}},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "manager", Ready: true}},
+			},
+		},
+	}
+	return objects, []Controller{{
+		Name: "capi", Namespace: "capi-system", Deployment: "capi-controller-manager", Container: "manager",
+	}}
+}
+
+// TestTheDeathCheckReadsNoProfiles.
+//
+// The poll asked whether anything had died by taking a full sample of every
+// manager, and a sample reads a heap profile with a forced collection. At
+// 1600 clusters that was a full collection of a multi-gigabyte heap in four
+// processes, four times a minute, for the length of every rung — charged to
+// the rung whose verdict was "reconciliation did not keep up", and carried
+// through the VIP to the API server whose etcd member kept stalling. Whether
+// a process died is in its pod status, which costs the API server a list.
+func TestTheDeathCheckReadsNoProfiles(t *testing.T) {
+	objects, managers := managerOnHost()
+	// A rung that sits one short for the whole step timeout, so the wait
+	// polls many times; every poll used to profile.
+	target := &fakeTarget{name: "stock", tenant: "Namespace", managers: managers, shortAt: 4}
+	runner := testRunner(t, target, 2, 4, objects...)
+	target.host = runner.Host
+	runner.Options.StepTimeout = 100 * time.Millisecond
+
+	if _, _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// The settle, the baseline and each rung's sample may profile; a hundred
+	// polls of the wait must not.
+	if got := runner.Sampler.profileReads; got > 6 {
+		t.Errorf("%d profiles were read across a climb of two rungs; the death check is profiling", got)
+	}
+}
+
+// TestADeathIsProfiledOnce, so the failure line still says whether the
+// process that died was short of CPU — the sample is what carries the
+// kernel's throttling figure, and it is worth one read once there is
+// something to explain.
+func TestADeathIsProfiledOnce(t *testing.T) {
+	reads := func(killAt int) int {
+		objects, managers := managerOnHost()
+		target := &fakeTarget{name: "stock", tenant: "Namespace", managers: managers, killManagerAt: killAt}
+		runner := testRunner(t, target, 2, 4, objects...)
+		target.host = runner.Host
+		_, ceiling, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if killAt != 0 && (ceiling.Failed == nil || !strings.Contains(ceiling.Failed.Failure, "capi-controller-manager restarted")) {
+			t.Fatalf("the manager's death was not the failure: %+v", ceiling.Failed)
+		}
+		return runner.Sampler.profileReads
+	}
+	clean, dead := reads(0), reads(4)
+	if dead != clean+1 {
+		t.Errorf("a climb with a death read %d profiles against %d without one, want exactly one more", dead, clean)
 	}
 }
