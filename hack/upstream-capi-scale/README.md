@@ -365,6 +365,8 @@ empty keeps kubeadm's default, and `config` prints which:
 | `LEADER_ELECT_LEASE_DURATION`, `LEADER_ELECT_RENEW_DEADLINE`, `LEADER_ELECT_RETRY_PERIOD` | `137s`, `107s`, `26s` | the three `--leader-elect-*` flags on kube-controller-manager and kube-scheduler, all or none |
 | `APISERVER_GOAWAY_CHANCE` | empty, off | `--goaway-chance` on the API server: HTTP/2 clients are occasionally told to reconnect, so long-lived connections spread across instances |
 | `APISERVER_GOGC` | empty, Go's 100 | `GOGC` on the API server through kubeadm's `apiServer.extraEnvs`; OpenShift clamps the same knob to 63..100 |
+| `MEMORY_QOS` | `false` | the kubelet's `MemoryQoS` feature gate on the control plane nodes, so cgroup v2 `memory.min` is set from each pod's memory request; on by default from Kubernetes 1.37 |
+| `ETCD_MEMORY_REQUEST` | empty, kubeadm's 100Mi | a memory request on the etcd static pod, which is what `memory.min` fences; 6Gi holds a 2 GB backend file with room |
 
 The timeouts and the leader election flags are new argument names, so they
 append through the ClusterClass copy exactly as the etcd quota does. The probe
@@ -961,6 +963,42 @@ Both default to off so that a run attributes what it finds to one change at a
 time. Neither is a substitute for node memory: fresh API servers reach 24 to
 27 GiB each at 1500 clusters of ten nodes, and 32 GiB nodes are done there
 whatever the collector does.
+
+### Fencing etcd's page cache from the API server
+
+The coupling every stall on this cluster came down to: etcd keeps its backend
+file mapped and relies on the page cache to hold it, the API server's heap is
+anonymous memory that grows with the fleet, and the kernel gives the page cache
+to whoever is not using anonymous memory. At 1500 clusters on 32 GiB nodes
+that left about 3 GiB of cache for a 2 GB file, and a compaction that read the
+file cold held the member's apply loop for 57 s. Nothing in a stacked kubeadm
+control plane protects etcd's pages from that.
+
+cgroup v2 can. `memory.min` fences a cgroup's memory from reclaim, file pages
+included, and file pages are charged to the cgroup that first read them, which
+for the backend file is etcd's. The kubelet sets `memory.min` from a pod's
+memory request when its `MemoryQoS` feature gate is on. The gate is on by
+default from Kubernetes 1.37, so enabling it on 1.36 is asking for the next
+release's behaviour a release early, which is a defensible thing to do
+optionally and not a thing to do by default. Two knobs, both off:
+
+- **`MEMORY_QOS=true`** writes a `KubeletConfiguration` patch into the kubeadm
+  patches directory turning the gate on, for the control plane nodes only.
+  Needs cgroup v2 there.
+- **`ETCD_MEMORY_REQUEST`** puts a memory request on the etcd static pod
+  through an `etcd` patch in the same directory. `memory.min` protects what is
+  requested, and kubeadm requests 100Mi, so the gate is only worth turning on
+  with this set: 6Gi holds the member's own heap and a 2 GB file with room,
+  8Gi is the backend quota itself. On its own, without the gate, the request
+  still corrects the scheduler's picture of the node and etcd's OOM ordering.
+
+One side effect to know about. The gate also sets `memory.high` on every
+Burstable container, from its request and the node's allocatable where it has
+no limit. kubeadm's API server has a CPU request and nothing else, so it lands
+at 90% of the node, and above that the kernel throttles its allocation rather
+than letting it take the last tenth. That is arguably the right behaviour on a
+node etcd shares, and it is a change in behaviour, so pair it with
+`APISERVER_GOGC` if `/livez` latency shows it.
 
 ### The managers are kept off the control plane nodes
 

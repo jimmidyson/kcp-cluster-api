@@ -114,6 +114,32 @@ APISERVER_GOAWAY_CHANCE="${APISERVER_GOAWAY_CHANCE-}"
 # buys is page cache for the etcd member on the same node, at the cost of API
 # server CPU. Empty leaves the Go default of 100.
 APISERVER_GOGC="${APISERVER_GOGC-}"
+# Protect the etcd member from the API server beside it, at the cgroup.
+#
+# etcd keeps its backend file mapped and relies on the page cache to hold it;
+# the API server's heap is anonymous memory that grows with the fleet; and the
+# kernel gives the page cache to whoever is not using anonymous memory. On
+# 32 GiB nodes at 1500 clusters that left about 3 GiB of cache for a 2 GB
+# file, and a compaction that reads the file cold held the member's apply
+# loop for a minute. cgroup v2 memory.min fences a cgroup's memory, file pages
+# included, from reclaim, and the kubelet sets it from a pod's memory request
+# when its MemoryQoS feature gate is on. The gate is on by default from
+# Kubernetes 1.37, so enabling it on 1.36 is asking for next release's
+# behaviour a release early. Off by default here so that a run attributes
+# what it finds to one change at a time. Needs cgroup v2 on the nodes.
+#
+# memory.min protects what is requested, and kubeadm requests 100Mi for etcd,
+# so the gate is only worth turning on with ETCD_MEMORY_REQUEST sized to hold
+# the member: its own heap plus the backend file at the quota it is allowed to
+# reach. 6Gi covers a 2 GB file with room to grow; 8Gi is the quota itself.
+#
+# The gate also sets memory.high on every Burstable container from its request
+# and the node allocatable, which on kubeadm's API server, with no memory
+# request and no limit, lands at 90% of the node. Above that the kernel
+# throttles the API server's allocation rather than letting it take the last
+# tenth. Pair with APISERVER_GOGC if that throttling shows up in /livez.
+MEMORY_QOS="${MEMORY_QOS-false}"
+ETCD_MEMORY_REQUEST="${ETCD_MEMORY_REQUEST-}"
 
 # etcd on a disk of its own. On CAREN's template it shares the root disk with
 # the API server's audit log, the container logs and everything else on the
@@ -238,6 +264,10 @@ config() {
   [[ -z "${APISERVER_GOAWAY_CHANCE}" ]] || goaway="${APISERVER_GOAWAY_CHANCE} (HTTP/2 clients are occasionally told to reconnect, spreading them across instances)"
   local gogc="Go default, 100 (APISERVER_GOGC is empty)"
   [[ -z "${APISERVER_GOGC}" ]] || gogc="${APISERVER_GOGC} (OpenShift clamps this to 63..100)"
+  local memoryqos="off (MEMORY_QOS is not true; the page cache is shared and unprotected)"
+  [[ "${MEMORY_QOS}" != "true" ]] || memoryqos="on: the kubelet sets cgroup v2 memory.min from each pod memory request on the control plane nodes"
+  local etcdrequest="kubeadm default, 100Mi (ETCD_MEMORY_REQUEST is empty)"
+  [[ -z "${ETCD_MEMORY_REQUEST}" ]] || etcdrequest="${ETCD_MEMORY_REQUEST}$([[ "${MEMORY_QOS}" == "true" ]] && echo ', fenced from reclaim as memory.min' || echo ' (scheduler and OOM ordering only; set MEMORY_QOS=true to fence it from reclaim)')"
   local sshlogin="none (NUTANIX_SSH_AUTHORIZED_KEY is unset; CAREN's template does not read it, this script does)"
   [[ -z "${NUTANIX_SSH_AUTHORIZED_KEY:-}" ]] || sshlogin="user ${SSH_USER}, key ${NUTANIX_SSH_AUTHORIZED_KEY##* } (from NUTANIX_SSH_AUTHORIZED_KEY, via CAREN's users variable)"
   local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
@@ -266,6 +296,8 @@ API server liveness      ${livez}
 leader election          ${leader} — on kube-controller-manager and kube-scheduler
 API server goaway-chance ${goaway}
 API server GOGC          ${gogc}
+memory QoS               ${memoryqos}
+etcd memory request      ${etcdrequest}
 etcd disk                ${etcddisk}
 node login               ${sshlogin}
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
@@ -475,9 +507,34 @@ spec:
 PATCH
 )"
 
+  # Two more patch files for the same directory. The kubelet one carries a
+  # feature gate, since kubelet gates live in KubeletConfiguration rather than
+  # on kubeadm; the suffix sits between the two CAREN writes at 0 and 1 and
+  # the one its extension writes at 99, and kubeadm applies them in name
+  # order. The etcd one is a memory request on the static pod, which is what
+  # memory.min is set from.
+  local memoryqos_patch etcdrequest_patch
+  memoryqos_patch="$(cat <<'PATCH'
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+featureGates:
+  MemoryQoS: true
+PATCH
+)"
+  etcdrequest_patch="$(cat <<PATCH
+spec:
+  containers:
+    - name: etcd
+      resources:
+        requests:
+          memory: ${ETCD_MEMORY_REQUEST}
+PATCH
+)"
+
   log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
   log "  API server etcd checks ${APISERVER_ETCD_CHECK_TIMEOUT:-kubeadm default}, liveness $([[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] && echo '/livez?exclude=etcd' || echo 'kubeadm default'), leader election ${LEADER_ELECT_LEASE_DURATION:-kubeadm default}/${LEADER_ELECT_RENEW_DEADLINE:-}/${LEADER_ELECT_RETRY_PERIOD:-} (patches in ${patch_dir})"
   log "  API server goaway-chance ${APISERVER_GOAWAY_CHANCE:-off}, GOGC ${APISERVER_GOGC:-Go default}"
+  log "  memory QoS ${MEMORY_QOS}, etcd memory request ${ETCD_MEMORY_REQUEST:-kubeadm default}"
   jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
      --arg etcdcheck "${APISERVER_ETCD_CHECK_TIMEOUT}" \
      --arg livez "${APISERVER_LIVEZ_EXCLUDE_ETCD}" \
@@ -487,6 +544,8 @@ PATCH
      --arg patchdir "${patch_dir}" --argjson setpatchdir "${set_patch_dir}" \
      --arg probe "${probe}" \
      --arg goaway "${APISERVER_GOAWAY_CHANCE}" --arg gogc "${APISERVER_GOGC}" --argjson hasapienvs "${has_api_envs}" \
+     --arg memoryqos "${MEMORY_QOS}" --arg memoryqospatch "${memoryqos_patch}" \
+     --arg etcdrequest "${ETCD_MEMORY_REQUEST}" --arg etcdrequestpatch "${etcdrequest_patch}" \
      --arg disksize "${ETCD_DISK_SIZE}" --arg diskdev "${ETCD_DISK_DEVICE}" --arg diskmount "${ETCD_DISK_MOUNT}" \
      --arg diskcontainer "${ETCD_DISK_STORAGE_CONTAINER}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
@@ -510,14 +569,22 @@ PATCH
                   {op: "add", path: "\($k)/clusterConfiguration/\(.)/extraArgs/-",
                    value: {name: "leader-elect-retry-period", value: $retry}}
                 )) end)
-            + (if $livez != "true" then [] else
-                [{op: "add", path: "\($k)/files/-",
-                  value: {path: "\($patchdir)/kube-apiserver1+strategic.yaml", permissions: "0600", content: $probe}}]
-                + (if $setpatchdir then [
-                    {op: "add", path: "\($k)/initConfiguration/patches", value: {directory: $patchdir}},
-                    {op: "add", path: "\($k)/joinConfiguration/patches", value: {directory: $patchdir}}
-                  ] else [] end)
-              end)
+            + (
+                (if $livez != "true" then [] else [
+                  {path: "\($patchdir)/kube-apiserver1+strategic.yaml", permissions: "0600", content: $probe}
+                ] end)
+                + (if $memoryqos != "true" then [] else [
+                  {path: "\($patchdir)/kubeletconfiguration50+strategic.yaml", permissions: "0600", content: $memoryqospatch}
+                ] end)
+                + (if $etcdrequest == "" then [] else [
+                  {path: "\($patchdir)/etcd1+strategic.yaml", permissions: "0600", content: $etcdrequestpatch}
+                ] end)
+              ) as $patchfiles
+            | ($patchfiles | map({op: "add", path: "\($k)/files/-", value: .}))
+            + (if ($patchfiles | length) > 0 and $setpatchdir then [
+                {op: "add", path: "\($k)/initConfiguration/patches", value: {directory: $patchdir}},
+                {op: "add", path: "\($k)/joinConfiguration/patches", value: {directory: $patchdir}}
+              ] else [] end)
             + (if $goaway == "" then [] else [
                 {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraArgs/-",
                  value: {name: "goaway-chance", value: $goaway}}
@@ -553,7 +620,7 @@ PATCH
           }]
           + (if ($tolerances | length) == 0 then [] else [{
             name: "controlPlaneTolerances",
-            description: "The OpenShift production defaults that let a control plane ride out a slow minute from its store: 9s etcd health and ready checks and a liveness probe that excludes etcd on the API server, and 137s/107s/26s leader election on the controller manager and scheduler. Every argument is appended under a new name, last in the patch order, so it lands on the lists the CAREN runtime extension produced. The probe is a kubeadm patch file, since kubeadm has no knob for probes. When set, goaway-chance spreads HTTP/2 clients across the API server instances and GOGC bounds the API server heap so the etcd member beside it keeps its page cache.",
+            description: "The OpenShift production defaults that let a control plane ride out a slow minute from its store: 9s etcd health and ready checks and a liveness probe that excludes etcd on the API server, and 137s/107s/26s leader election on the controller manager and scheduler. Every argument is appended under a new name, last in the patch order, so it lands on the lists the CAREN runtime extension produced. The probe is a kubeadm patch file, since kubeadm has no knob for probes. When set, goaway-chance spreads HTTP/2 clients across the API server instances, GOGC bounds the API server heap so the etcd member beside it keeps its page cache, and the MemoryQoS kubelet gate with an etcd memory request fences that page cache at the cgroup.",
             definitions: [{
               selector: {
                 apiVersion: $cp.apiVersion,
@@ -627,6 +694,13 @@ Applied as ClusterClass ${dst}. Things to check against your CAREN version:
     later on the bootstrap cluster and kubeadm from Kubernetes 1.28 or later
     on the nodes; older kubeadm ignores the field and the API server keeps
     the Go default. The patch $([[ "${has_api_envs}" == true ]] && echo "appends to the extraEnvs the template already carries" || echo "creates the extraEnvs list, since the template has none").
+  * MEMORY_QOS writes a KubeletConfiguration patch turning the MemoryQoS
+    feature gate on for the control plane nodes only, which needs cgroup v2
+    there. It is on by default from Kubernetes 1.37. The kubelet then sets
+    memory.min from every pod memory request, so ETCD_MEMORY_REQUEST is what
+    etcd is actually fenced with, and memory.high on Burstable containers
+    from request and node allocatable, which puts the API server at 90% of
+    the node.
   * the probe patch is written to ${patch_dir}, read from the control plane
     template$([[ "${set_patch_dir}" == true ]] && echo " — the template named none, so both init and join are told" || echo "")".
   * the etcd disk is a CAPX dataDisks entry on the control plane machine

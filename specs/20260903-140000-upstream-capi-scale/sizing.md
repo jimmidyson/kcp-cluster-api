@@ -131,6 +131,13 @@ cliff, and revisions between compactions are what fill it during a climb.
   subdirectory of it — twice the quota for a defragmentation's second copy,
   plus the WAL; see `hack/upstream-capi-scale/README.md`, "etcd on a disk of its
   own".
+- **Its page cache is shared with the API server**, and on 32 GiB nodes that
+  is the ceiling: the API server's heap evicts the backend file, and a
+  compaction then reads it cold for a minute. The remedies in order are etcd on
+  its own machines, node memory, and cgroup v2 `memory.min` through the
+  kubelet's `MemoryQoS` gate with a memory request on etcd, which the
+  provisioning script offers as `MEMORY_QOS` and `ETCD_MEMORY_REQUEST`; see the
+  README, "Fencing etcd's page cache from the API server".
 
 ### Where each component lands, and why the report says so
 
