@@ -119,15 +119,28 @@ APISERVER_GOAWAY_CHANCE="${APISERVER_GOAWAY_CHANCE-}"
 # kernel gives the page cache to whoever is not using anonymous memory. On
 # 32 GiB nodes at 1500 clusters that left about 3 GiB of cache for a 2 GB
 # file, and a compaction that reads the file cold held the member's apply
-# loop for a minute. cgroup v2 memory.min fences a cgroup's memory, file pages
-# included, from reclaim, and the kubelet sets it from a pod's memory request
-# when its MemoryQoS feature gate is on. The gate is on by default from
-# Kubernetes 1.37, so enabling it on 1.36 is asking for next release's
-# behaviour a release early. Off by default here so that a run attributes
-# what it finds to one change at a time. Needs cgroup v2 on the nodes.
+# loop for a minute. cgroup v2 memory.low and memory.min protect a cgroup's
+# memory, file pages included, from reclaim: low is taken last, once nothing
+# unprotected is left on the node; min is never taken.
 #
-# memory.min protects what is requested, and kubeadm requests 100Mi for etcd,
-# so the gate is only worth turning on with ETCD_MEMORY_REQUEST sized to hold
+# The kubelet sets them from a pod's memory request when two things are on:
+# the MemoryQoS feature gate and memoryReservationPolicy: TieredReservation.
+# With the policy a Burstable pod gets memory.low and a Guaranteed pod
+# memory.min; without it the kubelet writes 0 to both, gate or no gate
+# (Kubernetes 1.36 and later; before 1.36 the gate alone set memory.min from
+# every request). A node with the gate on and the policy off measures nothing
+# new, which one run here found out the hard way: memory.high set, memory.min
+# 0. kubeadm's etcd is Burstable, so what this knob buys it is memory.low,
+# which is enough on a node it shares with an API server whose heap is
+# unprotected: that heap is reclaimed first, all of it, before etcd's pages
+# are. The gate is on by default from 1.37 and the policy stays None there,
+# so turning both on for 1.36 is asking for the next release's mechanism a
+# release early and then opting into the tier it leaves off. Off by default
+# here so that a run attributes what it finds to one change at a time. Needs
+# cgroup v2 on the nodes.
+#
+# memory.low protects what is requested, and kubeadm requests 100Mi for etcd,
+# so the knob is only worth turning on with ETCD_MEMORY_REQUEST sized to hold
 # the member: its own heap plus the backend file at the quota it is allowed to
 # reach. 6Gi covers a 2 GB file with room to grow; 8Gi is the quota itself.
 #
@@ -262,9 +275,9 @@ config() {
   local goaway="off (APISERVER_GOAWAY_CHANCE is empty; connections stay on the instance they first reached)"
   [[ -z "${APISERVER_GOAWAY_CHANCE}" ]] || goaway="${APISERVER_GOAWAY_CHANCE} (HTTP/2 clients are occasionally told to reconnect, spreading them across instances)"
   local memoryqos="off (MEMORY_QOS is not true; the page cache is shared and unprotected)"
-  [[ "${MEMORY_QOS}" != "true" ]] || memoryqos="on: the kubelet sets cgroup v2 memory.min from each pod memory request on the control plane nodes"
+  [[ "${MEMORY_QOS}" != "true" ]] || memoryqos="on: the MemoryQoS gate with memoryReservationPolicy TieredReservation, so the kubelet sets cgroup v2 memory.low from each Burstable pod memory request on the control plane nodes"
   local etcdrequest="kubeadm default, 100Mi (ETCD_MEMORY_REQUEST is empty)"
-  [[ -z "${ETCD_MEMORY_REQUEST}" ]] || etcdrequest="${ETCD_MEMORY_REQUEST}$([[ "${MEMORY_QOS}" == "true" ]] && echo ', fenced from reclaim as memory.min' || echo ' (scheduler and OOM ordering only; set MEMORY_QOS=true to fence it from reclaim)')"
+  [[ -z "${ETCD_MEMORY_REQUEST}" ]] || etcdrequest="${ETCD_MEMORY_REQUEST}$([[ "${MEMORY_QOS}" == "true" ]] && echo ', fenced from reclaim as memory.low' || echo ' (scheduler and OOM ordering only; set MEMORY_QOS=true to fence it from reclaim)')"
   local sshlogin="none (NUTANIX_SSH_AUTHORIZED_KEY is unset; CAREN's template does not read it, this script does)"
   [[ -z "${NUTANIX_SSH_AUTHORIZED_KEY:-}" ]] || sshlogin="user ${SSH_USER}, key ${NUTANIX_SSH_AUTHORIZED_KEY##* } (from NUTANIX_SSH_AUTHORIZED_KEY, via CAREN's users variable)"
   local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
@@ -497,13 +510,15 @@ PATCH
   # on kubeadm; the suffix sits between the two CAREN writes at 0 and 1 and
   # the one its extension writes at 99, and kubeadm applies them in name
   # order. The etcd one is a memory request on the static pod, which is what
-  # memory.min is set from.
+  # memory.low is set from. The gate alone sets nothing on 1.36: the policy
+  # is what turns a request into protection.
   local memoryqos_patch etcdrequest_patch
   memoryqos_patch="$(cat <<'PATCH'
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 featureGates:
   MemoryQoS: true
+memoryReservationPolicy: TieredReservation
 PATCH
 )"
   etcdrequest_patch="$(cat <<PATCH
@@ -667,12 +682,13 @@ Applied as ClusterClass ${dst}. Things to check against your CAREN version:
     names, the KubeadmControlPlane is refused at admission with "extraArgs name
     must be unique", and the fix is to empty that knob.
   * MEMORY_QOS writes a KubeletConfiguration patch turning the MemoryQoS
-    feature gate on for the control plane nodes only, which needs cgroup v2
-    there. It is on by default from Kubernetes 1.37. The kubelet then sets
-    memory.min from every pod memory request, so ETCD_MEMORY_REQUEST is what
-    etcd is actually fenced with, and memory.high on Burstable containers
-    from request and node allocatable, which puts the API server at 90% of
-    the node.
+    feature gate on with memoryReservationPolicy TieredReservation, for the
+    control plane nodes only, which needs cgroup v2 there. The gate alone
+    sets nothing on 1.36; with the policy the kubelet sets memory.low from
+    every Burstable pod memory request, so ETCD_MEMORY_REQUEST is what etcd
+    is actually fenced with, and memory.high on Burstable containers from
+    request and node allocatable, which puts the API server at 90% of the
+    node.
   * the probe patch is written to ${patch_dir}, read from the control plane
     template$([[ "${set_patch_dir}" == true ]] && echo " — the template named none, so both init and join are told" || echo "")".
   * the etcd disk is a CAPX dataDisks entry on the control plane machine

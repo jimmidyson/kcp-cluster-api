@@ -134,8 +134,9 @@ cliff, and revisions between compactions are what fill it during a climb.
 - **Its page cache is shared with the API server**, and on 32 GiB nodes that
   is the ceiling: the API server's heap evicts the backend file, and a
   compaction then reads it cold for a minute. The remedies in order are etcd on
-  its own machines, node memory, and cgroup v2 `memory.min` through the
-  kubelet's `MemoryQoS` gate with a memory request on etcd, which the
+  its own machines, node memory, and cgroup v2 `memory.low` through the
+  kubelet's `MemoryQoS` gate and `TieredReservation` policy with a memory
+  request on etcd (the gate alone sets nothing on 1.36), which the
   provisioning script offers as `MEMORY_QOS` and `ETCD_MEMORY_REQUEST`; see the
   README, "Fencing etcd's page cache from the API server".
 
