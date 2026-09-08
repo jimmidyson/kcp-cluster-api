@@ -110,9 +110,14 @@ APISERVER_GOAWAY_CHANCE="${APISERVER_GOAWAY_CHANCE-}"
 # GOGC on the API server, set through kubeadm's extraEnvs. The collector runs
 # when the heap has grown by this percent over what survived the last cycle,
 # so 100 lets a 15 GiB live heap reach 30 GiB before collecting. OpenShift
-# exposes the same knob and clamps it to 63..100; 63 is its floor. What it
-# buys is page cache for the etcd member on the same node, at the cost of API
-# server CPU. Empty leaves the Go default of 100.
+# ships 100 and accepts 63..100 through its operator's unsupportedConfigOverrides,
+# added in 2022 as "an escape hatch for clusters that are negatively impacted
+# by changes to garbage collector pacing in Go 1.18"; nothing in its sizing
+# guidance recommends it, and its 3500-cluster hub runs at 100. So this is an
+# experiment with a vendor-tolerated range, not a vendor setting: it says how
+# much of a 32 GiB node's ceiling is collector slack, at the cost of API
+# server CPU. If the answer matters, the production conclusion is still node
+# memory. Empty leaves the Go default of 100.
 APISERVER_GOGC="${APISERVER_GOGC-}"
 # Protect the etcd member from the API server beside it, at the cgroup.
 #

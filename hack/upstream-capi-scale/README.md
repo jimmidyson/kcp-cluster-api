@@ -364,7 +364,7 @@ empty keeps kubeadm's default, and `config` prints which:
 | `APISERVER_LIVEZ_EXCLUDE_ETCD` | `true` | the API server's liveness probe path, `/livez?exclude=etcd` |
 | `LEADER_ELECT_LEASE_DURATION`, `LEADER_ELECT_RENEW_DEADLINE`, `LEADER_ELECT_RETRY_PERIOD` | `137s`, `107s`, `26s` | the three `--leader-elect-*` flags on kube-controller-manager and kube-scheduler, all or none |
 | `APISERVER_GOAWAY_CHANCE` | empty, off | `--goaway-chance` on the API server: HTTP/2 clients are occasionally told to reconnect, so long-lived connections spread across instances |
-| `APISERVER_GOGC` | empty, Go's 100 | `GOGC` on the API server through kubeadm's `apiServer.extraEnvs`; OpenShift clamps the same knob to 63..100 |
+| `APISERVER_GOGC` | empty, Go's 100 | `GOGC` on the API server through kubeadm's `apiServer.extraEnvs`; OpenShift tolerates 63..100 as an unsupported override and recommends nothing |
 | `MEMORY_QOS` | `false` | the kubelet's `MemoryQoS` feature gate on the control plane nodes, so cgroup v2 `memory.min` is set from each pod's memory request; on by default from Kubernetes 1.37 |
 | `ETCD_MEMORY_REQUEST` | empty, kubeadm's 100Mi | a memory request on the etcd static pod, which is what `memory.min` fences; 6Gi holds a 2 GB backend file with room |
 
@@ -953,11 +953,21 @@ through.
 - **`APISERVER_GOGC`** sets `GOGC` on kube-apiserver through kubeadm's
   `apiServer.extraEnvs`. The collector runs when the heap has grown by that
   percent over what survived the last cycle, so 100 lets a 15 GiB live heap
-  reach 30 GiB. OpenShift exposes the same knob and clamps it to 63..100; 63 is
-  its floor and what to try first. What it buys is page cache for the etcd
-  member on the same node, at the cost of API server CPU. `extraEnvs` needs
-  Cluster API v1.8 or later on the bootstrap cluster and kubeadm from
-  Kubernetes 1.28 or later on the nodes.
+  reach 30 GiB. What it buys is page cache for the etcd member on the same
+  node, at the cost of API server CPU. `extraEnvs` needs Cluster API v1.8 or
+  later on the bootstrap cluster and kubeadm from Kubernetes 1.28 or later on
+  the nodes.
+
+  What OpenShift does with it, precisely, because it is easy to overstate:
+  its kube-apiserver operator ships 100 and accepts 63..100 only through
+  `unsupportedConfigOverrides`, a knob added in June 2022 as "an escape hatch
+  for clusters that are negatively impacted by changes to garbage collector
+  pacing in Go 1.18", clamped "to limit surprises" with no derivation of the
+  floor. No OpenShift or ACM sizing guidance recommends it, and the
+  3,500-cluster hub runs at 100 on 512 GiB nodes. So 63 is a value a vendor
+  tolerates, not one it recommends: run it to learn how much of a 32 GiB
+  node's ceiling is collector slack, and if the answer is a lot, the
+  production conclusion is still the node size.
 
 Both default to off so that a run attributes what it finds to one change at a
 time. Neither is a substitute for node memory: fresh API servers reach 24 to
