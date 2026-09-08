@@ -103,3 +103,30 @@ func TestAProcessThatWillNotSayIsNotAccused(t *testing.T) {
 		t.Errorf("age = %s, want zero for a process that did not say", age)
 	}
 }
+
+// TestAnAPIServerHoldingGigabytesAtZeroClustersIsInherited.
+//
+// Inherited reads a process start time, and the control plane's samples come
+// from cAdvisor, which has none — so a run whose API servers had served 2000
+// clusters an hour earlier took its baseline at 54.8 GiB of API server against
+// an empty API, and the report said nothing. An API server serving nothing
+// costs about half a gigabyte; anything in gigabytes at zero clusters is the
+// fleet before.
+func TestAnAPIServerHoldingGigabytesAtZeroClustersIsInherited(t *testing.T) {
+	fresh := deployedscale.ComponentSample{Component: "kube-apiserver-cp-0",
+		Process: deployedscale.ProcessSample{ResidentBytes: 550 << 20}, Pod: deployedscale.PodFacts{StaticPod: true}}
+	stale := deployedscale.ComponentSample{Component: "kube-apiserver-cp-1",
+		Process: deployedscale.ProcessSample{ResidentBytes: 21 << 30}, Pod: deployedscale.PodFacts{StaticPod: true}}
+	// A busy neighbour that is not the API server is not this check's
+	// business, however large.
+	etcd := deployedscale.ComponentSample{Component: "etcd-cp-1",
+		Process: deployedscale.ProcessSample{ResidentBytes: 3 << 30}, Pod: deployedscale.PodFacts{StaticPod: true}}
+
+	got := InheritedControlPlane([]deployedscale.ComponentSample{fresh, stale, etcd})
+	if len(got) != 1 || !strings.Contains(got[0], "kube-apiserver-cp-1") || !strings.Contains(got[0], "21.0 GiB") {
+		t.Errorf("inherited = %v, want the 21 GiB API server alone", got)
+	}
+	if note := DescribeInherited(got); !strings.Contains(note, "not this run's") {
+		t.Errorf("the note does not say what it means: %q", note)
+	}
+}

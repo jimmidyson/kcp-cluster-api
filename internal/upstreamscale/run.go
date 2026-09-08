@@ -253,7 +253,10 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	// twenty-three times the fleet's own cost. See Inherited.
 	if len(report.Samples) > 0 {
 		base := report.Samples[len(report.Samples)-1]
-		if note := DescribeInherited(Inherited(base.Components, started)); note != "" {
+		// By age where a process publishes one, and by size for the API
+		// servers, which do not. See InheritedControlPlane.
+		old := append(Inherited(base.Components, started), InheritedControlPlane(base.Components)...)
+		if note := DescribeInherited(old); note != "" {
 			report.AddFact("inheritedBaseline", note)
 			r.logf("WARNING: %s", note)
 		}
@@ -579,13 +582,22 @@ func (r *Runner) wait(ctx context.Context, controllers []Controller, clusters, m
 		}
 
 		if time.Now().After(deadline) {
-			// A fleet that never arrived and a fleet that arrived and would
-			// not hold still are different findings, and the last poll's
-			// count cannot tell them apart. See Steadiness.
+			// A fleet that never arrived, a fleet that arrived and would not
+			// hold still, and a fleet that all but arrived and stopped are
+			// three findings, and the last poll's count cannot tell them
+			// apart. See Steadiness. With the names of what is not ready,
+			// because the fleet is torn down at the end of the run and the
+			// evidence goes with it.
 			why := fmt.Sprintf("%s (%s)", timedOutBecause(steady), last.Describe())
-			return false, annotate(why, steady.Describe(), r.beside(ctx), r.strain(ctx))
+			return false, annotate(why, last.DescribeStragglers(), steady.Describe(), r.beside(ctx), r.strain(ctx))
 		}
 		r.logf("    %s", last.Describe())
+		// Named while the rung is still waiting, so that a person can go and
+		// look at the straggler before the step timeout takes it away. On the
+		// poll the fleet is first judged stuck, and every so often after.
+		if steady.Stuck() && (steady.Motionless+1-stuckPolls)%stuckPolls == 0 {
+			r.logf("    stuck: %s", last.DescribeStragglers())
+		}
 		select {
 		case <-ctx.Done():
 			return false, "interrupted: " + last.Describe()

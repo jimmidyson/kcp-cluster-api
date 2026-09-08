@@ -281,6 +281,11 @@ func (c Ceiling) Describe() string {
 // stay still, which points at Cluster API's per-cluster health probes rather
 // than at its reconcilers. See Steadiness.
 func timedOutBecause(steady Steadiness) string {
+	if steady.Stuck() {
+		return fmt.Sprintf("the fleet all but arrived and then stopped: it sat motionless for the last "+
+			"%d polls with every component still healthy, which is a stuck object rather than "+
+			"reconciliation failing to keep up", steady.Motionless+1)
+	}
 	if steady.Flapping() {
 		return "the fleet did not reach the end state in time, with every component still " +
 			"healthy — and it did not fail to arrive: its readiness would not hold still long " +

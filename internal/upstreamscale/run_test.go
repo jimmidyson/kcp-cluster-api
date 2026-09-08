@@ -48,6 +48,9 @@ type fakeTarget struct {
 	// found restarted at the same moment the fleet arrives, zero for never.
 	dieAt int
 	host  client.Client
+	// shortAt is the cluster count whose rung arrives one cluster short and
+	// stays there, with the straggler named.
+	shortAt int
 
 	created  []string
 	planned  []int
@@ -112,6 +115,13 @@ func (f *fakeTarget) Converged(ctx context.Context, wantClusters, wantMachines i
 	}
 	if f.failAt != 0 && wantClusters == f.failAt {
 		return Convergence{ControlPlanesWant: wantClusters, MachinesWant: wantMachines}, nil
+	}
+	if f.shortAt != 0 && wantClusters == f.shortAt {
+		return Convergence{
+			ControlPlanesReady: wantClusters - 1, ControlPlanesWant: wantClusters,
+			MachinesReady: wantMachines - 1, MachinesWant: wantMachines,
+			Stragglers: []string{"capi-scale-0003/c0039: control plane 2 of 3 ready, Available=False (NotAvailable: Etcd member 1 does not have a corresponding Machine)"},
+		}, nil
 	}
 	return Convergence{
 		ControlPlanesReady: wantClusters, ControlPlanesWant: wantClusters,
@@ -433,5 +443,36 @@ func TestASoakAfterACleanClimbRemovesNothing(t *testing.T) {
 	}
 	if _, ok := report.Facts["soakFleet"]; ok {
 		t.Error("a soak of the whole fleet claims to have trimmed it")
+	}
+}
+
+// TestAStuckRungNamesWhatItIsStuckOn, in the failure line, because the fleet
+// is torn down at the end of the run and the evidence goes with it.
+func TestAStuckRungNamesWhatItIsStuckOn(t *testing.T) {
+	target := &fakeTarget{name: "stock", tenant: "Namespace", shortAt: 40}
+	runner := testRunner(t, target, 10, 40)
+	runner.Options.StepTimeout = 200 * time.Millisecond
+	var logged []string
+	runner.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	_, ceiling, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if ceiling.Failed == nil || ceiling.Failed.Clusters != 40 {
+		t.Fatalf("failed rung = %+v, want 40", ceiling.Failed)
+	}
+	if !strings.Contains(ceiling.Failed.Failure, "stuck") {
+		t.Errorf("a rung one short and motionless is not called stuck: %q", ceiling.Failed.Failure)
+	}
+	if !strings.Contains(ceiling.Failed.Failure, "capi-scale-0003/c0039") {
+		t.Errorf("the failure line does not name the straggler: %q", ceiling.Failed.Failure)
+	}
+	// And while it was still waiting, so that a person can look before the
+	// step timeout takes the fleet away.
+	if !slices.ContainsFunc(logged, func(line string) bool {
+		return strings.Contains(line, "stuck") && strings.Contains(line, "capi-scale-0003/c0039")
+	}) {
+		t.Error("the straggler was not logged while the rung was still waiting")
 	}
 }

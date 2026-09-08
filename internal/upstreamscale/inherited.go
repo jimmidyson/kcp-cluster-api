@@ -76,6 +76,40 @@ func Inherited(components []deployedscale.ComponentSample, runStart time.Time) [
 	return old
 }
 
+// emptyAPIServerCeiling is more resident memory than an API server serving
+// nothing has any business holding.
+//
+// Measured on this cluster: a kube-apiserver with Cluster API's CRDs installed
+// and no Clusters, Machines or events left in it held 345 MiB of runtime memory
+// once restarted, and the three on a freshly built cluster read 483 to 571 MiB
+// resident. Two gigabytes is four times that, and the case being caught is not
+// close: the API servers that had served 2000 clusters an hour earlier read
+// 21 to 23 GiB each at the next run's baseline.
+const emptyAPIServerCeiling = 2 << 30
+
+// InheritedControlPlane names the API servers whose baseline is a previous
+// run's, judged by size rather than by age.
+//
+// Inherited reads a process start time, and the control plane's samples come
+// from the kubelet's cAdvisor endpoint, which reports memory and CPU and no
+// start time — so a run whose API servers were never restarted took its
+// baseline at 54.8 GiB of API server against an empty API, and the check that
+// exists for exactly this said nothing. An API server holding gigabytes at zero
+// clusters is holding the fleet before; nothing else it could be doing costs
+// that.
+func InheritedControlPlane(components []deployedscale.ComponentSample) []string {
+	var old []string
+	for _, c := range components {
+		if !strings.HasPrefix(c.Component, "kube-apiserver") || c.Process.ResidentBytes < emptyAPIServerCeiling {
+			continue
+		}
+		old = append(old, fmt.Sprintf("%s (%s resident with no fleet to serve)",
+			c.Component, humanBytes(c.Process.ResidentBytes)))
+	}
+	sort.Strings(old)
+	return old
+}
+
 // DescribeInherited is the note a baseline carries when it is not its own.
 func DescribeInherited(old []string) string {
 	if len(old) == 0 {

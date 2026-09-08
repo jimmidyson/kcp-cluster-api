@@ -17,6 +17,7 @@ limitations under the License.
 package upstreamscale
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -226,5 +227,109 @@ func TestTheTroughIsMeasuredAfterThePeak(t *testing.T) {
 	if s.DropFrom != 400 || s.DropTo != 360 {
 		t.Errorf("fall = %d to %d, want the drop after the peak rather than the climb from 5",
 			s.DropFrom, s.DropTo)
+	}
+}
+
+// TestTheStragglersAreNamed, with what Cluster API says about each.
+//
+// The rung this is from: 1999 of 2000 control planes and 19999 of 20000
+// Machines, for thirty minutes, and the report could not say which cluster or
+// why. The fleet was torn down at the end of the run, so the answer went with
+// it. The count is the verdict; the names are the evidence.
+func TestTheStragglersAreNamed(t *testing.T) {
+	stuck := scalingUp("c1445", 2, 3)
+	stuck.Namespace = "capi-scale-0144"
+	stuck.Status.Conditions[0].Status = metav1.ConditionFalse
+	stuck.Status.Conditions[0].Reason = "NotAvailable"
+	stuck.Status.Conditions[0].Message = "Etcd member 1 does not have a corresponding Machine"
+
+	m := machine("c1445-cp-x7k2p", false)
+	m.Namespace = "capi-scale-0144"
+	m.Status.Phase = "Provisioning"
+	m.Status.Conditions[0].Reason = "BootstrapDataNotReady"
+	m.Status.Conditions[0].Message = "waiting for bootstrap data"
+
+	got := Converged([]clusterv1.Cluster{cluster("c0000", true), stuck},
+		[]clusterv1.Machine{machine("m0", true), m}, 2, 2)
+	if got.Done {
+		t.Fatal("a fleet one short was called converged")
+	}
+	line := got.DescribeStragglers()
+	for _, want := range []string{
+		"capi-scale-0144/c1445: control plane 2 of 3 ready, Available=False (NotAvailable: Etcd member 1 does not have a corresponding Machine)",
+		"capi-scale-0144/c1445-cp-x7k2p: Provisioning, Ready=False (BootstrapDataNotReady: waiting for bootstrap data)",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("missing %q in %q", want, line)
+		}
+	}
+	if Converged([]clusterv1.Cluster{cluster("c0000", true)}, nil, 1, 0).DescribeStragglers() != "" {
+		t.Error("a converged fleet has stragglers")
+	}
+}
+
+// TestOnlyAFewStragglersAreNamed, because a fleet that is half arrived has a
+// thousand of them and a line with a thousand names on it is not a line.
+func TestOnlyAFewStragglersAreNamed(t *testing.T) {
+	var clusters []clusterv1.Cluster
+	for i := 0; i < 20; i++ {
+		clusters = append(clusters, cluster(fmt.Sprintf("c%04d", i), false))
+	}
+	got := Converged(clusters, nil, 20, 0)
+	if len(got.Stragglers) != maxStragglers {
+		t.Errorf("%d stragglers named, want at most %d", len(got.Stragglers), maxStragglers)
+	}
+	if !strings.Contains(got.DescribeStragglers(), "and 15 more") {
+		t.Errorf("the line does not say how many were left out: %q", got.DescribeStragglers())
+	}
+}
+
+// TestAFleetThatStoppedOneShortIsStuckNotSlow.
+//
+// "Reconciliation did not keep up" was the sentence for 1999 of 2000 sitting
+// still for thirty minutes with every component healthy. Reconciliation kept
+// up for 1999 clusters; one object stopped. Those are different findings with
+// different next steps, and the count alone tells them apart once it has held
+// still long enough.
+func TestAFleetThatStoppedOneShortIsStuckNotSlow(t *testing.T) {
+	var s Steadiness
+	for range stuckPolls {
+		s.Observe(Convergence{ControlPlanesReady: 1999, ControlPlanesWant: 2000,
+			MachinesReady: 19999, MachinesWant: 20000})
+	}
+	if !s.Stuck() {
+		t.Fatalf("a fleet one short and motionless for %d polls is not stuck: %+v", stuckPolls, s)
+	}
+	if s.Flapping() {
+		t.Error("a motionless fleet was called flapping")
+	}
+	got := timedOutBecause(s)
+	if !strings.Contains(got, "stuck") || strings.Contains(got, "did not keep up") {
+		t.Errorf("a stuck fleet is still described as slow: %q", got)
+	}
+}
+
+// TestAFleetStillMovingIsNotStuck, and neither is one that stopped far from
+// the target: the first is arriving and the second did not keep up.
+func TestAFleetStillMovingIsNotStuck(t *testing.T) {
+	var s Steadiness
+	for i := range stuckPolls {
+		s.Observe(Convergence{ControlPlanesReady: 1990 + i, ControlPlanesWant: 2000,
+			MachinesReady: 19990 + i, MachinesWant: 20000})
+	}
+	if s.Stuck() {
+		t.Error("a fleet still climbing was called stuck")
+	}
+
+	var far Steadiness
+	for range stuckPolls {
+		far.Observe(Convergence{ControlPlanesReady: 1000, ControlPlanesWant: 2000,
+			MachinesReady: 10000, MachinesWant: 20000})
+	}
+	if far.Stuck() {
+		t.Error("a fleet stopped halfway was called stuck rather than slow")
+	}
+	if !strings.Contains(timedOutBecause(far), "did not keep up") {
+		t.Errorf("the ordinary timeout lost its wording: %q", timedOutBecause(far))
 	}
 }

@@ -18,10 +18,15 @@ package upstreamscale
 
 import (
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
+
+// maxStragglers bounds how many unready objects a poll names. A fleet half
+// arrived has thousands, and the names matter only once there are few.
+const maxStragglers = 5
 
 // Convergence is how far a rung has got.
 type Convergence struct {
@@ -30,6 +35,16 @@ type Convergence struct {
 	MachinesReady      int  `json:"machinesReady"`
 	MachinesWant       int  `json:"machinesWant"`
 	Done               bool `json:"done"`
+
+	// Stragglers names the first few Clusters and Machines that are not
+	// ready, each with what Cluster API says about it. The count is the
+	// verdict on a rung; these are the evidence, and the one time a rung
+	// stopped at 1999 of 2000 the fleet was torn down before anybody could
+	// ask which one. See DescribeStragglers.
+	Stragglers []string `json:"stragglers,omitempty"`
+	// MoreStragglers is how many unready objects there were beyond the ones
+	// named.
+	MoreStragglers int `json:"moreStragglers,omitempty"`
 }
 
 // Converged counts a rung against the end state the run waits for: every
@@ -67,13 +82,24 @@ func Converged(clusters []clusterv1.Cluster, machines []clusterv1.Machine, wantC
 	for i := range clusters {
 		if controlPlaneReady(&clusters[i]) {
 			out.ControlPlanesReady++
+		} else if len(out.Stragglers) < maxStragglers {
+			out.Stragglers = append(out.Stragglers, describeUnreadyCluster(&clusters[i]))
 		}
 	}
+	// The Machines after the Clusters, so that a line with room for five
+	// names leads with the cluster and follows with the machine in it.
+	unreadyMachines := 0
 	for i := range machines {
 		if conditionTrue(machines[i].Status.Conditions, clusterv1.MachineReadyCondition) {
 			out.MachinesReady++
+			continue
+		}
+		unreadyMachines++
+		if len(out.Stragglers) < maxStragglers {
+			out.Stragglers = append(out.Stragglers, describeUnreadyMachine(&machines[i]))
 		}
 	}
+	out.MoreStragglers = (len(clusters) - out.ControlPlanesReady) + unreadyMachines - len(out.Stragglers)
 	// The counts are against what was asked for rather than against what
 	// exists. A fleet whose objects the topology controller has not finished
 	// stamping has fewer Clusters than the rung asked for, and comparing ready
@@ -87,6 +113,59 @@ func Converged(clusters []clusterv1.Cluster, machines []clusterv1.Machine, wantC
 func (c Convergence) Describe() string {
 	return fmt.Sprintf("%d of %d control planes ready, %d of %d Machines ready",
 		c.ControlPlanesReady, c.ControlPlanesWant, c.MachinesReady, c.MachinesWant)
+}
+
+// DescribeStragglers names what is not ready, or "" when everything is.
+func (c Convergence) DescribeStragglers() string {
+	if len(c.Stragglers) == 0 {
+		return ""
+	}
+	line := "still not ready: " + strings.Join(c.Stragglers, "; ")
+	if c.MoreStragglers > 0 {
+		line += fmt.Sprintf("; and %d more", c.MoreStragglers)
+	}
+	return line
+}
+
+func describeUnreadyCluster(c *clusterv1.Cluster) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s/%s: control plane", c.Namespace, c.Name)
+	if cp := c.Status.ControlPlane; cp != nil && cp.DesiredReplicas != nil {
+		ready := int32(0)
+		if cp.ReadyReplicas != nil {
+			ready = *cp.ReadyReplicas
+		}
+		fmt.Fprintf(&b, " %d of %d ready,", ready, *cp.DesiredReplicas)
+	}
+	b.WriteString(" " + describeCondition(c.Status.Conditions, clusterv1.ClusterControlPlaneAvailableCondition, "Available"))
+	return b.String()
+}
+
+func describeUnreadyMachine(m *clusterv1.Machine) string {
+	phase := m.Status.Phase
+	if phase == "" {
+		phase = "no phase"
+	}
+	return fmt.Sprintf("%s/%s: %s, %s", m.Namespace, m.Name, phase,
+		describeCondition(m.Status.Conditions, clusterv1.MachineReadyCondition, "Ready"))
+}
+
+// describeCondition is Cluster API's own account of why, in the words it
+// wrote: "Available=False (NotAvailable: Etcd member 1 does not have a
+// corresponding Machine)". label is the short name a reader knows the
+// condition by, since the type is ControlPlaneAvailable on a Cluster.
+func describeCondition(conditions []metav1.Condition, name, label string) string {
+	for _, c := range conditions {
+		if c.Type != name {
+			continue
+		}
+		out := fmt.Sprintf("%s=%s", label, c.Status)
+		if c.Reason != "" || c.Message != "" {
+			out += fmt.Sprintf(" (%s: %s)", c.Reason, c.Message)
+		}
+		return out
+	}
+	return label + " not reported"
 }
 
 // controlPlaneReady is Available with every desired replica ready.
@@ -182,16 +261,42 @@ type Steadiness struct {
 	// Regressions is how many polls counted fewer ready control planes than
 	// the poll before.
 	Regressions int `json:"regressions"`
+	// Motionless is how many polls in a row have counted exactly what the
+	// poll before did, control planes and Machines both. See Stuck.
+	Motionless int `json:"motionless"`
 
 	seen    bool
 	last    int
 	running int
+
+	lastMachines int
+	lastWant     Convergence
 }
+
+// stuckPolls is how long a fleet has to sit still, within stuckWithin of its
+// target, before a timeout calls it stuck rather than slow.
+//
+// Eight polls is two minutes at the default interval: long enough that a
+// Machine mid-provisioning has had every chance to move, short enough that a
+// person reading the log can go and look at the straggler well before the
+// step timeout takes the fleet away.
+const (
+	stuckPolls  = 8
+	stuckWithin = 0.995
+)
 
 // Observe records one poll.
 func (s *Steadiness) Observe(c Convergence) {
 	s.Polls++
 	ready := c.ControlPlanesReady
+
+	if s.seen && ready == s.last && c.MachinesReady == s.lastMachines {
+		s.Motionless++
+	} else {
+		s.Motionless = 0
+	}
+	s.lastMachines = c.MachinesReady
+	s.lastWant = c
 
 	if s.seen && ready < s.last {
 		s.Regressions++
@@ -218,6 +323,41 @@ func (s Steadiness) Drawdown() int { return s.DropFrom - s.DropTo }
 // re-explained on the strength of one. Repeated dips are a pattern, and the
 // pattern is the finding.
 func (s Steadiness) Flapping() bool { return s.Regressions > 1 && s.Drawdown() > 0 }
+
+// Stuck reports whether the fleet all but arrived and then stopped moving.
+//
+// # The rung this is for
+//
+// 1999 of 2000 control planes and 19999 of 20000 Machines, motionless for the
+// last thirty minutes of a forty-five minute wait, with every component
+// healthy and the store quiet — and the verdict was "reconciliation did not
+// keep up". Reconciliation kept up for 1999 clusters. One object stopped, which
+// is a different finding with a different next step: not more capacity but
+// one Cluster's conditions, and a MachineHealthCheck that would have
+// remediated it on a production cluster.
+//
+// Within a fraction of a percent of the target, or one object on a rung too
+// small for a fraction to mean anything, because a fleet that stopped halfway
+// did not keep up, whatever it has been doing since; and motionless for
+// several polls, because a fleet one short for one poll is a fleet about to
+// arrive.
+func (s Steadiness) Stuck() bool {
+	if s.Motionless+1 < stuckPolls {
+		return false
+	}
+	want := s.lastWant
+	if want.ControlPlanesWant == 0 || want.MachinesWant == 0 {
+		return false
+	}
+	return want.ControlPlanesWant-want.ControlPlanesReady <= stuckAllowance(want.ControlPlanesWant) &&
+		want.MachinesWant-want.MachinesReady <= stuckAllowance(want.MachinesWant)
+}
+
+// stuckAllowance is how many objects may be missing from a fleet that is
+// still called all but arrived: a fraction of it, and never fewer than one.
+func stuckAllowance(want int) int {
+	return max(1, int(float64(want)*(1-stuckWithin)))
+}
 
 // Describe says what the readiness did, or "" when it only ever climbed.
 func (s Steadiness) Describe() string {

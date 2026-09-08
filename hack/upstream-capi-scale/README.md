@@ -1434,6 +1434,40 @@ withdrawing it because a cluster's etcd or control plane stopped answering, or
 during a remediation — and the `Steadiness` line now says that rather than
 blaming probes.
 
+### A fleet that all but arrived and stopped is stuck, and the report names what on
+
+With the providers off the control plane nodes, the 2000 rung reached 1999 of
+2000 control planes and 19999 of 20000 Machines and sat there for thirty
+minutes with every component healthy and the store quiet. The verdict was
+"reconciliation did not keep up". Reconciliation kept up for 1999 clusters; one
+control plane replica never joined. And the run tore the fleet down at the end,
+so which cluster, and what its KubeadmControlPlane said about it, went with it.
+
+Two changes. Every poll now carries the first few unready Clusters and
+Machines with Cluster API's own account of each — `Available=False
+(NotAvailable: Etcd member 1 does not have a corresponding Machine)`, a
+Machine's phase and its Ready condition — and a timeout puts them on the
+failure line. And a fleet within half a percent of its target that has not
+moved for eight polls is called **stuck** rather than slow, in the failure line
+and in the log while the rung is still waiting, so a person can go and look at
+the straggler before the step timeout takes it away. Run with `KEEP=true` when
+chasing one, and the fleet stays up afterwards.
+
+A stuck object is a different finding from a slow fleet, with a different next
+step: not capacity, but one Cluster's conditions, and the question of whether a
+control plane MachineHealthCheck, which a production cluster would have, would
+have remediated it.
+
+### The inherited-baseline check now covers the API servers
+
+`Inherited` judges a process by its start time, and the control plane's samples
+come from cAdvisor, which reports none. So a run whose API servers were never
+restarted between runs took its baseline at 54.8 GiB of API server against an
+empty API, and the check that exists for exactly this said nothing. An API
+server serving nothing costs about half a gigabyte on this cluster; anything in
+gigabytes at zero clusters is the fleet before, and `InheritedControlPlane`
+now says so by size. The restart recipe is above.
+
 ### The soak holds the fleet it is labelled with
 
 Rungs are cumulative: each keeps the fleet below it and adds to it. So when the
