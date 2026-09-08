@@ -18,7 +18,9 @@ package upstreamscale
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -57,6 +60,12 @@ type StockTarget struct {
 	Shape FleetShape
 	// NodesPerCluster is carried for the report.
 	NodesPerCluster int
+
+	// fleet is where Converged reads from once Prepare has started a watch:
+	// an informer cache of every Cluster and Machine, so a poll is a walk
+	// over memory rather than a list of the whole fleet through the API
+	// server. Nil until then, and Converged reads through Client. See watch.
+	fleet client.Reader
 }
 
 var _ Target = (*StockTarget)(nil)
@@ -78,16 +87,21 @@ func (s *StockTarget) Facts() map[string]string {
 		// uses for its workspaces: a fact one side reports and the other does
 		// not is a fact a reader cannot diff the two reports on.
 		"clustersPerTenant": fmt.Sprint(s.Shape.ClustersPerNamespace),
+		// How the poll reads the fleet, because it decides how much of the
+		// load on the API server is the harness's own. See watch.
+		"convergenceRead": "an informer cache of every Cluster and Machine: one paged list per kind " +
+			"and then a watch, so each poll reads memory and puts nothing on the API server",
 	}
 }
 
-// Prepare checks the cluster serves every kind the run is about to create.
+// Prepare checks the cluster serves every kind the run is about to create,
+// then starts the watch Converged reads from.
 //
 // The one risk no unit test can find: the objects come from this repository's
 // fork of Cluster API and the CRDs from whatever clusterctl installed, and a
 // disagreement between them surfaces one namespace into a climb as an
 // admission error naming the object rather than the installation.
-func (s *StockTarget) Prepare(_ context.Context) error {
+func (s *StockTarget) Prepare(ctx context.Context) error {
 	dc, err := discovery.NewDiscoveryClientForConfig(s.Config)
 	if err != nil {
 		return fmt.Errorf("building a discovery client: %w", err)
@@ -100,7 +114,58 @@ func (s *StockTarget) Prepare(_ context.Context) error {
 		}
 		served[gv] = IndexResources([]*metav1.APIResourceList{list})[gv]
 	}
-	return Preflight(served)
+	if err := Preflight(served); err != nil {
+		return err
+	}
+	return s.watch(ctx)
+}
+
+// watch starts the informer cache Converged reads from, for the life of ctx.
+//
+// # Why the poll stopped listing
+//
+// Converged listed every Cluster and every Machine as full objects every
+// fifteen seconds. At 15,000 Machines that is about 90 MB of JSON per poll,
+// and all of it went through the VIP, so all of it landed on one API server —
+// the one whose node's etcd member kube-vip's own lease has to write through.
+// That instance served two and a half times the lists and nine times the GETs
+// of its peers, and its member was the one that stalled, twice. A measurement
+// tool that puts its own load on the thing it is measuring, and on precisely
+// the point that fails, is measuring itself.
+//
+// An informer costs one list per kind, paged by the reflector, and then a
+// watch carrying only what changes — which is what every controller on the
+// cluster already does. The poll then reads memory. The cache holds the whole
+// fleet as typed objects, which at 20,000 Machines is a few hundred megabytes
+// in the harness and nothing on the cluster.
+func (s *StockTarget) watch(ctx context.Context) error {
+	if s.fleet != nil || s.Config == nil {
+		return nil
+	}
+	c, err := cache.New(s.Config, cache.Options{Scheme: s.Client.Scheme()})
+	if err != nil {
+		return fmt.Errorf("building a cache of the fleet: %w", err)
+	}
+	// Both informers before the cache starts, so that WaitForCacheSync waits
+	// for them rather than for nothing.
+	for _, obj := range []client.Object{&clusterv1.Cluster{}, &clusterv1.Machine{}} {
+		if _, err := c.GetInformer(ctx, obj); err != nil {
+			return fmt.Errorf("watching %T: %w", obj, err)
+		}
+	}
+	go func() {
+		if err := c.Start(ctx); err != nil {
+			// Reported once at the end of the run: the cache stops with the
+			// context, and Converged falls back to the client if it never
+			// started.
+			fmt.Fprintf(os.Stderr, "the fleet watch stopped: %v\n", err)
+		}
+	}()
+	if !c.WaitForCacheSync(ctx) {
+		return errors.New("the fleet watch did not sync before the context ended")
+	}
+	s.fleet = c
+	return nil
 }
 
 func (s *StockTarget) Controllers() []Controller { return Controllers() }
@@ -245,14 +310,18 @@ func (s *StockTarget) blueprint(ctx context.Context) error {
 }
 
 // Converged counts every Cluster and Machine on the cluster against what the
-// rung asked for.
+// rung asked for, from the watch where there is one. See watch.
 func (s *StockTarget) Converged(ctx context.Context, wantClusters, wantMachines int) (Convergence, error) {
+	var reader client.Reader = s.Client
+	if s.fleet != nil {
+		reader = s.fleet
+	}
 	var clusters clusterv1.ClusterList
-	if err := s.Client.List(ctx, &clusters); err != nil {
+	if err := reader.List(ctx, &clusters); err != nil {
 		return Convergence{}, fmt.Errorf("listing clusters: %w", err)
 	}
 	var machines clusterv1.MachineList
-	if err := s.Client.List(ctx, &machines); err != nil {
+	if err := reader.List(ctx, &machines); err != nil {
 		return Convergence{}, fmt.Errorf("listing machines: %w", err)
 	}
 	return Converged(clusters.Items, machines.Items, wantClusters, wantMachines), nil

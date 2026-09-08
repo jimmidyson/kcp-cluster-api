@@ -206,10 +206,12 @@ while the second joins, so every rung's readiness appeared to flap. A control
 plane now counts only at full replicas, and each sample records where the etcd
 leader, the controller manager's lease and kube-vip's VIP sit.
 
-**3. The poll lists every Machine, unpaginated, as full objects.** At 16,000
-Machines that is tens of megabytes decoded into typed structs every fifteen
-seconds, and it is load on the API server under test that is not Cluster
-API's. Metadata-only paginated lists, or one informer held for the run.
+**3. ~~The poll lists every Machine, unpaginated, as full objects.~~ Fixed.**
+At 15,000 Machines that was about 90 MB of JSON every fifteen seconds through
+the VIP, so all of it on the one API server whose node's etcd member the VIP's
+lease writes through — the instance that served two and a half times the lists
+of its peers, and whose member stalled. The stock target now reads convergence
+from an informer cache: one paged list per kind, then a watch.
 
 **4. The runs above 1600 are not evidence.** The 500, 1000, 1500 and 2000
 cluster runs produced the most important findings on the branch and exist

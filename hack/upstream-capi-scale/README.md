@@ -363,6 +363,8 @@ empty keeps kubeadm's default, and `config` prints which:
 | `APISERVER_ETCD_CHECK_TIMEOUT` | `9s` | `--etcd-healthcheck-timeout` and `--etcd-readycheck-timeout` on the API server |
 | `APISERVER_LIVEZ_EXCLUDE_ETCD` | `true` | the API server's liveness probe path, `/livez?exclude=etcd` |
 | `LEADER_ELECT_LEASE_DURATION`, `LEADER_ELECT_RENEW_DEADLINE`, `LEADER_ELECT_RETRY_PERIOD` | `137s`, `107s`, `26s` | the three `--leader-elect-*` flags on kube-controller-manager and kube-scheduler, all or none |
+| `APISERVER_GOAWAY_CHANCE` | empty, off | `--goaway-chance` on the API server: HTTP/2 clients are occasionally told to reconnect, so long-lived connections spread across instances |
+| `APISERVER_GOGC` | empty, Go's 100 | `GOGC` on the API server through kubeadm's `apiServer.extraEnvs`; OpenShift clamps the same knob to 63..100 |
 
 The timeouts and the leader election flags are new argument names, so they
 append through the ClusterClass copy exactly as the etcd quota does. The probe
@@ -931,6 +933,35 @@ while the control plane's own components, on the longer window, did not. Every
 leader-elected process on the cluster now tolerates the same pause, so a failure
 line can be read without first asking which fuse was shortest.
 
+### Two API server knobs, off until a run asks for them
+
+Both come from the same reading: with fresh API servers, the instance behind
+the VIP served two and a half times the lists and nine times the GETs of its
+peers, and its node's etcd member was the one whose compaction went from
+seconds to a minute. Everything entering through the VIP lands on one API
+server, and in ARP mode that is also the node the VIP's own lease writes
+through.
+
+- **`APISERVER_GOAWAY_CHANCE`** sets `--goaway-chance`, which makes the API
+  server occasionally send an HTTP/2 GOAWAY so a client reconnects and, behind
+  a load balancer, lands somewhere else. Kubernetes documents it for exactly
+  this; `0.001` is the usual setting. It spreads the managers' long-lived
+  connections; it does nothing for traffic that enters through the VIP, since
+  the VIP resolves to one node.
+- **`APISERVER_GOGC`** sets `GOGC` on kube-apiserver through kubeadm's
+  `apiServer.extraEnvs`. The collector runs when the heap has grown by that
+  percent over what survived the last cycle, so 100 lets a 15 GiB live heap
+  reach 30 GiB. OpenShift exposes the same knob and clamps it to 63..100; 63 is
+  its floor and what to try first. What it buys is page cache for the etcd
+  member on the same node, at the cost of API server CPU. `extraEnvs` needs
+  Cluster API v1.8 or later on the bootstrap cluster and kubeadm from
+  Kubernetes 1.28 or later on the nodes.
+
+Both default to off so that a run attributes what it finds to one change at a
+time. Neither is a substitute for node memory: fresh API servers reach 24 to
+27 GiB each at 1500 clusters of ten nodes, and 32 GiB nodes are done there
+whatever the collector does.
+
 ### The managers are kept off the control plane nodes
 
 A fresh cluster held 1000 clusters and lost the VIP at 1500. kube-vip on
@@ -1457,6 +1488,22 @@ A stuck object is a different finding from a slow fleet, with a different next
 step: not capacity, but one Cluster's conditions, and the question of whether a
 control plane MachineHealthCheck, which a production cluster would have, would
 have remediated it.
+
+### The harness watches the fleet rather than listing it
+
+`Converged` listed every Cluster and every Machine as full objects every
+fifteen seconds. At 15,000 Machines that is about 90 MB of JSON per poll,
+through the VIP, so all of it on the one API server whose node's etcd member
+kube-vip's lease has to write through. A measurement tool that puts its own
+load on the thing it measures, and on the point that fails, is measuring
+itself.
+
+The stock target now starts an informer cache of Clusters and Machines in
+`Prepare` and reads convergence from it: one paged list per kind, then a watch
+carrying only what changes, which is what every controller on the cluster
+already does. The report says so in a `convergenceRead` fact. The kcp side
+still lists each workspace per poll, because there is no list across
+workspaces from outside, and its fact says that too.
 
 ### The inherited-baseline check now covers the API servers
 

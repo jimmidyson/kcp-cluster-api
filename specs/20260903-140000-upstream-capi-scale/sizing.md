@@ -21,10 +21,36 @@ The ladder climbs 25 → 50 → 100 → 200 → 400 clusters, and the run is the
 
 | Role | Count | What runs on it | Ask for |
 |---|--:|---|--:|
-| Control plane | **3** | kube-apiserver, etcd | **32 GiB, 16 vCPU** each, fast SSD |
+| Control plane | **3** | kube-apiserver, etcd | **64 GiB, 16 vCPU** each, fast SSD, etcd on its own disk |
 | Generic pool | **4** | all four managers, cert-manager, metrics-server | **32 GiB, 16 vCPU** each |
 
-Seven nodes, one worker pool, no taint.
+Seven nodes, one worker pool, no taint, and the managers kept off the control
+plane nodes by the prepare tool.
+
+### What 32 GiB control plane nodes hold, measured
+
+The control plane figure above was 32 GiB until the runs of 8 September 2026,
+which are the first taken with fresh API servers, the providers on the workers
+and etcd on its own disk. They fix the number rather than extrapolate it:
+
+| Fleet | Outcome on 3 x 32 GiB control plane, 4 x 32 GiB workers |
+|---|---|
+| 500 clusters, 5,000 Machines | converged in 11 min; API servers 14 to 21 GiB each |
+| **1,000 clusters, 10,000 Machines** | **converged in 11 min; API servers 17 to 23.5 GiB each, etcd 1.9 GiB file, 70% of the control plane's allocatable memory in use** |
+| 1,500 clusters, 15,000 Machines | did not hold: API servers 24 to 27 GiB each, and the etcd member under the VIP holder lost its page cache, compacted for 57 s and timed out kube-vip's lease |
+
+So **3 x 32 GiB is a suitable control plane for 1,000 clusters of ten nodes**,
+with the qualifications that the VIP holder's API server sits at about 75% of
+its node and that the harness's own polling was part of that load until it
+switched to a watch. It is not suitable for 1,500. The API server's resident
+set grows roughly 3 to 4 GiB per 500 clusters at this point on the curve, and
+what it takes comes out of the page cache etcd's backend file has to live in.
+64 GiB is the ask for anything above 1,000, and the default the provisioning
+script now uses.
+
+The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
+four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to
+3.0 GiB, all within their limits.
 
 ### Why there is no dedicated node any more
 
@@ -71,8 +97,9 @@ raft, which is the thing a scale test on a single member quietly leaves out.
 The kcp shard cost **1.41 MiB of retained heap per Machine and 7.99 MiB per
 cluster**, measured across three node counts. Carried to 200 clusters of fifty
 nodes that is about 16 GB of retained heap, and retained heap is not resident:
-allow for the collector's headroom on top. 32 GiB is the smallest number that
-leaves room to find the ceiling somewhere other than at the box.
+allow for the collector's headroom on top. 32 GiB was the smallest number that
+left room to find the ceiling somewhere other than at the box, and the
+measured section above says where that ceiling turned out to be.
 
 Whether an ordinary kube-apiserver costs the same as the kcp shard is
 **precisely what this run is for**. If it costs much less, the earlier finding

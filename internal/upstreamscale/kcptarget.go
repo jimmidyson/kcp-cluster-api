@@ -114,6 +114,11 @@ func (k *KcpTarget) Facts() map[string]string {
 		"devClusterBackend": "inMemory",
 		"tenancy":           "Workspace",
 		"clustersPerTenant": fmt.Sprint(k.Shape.ClustersPerNamespace),
+		// Honest about the difference: there is no list across workspaces
+		// from outside, so this side still lists each workspace on every
+		// poll, and that load is the harness's own. See StockTarget.watch.
+		"convergenceRead": "a list of every Cluster and Machine in each workspace on every poll, " +
+			"through that workspace's client",
 	}
 }
 

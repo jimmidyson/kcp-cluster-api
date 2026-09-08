@@ -56,7 +56,12 @@ func main() {
 	// finds is the box rather than Cluster API. Zero or empty leaves the
 	// template's own value alone.
 	fs.IntVar(&sizing.ControlPlaneVCPUs, "control-plane-vcpus", 16, "vCPUs per control plane node.")
-	fs.StringVar(&sizing.ControlPlaneMemory, "control-plane-memory", "32Gi", "Memory per control plane node.")
+	// 64 rather than 32, from measurement: fresh API servers reached 24 to
+	// 27 GiB each at 1500 clusters of ten nodes, and what was left of a
+	// 32 GiB node was not enough page cache for the etcd member beside them.
+	// 1000 clusters fit; the next rung did not. See the sizing document.
+	fs.StringVar(&sizing.ControlPlaneMemory, "control-plane-memory", "64Gi", "Memory per control plane node. "+
+		"32Gi holds 1000 clusters of ten nodes and not 1500; the API server alone is 24 GiB there.")
 	fs.StringVar(&sizing.ControlPlaneDisk, "control-plane-disk", "200Gi", "System disk per control plane "+
 		"node. Larger than the example's 40Gi because etcd's revisions between compactions are what a "+
 		"climbing fleet fills a disk with.")

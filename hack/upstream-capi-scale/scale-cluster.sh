@@ -96,6 +96,24 @@ APISERVER_LIVEZ_EXCLUDE_ETCD="${APISERVER_LIVEZ_EXCLUDE_ETCD-true}"
 LEADER_ELECT_LEASE_DURATION="${LEADER_ELECT_LEASE_DURATION-137s}"
 LEADER_ELECT_RENEW_DEADLINE="${LEADER_ELECT_RENEW_DEADLINE-107s}"
 LEADER_ELECT_RETRY_PERIOD="${LEADER_ELECT_RETRY_PERIOD-26s}"
+# Two API server knobs, both off by default so a run attributes what it finds
+# to one change at a time.
+#
+# --goaway-chance makes the API server occasionally tell an HTTP/2 client to
+# reconnect, so long-lived connections spread across the instances behind a
+# load balancer instead of staying wherever they first landed. Measured here:
+# the instance behind the VIP served two and a half times the lists and nine
+# times the GETs of its peers, and its node's etcd member was the one that
+# stalled. Kubernetes documents the flag for exactly this; 0.001 is a common
+# setting. Empty leaves it off.
+APISERVER_GOAWAY_CHANCE="${APISERVER_GOAWAY_CHANCE-}"
+# GOGC on the API server, set through kubeadm's extraEnvs. The collector runs
+# when the heap has grown by this percent over what survived the last cycle,
+# so 100 lets a 15 GiB live heap reach 30 GiB before collecting. OpenShift
+# exposes the same knob and clamps it to 63..100; 63 is its floor. What it
+# buys is page cache for the etcd member on the same node, at the cost of API
+# server CPU. Empty leaves the Go default of 100.
+APISERVER_GOGC="${APISERVER_GOGC-}"
 
 # etcd on a disk of its own. On CAREN's template it shares the root disk with
 # the API server's audit log, the container logs and everything else on the
@@ -192,7 +210,7 @@ KEEP_CSI="${KEEP_CSI:-false}"
 CONTROL_PLANE_POOL_WORKERS="${CONTROL_PLANE_POOL_WORKERS:-0}"
 
 CONTROL_PLANE_VCPUS="${CONTROL_PLANE_VCPUS:-16}"
-CONTROL_PLANE_MEMORY="${CONTROL_PLANE_MEMORY:-32Gi}"
+CONTROL_PLANE_MEMORY="${CONTROL_PLANE_MEMORY:-64Gi}"
 CONTROL_PLANE_DISK="${CONTROL_PLANE_DISK:-200Gi}"
 WORKER_VCPUS="${WORKER_VCPUS:-16}"
 WORKER_MEMORY="${WORKER_MEMORY:-32Gi}"
@@ -216,6 +234,10 @@ config() {
   [[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] || livez="kubeadm default, /livez including the etcd check"
   local leader="lease ${LEADER_ELECT_LEASE_DURATION}, renew ${LEADER_ELECT_RENEW_DEADLINE}, retry ${LEADER_ELECT_RETRY_PERIOD} (OpenShift; kubeadm is 15s/10s/2s)"
   [[ -n "${LEADER_ELECT_LEASE_DURATION}" ]] || leader="kubeadm default, 15s/10s/2s (LEADER_ELECT_LEASE_DURATION is empty)"
+  local goaway="off (APISERVER_GOAWAY_CHANCE is empty; connections stay on the instance they first reached)"
+  [[ -z "${APISERVER_GOAWAY_CHANCE}" ]] || goaway="${APISERVER_GOAWAY_CHANCE} (HTTP/2 clients are occasionally told to reconnect, spreading them across instances)"
+  local gogc="Go default, 100 (APISERVER_GOGC is empty)"
+  [[ -z "${APISERVER_GOGC}" ]] || gogc="${APISERVER_GOGC} (OpenShift clamps this to 63..100)"
   local sshlogin="none (NUTANIX_SSH_AUTHORIZED_KEY is unset; CAREN's template does not read it, this script does)"
   [[ -z "${NUTANIX_SSH_AUTHORIZED_KEY:-}" ]] || sshlogin="user ${SSH_USER}, key ${NUTANIX_SSH_AUTHORIZED_KEY##* } (from NUTANIX_SSH_AUTHORIZED_KEY, via CAREN's users variable)"
   local etcddisk="kubeadm default, /var/lib/etcd on the root disk (ETCD_DISK_SIZE is empty)"
@@ -242,6 +264,8 @@ etcd backend quota       ${ETCD_QUOTA_BYTES} bytes
 API server etcd checks   ${etcdcheck}
 API server liveness      ${livez}
 leader election          ${leader} — on kube-controller-manager and kube-scheduler
+API server goaway-chance ${goaway}
+API server GOGC          ${gogc}
 etcd disk                ${etcddisk}
 node login               ${sshlogin}
 CSI addon kept           ${KEEP_CSI} (needed only by the kcp side's etcd volumes)
@@ -425,6 +449,17 @@ NOTE
     set_patch_dir=true
   fi
 
+  # Whether the template already carries an extraEnvs list on the API server
+  # decides whether GOGC appends to it or creates it: a JSON patch cannot add
+  # to a list that is not there, and creating one over a list that is would
+  # drop what CAREN put in it.
+  local has_api_envs=false
+  if [[ -n "$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CAREN_CLUSTERCLASS_NAMESPACE}" \
+    get kubeadmcontrolplanetemplates.controlplane.cluster.x-k8s.io "${kcpt}" \
+    -o jsonpath='{.spec.template.spec.kubeadmConfigSpec.clusterConfiguration.apiServer.extraEnvs}')" ]]; then
+    has_api_envs=true
+  fi
+
   # A strategic merge patch against the Pod kubeadm generates. Containers merge
   # by name, so only the probe path changes; host, port and scheme stay as
   # kubeadm wrote them. The file name is what kubeadm matches on: target,
@@ -442,6 +477,7 @@ PATCH
 
   log "Copying ClusterClass ${src} to ${dst}: etcd quota ${ETCD_QUOTA_BYTES} bytes, metrics on :2381"
   log "  API server etcd checks ${APISERVER_ETCD_CHECK_TIMEOUT:-kubeadm default}, liveness $([[ "${APISERVER_LIVEZ_EXCLUDE_ETCD}" == "true" ]] && echo '/livez?exclude=etcd' || echo 'kubeadm default'), leader election ${LEADER_ELECT_LEASE_DURATION:-kubeadm default}/${LEADER_ELECT_RENEW_DEADLINE:-}/${LEADER_ELECT_RETRY_PERIOD:-} (patches in ${patch_dir})"
+  log "  API server goaway-chance ${APISERVER_GOAWAY_CHANCE:-off}, GOGC ${APISERVER_GOGC:-Go default}"
   jq --arg name "${dst}" --arg quota "${ETCD_QUOTA_BYTES}" \
      --arg etcdcheck "${APISERVER_ETCD_CHECK_TIMEOUT}" \
      --arg livez "${APISERVER_LIVEZ_EXCLUDE_ETCD}" \
@@ -450,6 +486,7 @@ PATCH
      --arg retry "${LEADER_ELECT_RETRY_PERIOD}" \
      --arg patchdir "${patch_dir}" --argjson setpatchdir "${set_patch_dir}" \
      --arg probe "${probe}" \
+     --arg goaway "${APISERVER_GOAWAY_CHANCE}" --arg gogc "${APISERVER_GOGC}" --argjson hasapienvs "${has_api_envs}" \
      --arg disksize "${ETCD_DISK_SIZE}" --arg diskdev "${ETCD_DISK_DEVICE}" --arg diskmount "${ETCD_DISK_MOUNT}" \
      --arg diskcontainer "${ETCD_DISK_STORAGE_CONTAINER}" '
         .metadata = {name: $name, namespace: .metadata.namespace}
@@ -481,6 +518,19 @@ PATCH
                     {op: "add", path: "\($k)/joinConfiguration/patches", value: {directory: $patchdir}}
                   ] else [] end)
               end)
+            + (if $goaway == "" then [] else [
+                {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraArgs/-",
+                 value: {name: "goaway-chance", value: $goaway}}
+              ] end)
+            + (if $gogc == "" then [] else
+                (if $hasapienvs then [
+                  {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraEnvs/-",
+                   value: {name: "GOGC", value: $gogc}}
+                ] else [
+                  {op: "add", path: "\($k)/clusterConfiguration/apiServer/extraEnvs",
+                   value: [{name: "GOGC", value: $gogc}]}
+                ] end)
+              end)
           ) as $tolerances
         | .spec.patches = ((.spec.patches // []) + [{
             name: "etcdBackendQuota",
@@ -503,7 +553,7 @@ PATCH
           }]
           + (if ($tolerances | length) == 0 then [] else [{
             name: "controlPlaneTolerances",
-            description: "The OpenShift production defaults that let a control plane ride out a slow minute from its store: 9s etcd health and ready checks and a liveness probe that excludes etcd on the API server, and 137s/107s/26s leader election on the controller manager and scheduler. Every argument is appended under a new name, last in the patch order, so it lands on the lists the CAREN runtime extension produced. The probe is a kubeadm patch file, since kubeadm has no knob for probes.",
+            description: "The OpenShift production defaults that let a control plane ride out a slow minute from its store: 9s etcd health and ready checks and a liveness probe that excludes etcd on the API server, and 137s/107s/26s leader election on the controller manager and scheduler. Every argument is appended under a new name, last in the patch order, so it lands on the lists the CAREN runtime extension produced. The probe is a kubeadm patch file, since kubeadm has no knob for probes. When set, goaway-chance spreads HTTP/2 clients across the API server instances and GOGC bounds the API server heap so the etcd member beside it keeps its page cache.",
             definitions: [{
               selector: {
                 apiVersion: $cp.apiVersion,
@@ -573,6 +623,10 @@ Applied as ClusterClass ${dst}. Things to check against your CAREN version:
     profiling in all three). If your ClusterClass already sets any of these
     names, the KubeadmControlPlane is refused at admission with "extraArgs name
     must be unique", and the fix is to empty that knob.
+  * GOGC goes through apiServer.extraEnvs, which needs Cluster API v1.8 or
+    later on the bootstrap cluster and kubeadm from Kubernetes 1.28 or later
+    on the nodes; older kubeadm ignores the field and the API server keeps
+    the Go default. The patch $([[ "${has_api_envs}" == true ]] && echo "appends to the extraEnvs the template already carries" || echo "creates the extraEnvs list, since the template has none").
   * the probe patch is written to ${patch_dir}, read from the control plane
     template$([[ "${set_patch_dir}" == true ]] && echo " — the template named none, so both init and join are told" || echo "")".
   * the etcd disk is a CAPX dataDisks entry on the control plane machine
