@@ -61,16 +61,30 @@ const inheritedGrace = 10 * time.Minute
 // reason, and the managers are half of what the report is about. The check is
 // on the sample rather than on the component, so a process that publishes
 // process_start_time_seconds is covered whatever it is.
+//
+// # And the container's start time when the process will not say
+//
+// The managers are read through pprof, which carries no start time, so the
+// check above could never fire for them. A run took its baseline with the core
+// manager at 6.7 GiB resident and 82 MiB of live heap, the previous day's
+// fleet still held by the runtime, and said nothing. The kubelet records when
+// it started every container, and that is the process's age for any process
+// that does not publish its own.
 func Inherited(components []deployedscale.ComponentSample, runStart time.Time) []string {
 	cutoff := runStart.Add(-inheritedGrace)
 
 	var old []string
 	for _, c := range components {
-		if !c.Process.StartedBefore(cutoff) {
+		var age time.Duration
+		switch {
+		case c.Process.StartedBefore(cutoff):
+			age = c.Process.Age(runStart)
+		case c.Pod.StartedBefore(cutoff):
+			age = c.Pod.Age(runStart)
+		default:
 			continue
 		}
-		old = append(old, fmt.Sprintf("%s (running %s)",
-			c.Component, c.Process.Age(runStart).Round(time.Minute)))
+		old = append(old, fmt.Sprintf("%s (running %s)", c.Component, age.Round(time.Minute)))
 	}
 	sort.Strings(old)
 	return old

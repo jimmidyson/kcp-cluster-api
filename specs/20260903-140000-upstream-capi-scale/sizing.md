@@ -67,6 +67,47 @@ the clean rung; 1,500 converged with the VIP moving once. Fenced or not,
 32 GiB per node is the number that ends the climb between 1,500 and 2,000,
 and the fence is worth keeping for what it does to etcd's own numbers.
 
+### What 64 GiB control plane nodes hold, measured
+
+The run of 9 September 2026, on the same cluster rebuilt with 64 GiB control
+plane nodes, the fence on (`memory.low` read back at 6 GiB on every etcd
+member), fresh API servers, and the harness recording sidecar deaths as
+incidents rather than stopping on them:
+
+| Fleet | Outcome on 3 x 64 GiB control plane, 4 x 32 GiB workers |
+|---|---|
+| 1,000 clusters, 10,000 Machines | converged in 10m45s; API servers 17 to 24 GiB each, 36% of allocatable |
+| 2,000 clusters, 20,000 Machines | converged in 10m48s; API servers 28 to 41 GiB each, 59% |
+| **3,000 clusters, 30,000 Machines** | **converged in 10m51s; API servers 37 to 50 GiB each, 76%; the busiest node at 54 GiB of 62** |
+| 3,500 clusters, 35,000 Machines | converged in 11m7s, clean; API servers 40 to 49 GiB each, 78%; etcd 2.5 GiB of its 8 GiB quota, no failed proposals, no leader change, no incident on any rung |
+
+Every rung was clean and no rung failed, so 3,500 is a floor under the
+answer, not a ceiling. The pace held at 1.28 to 1.34 s per added cluster from
+500 to 3,500, so reconciliation was not slowing as the fleet grew. What the
+run shows about where the ceiling is:
+
+- **The busiest control plane node is the limit, not the total.** The node
+  holding the VIP and both leases did two to three times the API server CPU
+  of the others at every rung and carried the largest API server, 49 to 50 GiB
+  from 3,000 on. That node was at 54 GiB of 62 allocatable at 3,000. The
+  other two had 12 to 24 GiB to spare. Sizing by the sum would say the control
+  plane was a quarter empty; the node that decides is at 87%.
+- **The managers' own limits are the next ceiling, and they are ours.** At
+  3,500 the control plane manager was at 96% of its 6 GiB limit and the core
+  manager at 93% of its 8 GiB, both governed by the GOMEMLIMIT the prepare
+  tool sets below the limit, with live heaps of 2.2 and 3.3 GiB. That is the
+  runtime holding to its budget, not an OOM about to happen, but a Go process
+  run this close to GOMEMLIMIT spends its CPU collecting, and the next rung
+  would have been measuring that. Raise the limits before climbing past 3,500.
+- **The managers were not restarted before this run**, so their resident
+  figures carry the previous day's high-water mark; the live heaps are the
+  numbers to read, and the report now says when a manager predates the run.
+
+So **3 x 64 GiB is a suitable control plane for 3,000 clusters of ten nodes
+with margin, and held 3,500 cleanly once**, with the stacked topology's
+coupling unchanged: one node carries the VIP, the leases and the largest API
+server, and it is that node's 64 GiB that the number is measured against.
+
 The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
 four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to
 3.0 GiB, all within their limits.

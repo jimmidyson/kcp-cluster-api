@@ -130,3 +130,25 @@ func TestAnAPIServerHoldingGigabytesAtZeroClustersIsInherited(t *testing.T) {
 		t.Errorf("the note does not say what it means: %q", note)
 	}
 }
+
+// TestAManagerReadThroughPprofIsJudgedByItsContainerStart. The managers publish
+// no start time on the endpoint the sampler reads, so a run whose managers were
+// not restarted took its baseline with yesterday's fleet still in their heaps
+// and said nothing. The kubelet knows when it started the container.
+func TestAManagerReadThroughPprofIsJudgedByItsContainerStart(t *testing.T) {
+	now := time.Now()
+	yesterday := deployedscale.ComponentSample{
+		Component: "capi-controller-manager",
+		Pod:       deployedscale.PodFacts{StartedAt: now.Add(-26 * time.Hour)},
+	}
+	fresh := deployedscale.ComponentSample{
+		Component: "capd-controller-manager",
+		Pod:       deployedscale.PodFacts{StartedAt: now.Add(-time.Minute)},
+	}
+	silent := deployedscale.ComponentSample{Component: "capi-kubeadm-bootstrap-controller-manager"}
+
+	old := Inherited([]deployedscale.ComponentSample{yesterday, fresh, silent}, now)
+	if len(old) != 1 || !strings.HasPrefix(old[0], "capi-controller-manager (running 26h") {
+		t.Errorf("Inherited() = %v, want only the manager whose container started yesterday", old)
+	}
+}

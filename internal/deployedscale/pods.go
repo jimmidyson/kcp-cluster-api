@@ -18,6 +18,7 @@ package deployedscale
 
 import (
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -58,6 +59,11 @@ type PodFacts struct {
 	// plane rather than something scheduled onto one.
 	StaticPod bool `json:"staticPod"`
 
+	// StartedAt is when the kubelet last started this container, which is the
+	// process's age for a process that does not publish its own. Zero when
+	// the container is not running.
+	StartedAt time.Time `json:"startedAt,omitempty"`
+
 	// MemoryLimitBytes is what the OOMKill would be against. Recorded with
 	// every sample because a figure read against no limit cannot be turned
 	// into a sizing decision.
@@ -96,6 +102,9 @@ func PodFactsFrom(pod *corev1.Pod, container string) PodFacts {
 		}
 		facts.Ready = s.Ready
 		facts.RestartCount = s.RestartCount
+		if run := s.State.Running; run != nil {
+			facts.StartedAt = run.StartedAt.Time
+		}
 		if term := s.LastTerminationState.Terminated; term != nil {
 			facts.LastReason = term.Reason
 			facts.LastExitCode = term.ExitCode
@@ -104,6 +113,22 @@ func PodFactsFrom(pod *corev1.Pod, container string) PodFacts {
 	}
 
 	return facts
+}
+
+// StartedBefore reports whether this container was already running at a given
+// moment, from the kubelet's record of when it started it. False when that is
+// unknown, for the reason ProcessSample.StartedBefore gives.
+func (f PodFacts) StartedBefore(t time.Time) bool {
+	return !f.StartedAt.IsZero() && f.StartedAt.Before(t)
+}
+
+// Age is how long this container had been running at a given moment, or zero
+// when the kubelet did not say.
+func (f PodFacts) Age(at time.Time) time.Duration {
+	if f.StartedAt.IsZero() {
+		return 0
+	}
+	return at.Sub(f.StartedAt)
 }
 
 // Comparable reports whether a sample taken from this container can be read
