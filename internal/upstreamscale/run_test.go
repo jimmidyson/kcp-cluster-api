@@ -690,7 +690,7 @@ func TestASidecarDeathIsAnIncidentNotACeiling(t *testing.T) {
 func TestALadderPastTheClusterIsWarnedAboutBeforeAnythingIsCreated(t *testing.T) {
 	small := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: "cp-small", Labels: map[string]string{ControlPlaneNodeLabel: ""}},
-		Status:     corev1.NodeStatus{Allocatable: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("14Gi")}},
+		Status:     corev1.NodeStatus{Allocatable: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}},
 	}
 	target := &fakeTarget{name: "stock", tenant: "Namespace"}
 	runner := testRunner(t, target, 2, 8, small)

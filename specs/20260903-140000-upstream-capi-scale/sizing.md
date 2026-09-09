@@ -80,9 +80,12 @@ incidents rather than stopping on them:
 | 2,000 clusters, 20,000 Machines | converged in 10m48s; API servers 28 to 41 GiB each, 59% |
 | **3,000 clusters, 30,000 Machines** | **converged in 10m51s; API servers 37 to 50 GiB each, 76%; the busiest node at 54 GiB of 62** |
 | 3,500 clusters, 35,000 Machines | converged in 11m7s, clean; API servers 40 to 49 GiB each, 78%; etcd 2.5 GiB of its 8 GiB quota, no failed proposals, no leader change, no incident on any rung |
+| 4,000 clusters, 40,000 Machines | converged in 10m57s, clean (second run, managers at 16, 12, 8 and 24 GiB); busiest node at 51 GiB |
+| **4,500 clusters, 45,000 Machines** | **converged in 11m45s, clean; API servers 36 to 52 GiB each, 71%; the busiest node at 55.4 GiB of 62, 89%** |
+| 5,000 clusters, 50,000 Machines | converged in 11m39s, reached and not clean: the cloud controller manager lost its lease during the twelve-second defragmentation of the etcd leader between the rungs, the harness's own doing; busiest node at 55 GiB; held for a 33-minute soak with the fleet unchanged |
 
-Every rung was clean and no rung failed, so 3,500 is a floor under the
-answer, not a ceiling. The pace held at 1.28 to 1.34 s per added cluster from
+Every rung converged and no rung failed on either run, so 5,000 is a floor
+under the answer, not a ceiling, and 4,500 is the largest clean rung. The pace held at 1.28 to 1.34 s per added cluster from
 500 to 3,500, so reconciliation was not slowing as the fleet grew. What the
 run shows about where the ceiling is:
 
@@ -97,16 +100,37 @@ run shows about where the ceiling is:
   manager at 93% of its 8 GiB, both governed by the GOMEMLIMIT the prepare
   tool sets below the limit, with live heaps of 2.2 and 3.3 GiB. That is the
   runtime holding to its budget, not an OOM about to happen, but a Go process
-  run this close to GOMEMLIMIT spends its CPU collecting, and the next rung
-  would have been measuring that. Raise the limits before climbing past 3,500.
+  run this close to GOMEMLIMIT spends its CPU collecting. The second run
+  raised them by flag to 16, 12 and 8 GiB, none of it a default, and at 5,000
+  the core manager held 5.1 GiB of live heap in 15 GiB resident against 16,
+  the control plane manager 3.3 in 11.4 against 12, the DevCluster provider
+  4.9 in 13.6 against its unchanged 24. The live heaps grew at the rates the
+  model carries, to the cluster.
+- **The API server stops growing.** The busiest API server climbed 8 GiB per
+  500 clusters to 3,000 and then sat between 50 and 52 GiB from 3,000 to
+  5,000 on both runs, its live heap flat at about 35 GiB while the objects it
+  stored went from 175,000 to 300,000. Its cost is not the object count's;
+  it is dominated by things that saturate, and the fit below carries the
+  measured curve rather than the line that put 50,000 Machines past the node.
+- **The defragmentation between rungs is a perturbation of its own.** The
+  one incident on the second run was the cloud controller manager losing its
+  lease, at 10:45:36, inside the twelve seconds the etcd leader spent
+  rewriting a file that had nothing free in it, between the 4,500 and 5,000
+  rungs. A member being defragmented answers nothing, the manager renews
+  through its local API server and so through that member, and its renew
+  deadline is ten seconds. The harness now leaves a member alone when less
+  than a fifth of its file is free, rewrites the leader last, and flags a
+  rewrite longer than the shortest renew deadline on the cluster.
 - **The managers were not restarted before this run**, so their resident
   figures carry the previous day's high-water mark; the live heaps are the
   numbers to read, and the report now says when a manager predates the run.
 
-So **3 x 64 GiB is a suitable control plane for 3,000 clusters of ten nodes
-with margin, and held 3,500 cleanly once**, with the stacked topology's
-coupling unchanged: one node carries the VIP, the leases and the largest API
-server, and it is that node's 64 GiB that the number is measured against.
+So **3 x 64 GiB is a suitable control plane for 4,000 clusters of ten nodes
+with margin, held 4,500 cleanly at 89% of the busiest node, and reached
+5,000**, with the stacked topology's coupling unchanged: one node carries the
+VIP, the leases and the largest API server, and it is that node's 64 GiB that
+the number is measured against. The managers need their limits raised past
+the defaults from about 3,500 clusters, which is a flag on the prepare tool.
 
 The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
 four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to
@@ -122,10 +146,10 @@ was the limit every time, and of each manager against its own limit:
 
 | Component | Fit, from the runs of 8 and 9 September 2026 |
 |---|---|
-| hottest API server, resident | 13 GiB + 1 GiB per 1,000 Machines |
-| etcd member beside it, heap and file | 1.5 GiB + 0.75 GiB per 10,000 Machines |
-| kube-controller-manager | 50 MiB per 1,000 Machines |
-| everything else on the node | 1.5 GiB |
+| hottest API server, resident | the measured curve: 17 GiB at 5,000 Machines, 24 at 10,000, 31 at 15,000, 39 at 20,000, 45 at 25,000, 50 at 30,000, 51.5 at 35,000, 52 at 50,000; beyond that half a gigabyte per 1,000, a guess |
+| etcd member beside it, heap and file | 0.5 GiB + 20 MiB per 1,000 Machines, between defragmentations |
+| kube-controller-manager | 35 MiB per 1,000 Machines |
+| everything else on the node | 0.9 GiB |
 | a node holds a fleet when the sum is | under 90% of its allocatable memory |
 | core manager, live heap | 0.1 GiB + 1.05 GiB per 1,000 clusters |
 | kubeadm control plane manager, live heap | 0.1 GiB + 0.63 GiB per 1,000 clusters |
@@ -134,21 +158,27 @@ was the limit every time, and of each manager against its own limit:
 | a manager holds a fleet when its limit is | at least twice its live heap |
 
 Read against the measured points: a 32 GiB node (30.9 GiB allocatable) is
-expected to hold about 12,000 Machines, and it held 10,000 and failed 20,000;
-a 64 GiB node (61.9 GiB) about 39,000, and it held 35,000 at 87%. An 8 GiB
-core manager is expected to hold about 3,700 clusters and was at 93% of its
-limit at 3,500; a 6 GiB control plane manager about 4,600 and was at 96%,
-which is where the twice-live-heap line was drawn. The DevCluster provider's
+expected to hold about 11,000 Machines, and it held 10,000 and failed 20,000;
+a 64 GiB node (62.1 GiB) about 47,000, and it held 45,000 cleanly at 89% and
+reached 50,000 at the same node figure, since the API server had stopped
+growing. An 8 GiB core manager is expected to hold about 3,700 clusters and
+was at 93% of its limit at 3,500; a 6 GiB control plane manager about 4,600
+and was at 96%, which is where the twice-live-heap line was drawn; at 16 and
+12 GiB they are expected to hold about 7,500 and 9,400 and were at 5,000 with
+live heaps the model predicted within a tenth. The DevCluster provider's
 slope is an in-memory backend holding every fake node and stands in for no
 real provider; CPU, disk and network are not modelled because none was the
 ceiling in any run.
 
 So, for clusters of ten nodes on this topology: 3 x 32 GiB is a 1,000-cluster
-control plane, 3 x 64 GiB a 3,500-cluster one, and 3 x 128 GiB would be
-expected to reach about 9,000 before the managers, at the prepare tool's
-default limits, run out at about 3,700 for core. The managers' limits are
-flags on the prepare tool and the model reads the deployed limit, so raising
-them moves the expectation without touching the code.
+control plane and 3 x 64 GiB a 4,500-cluster one. What 3 x 128 GiB would hold
+is the tail of the curve, which nobody has climbed: the API server's growth
+had flattened by 35,000 Machines and the model continues it at half a
+gigabyte per thousand, which reads as about 15,000 clusters and should be
+read as "past 5,000, measure". The managers, at the prepare tool's default
+limits, run out at about 3,700 clusters for core; their limits are flags and
+the model reads the deployed limit, so raising them moves the expectation
+without touching the code.
 
 The run reports the expectation as its `capacity` fact and logs a warning
 when the ladder is past it. A warning, never a refusal: a run that reaches its

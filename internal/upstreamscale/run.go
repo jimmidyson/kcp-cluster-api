@@ -273,6 +273,7 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		// By age where a process publishes one, and by size for the API
 		// servers, which do not. See InheritedControlPlane.
 		old := append(Inherited(base.Components, started), InheritedControlPlane(base.Components)...)
+		old = append(old, InheritedManagers(base.Components, controllers)...)
 		if note := DescribeInherited(old); note != "" {
 			report.AddFact("inheritedBaseline", note)
 			r.logf("WARNING: %s", note)

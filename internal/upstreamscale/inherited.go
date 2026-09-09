@@ -61,30 +61,16 @@ const inheritedGrace = 10 * time.Minute
 // reason, and the managers are half of what the report is about. The check is
 // on the sample rather than on the component, so a process that publishes
 // process_start_time_seconds is covered whatever it is.
-//
-// # And the container's start time when the process will not say
-//
-// The managers are read through pprof, which carries no start time, so the
-// check above could never fire for them. A run took its baseline with the core
-// manager at 6.7 GiB resident and 82 MiB of live heap, the previous day's
-// fleet still held by the runtime, and said nothing. The kubelet records when
-// it started every container, and that is the process's age for any process
-// that does not publish its own.
 func Inherited(components []deployedscale.ComponentSample, runStart time.Time) []string {
 	cutoff := runStart.Add(-inheritedGrace)
 
 	var old []string
 	for _, c := range components {
-		var age time.Duration
-		switch {
-		case c.Process.StartedBefore(cutoff):
-			age = c.Process.Age(runStart)
-		case c.Pod.StartedBefore(cutoff):
-			age = c.Pod.Age(runStart)
-		default:
+		if !c.Process.StartedBefore(cutoff) {
 			continue
 		}
-		old = append(old, fmt.Sprintf("%s (running %s)", c.Component, age.Round(time.Minute)))
+		old = append(old, fmt.Sprintf("%s (running %s)",
+			c.Component, c.Process.Age(runStart).Round(time.Minute)))
 	}
 	sort.Strings(old)
 	return old
@@ -118,6 +104,38 @@ func InheritedControlPlane(components []deployedscale.ComponentSample) []string 
 			continue
 		}
 		old = append(old, fmt.Sprintf("%s (%s resident with no fleet to serve)",
+			c.Component, humanBytes(c.Process.ResidentBytes)))
+	}
+	sort.Strings(old)
+	return old
+}
+
+// emptyManagerCeiling is more resident memory than a Cluster API manager
+// reconciling nothing has any business holding.
+//
+// Measured: the four managers freshly started read 21 to 31 MiB resident at
+// the baseline. The case being caught read 6.7 GiB, with 82 MiB of live heap:
+// the previous day's fleet, still held by the runtime.
+const emptyManagerCeiling = 1 << 30
+
+// InheritedManagers names the managers whose baseline is a previous run's,
+// judged by size, for the reason InheritedControlPlane judges the API servers
+// that way: the managers are read through pprof, which carries no start time,
+// so a run whose managers were not restarted took its baseline with the core
+// manager at 6.7 GiB resident and said nothing. Judging by the container's
+// start time was tried and named every long-lived process on the control
+// plane's nodes, which is noise; the size is the finding.
+func InheritedManagers(components []deployedscale.ComponentSample, controllers []Controller) []string {
+	managers := make(map[string]bool, len(controllers))
+	for _, c := range controllers {
+		managers[c.Deployment] = true
+	}
+	var old []string
+	for _, c := range components {
+		if !managers[c.Component] || c.Process.ResidentBytes < emptyManagerCeiling {
+			continue
+		}
+		old = append(old, fmt.Sprintf("%s (%s resident with no fleet to reconcile)",
 			c.Component, humanBytes(c.Process.ResidentBytes)))
 	}
 	sort.Strings(old)

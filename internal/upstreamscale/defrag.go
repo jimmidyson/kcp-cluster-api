@@ -207,8 +207,24 @@ type DefragResult struct {
 	Took   time.Duration `json:"took,omitempty"`
 	Leader bool          `json:"leader,omitempty"`
 
+	// Skipped says the member was left alone because its file had too little
+	// free space to be worth a stop-the-world rewrite, and BeforeFreeBytes is
+	// how little. See Defragmenter.AllAt.
+	Skipped         bool   `json:"skipped,omitempty"`
+	BeforeFreeBytes uint64 `json:"beforeFreeBytes,omitempty"`
+
 	Err string `json:"error,omitempty"`
 }
+
+// shortestRenewDeadline is the tightest lease renewal anything on a CAREN
+// control plane runs on: kube-vip and the cloud controller manager both give
+// up after ten seconds. A member paused for longer than this has, for any
+// lease renewed through it, been down.
+const shortestRenewDeadline = 10 * time.Second
+
+// StalledLeases reports whether this defragmentation paused its member for
+// longer than the shortest lease renewal on the cluster.
+func (d DefragResult) StalledLeases() bool { return d.Took > shortestRenewDeadline }
 
 // Measured reports whether both readings arrived. A backend file is never zero
 // bytes, so a zero on either side is a reading that did not happen rather than
@@ -252,29 +268,82 @@ func (d *Defragmenter) AllAt(ctx context.Context, cl client.Client, sampler *Sam
 		return nil, err
 	}
 
-	var out []DefragResult
+	// Every member is read first, so that the order and the skips below are
+	// decided on the same readings.
+	before := make(map[string]Etcd, len(members))
+	names := make([]string, 0, len(members))
+	leader := ""
 	for i := range members {
-		pod := &members[i]
-		result := DefragResult{Pod: pod.Name}
-		if before, err := sampler.etcdMemberAt(ctx, store, pod.Name); err == nil {
-			result.BeforeBytes = before.DBTotalBytes
-			result.Leader = before.IsLeader
+		names = append(names, members[i].Name)
+		if reading, err := sampler.etcdMemberAt(ctx, store, members[i].Name); err == nil {
+			before[members[i].Name] = reading
+			if reading.IsLeader {
+				leader = members[i].Name
+			}
 		}
+	}
+
+	var out []DefragResult
+	for _, name := range defragOrder(names, leader) {
+		result := DefragResult{Pod: name}
+		reading, read := before[name]
+		if read {
+			result.BeforeBytes = reading.DBTotalBytes
+			result.BeforeFreeBytes = reading.FreeBytes()
+			result.Leader = reading.IsLeader
+			// A file with little free in it is not worth a rewrite. The
+			// 5000-cluster rung's defragmentation reclaimed 0 B from every
+			// member and paused the leader for twelve seconds doing it, and
+			// the cloud controller manager, renewing its lease through that
+			// member, exited within the same twelve seconds. Production
+			// operators defragment on a fragmentation threshold for the
+			// same reason; this is that threshold. See Etcd.Fragmented.
+			if !reading.Fragmented() {
+				result.Skipped = true
+				result.AfterBytes = reading.DBTotalBytes
+				result.AfterFreeBytes = reading.FreeBytes()
+				result.Settled = true
+				out = append(out, result)
+				continue
+			}
+		}
+		pod := name
 		started := time.Now()
-		err := d.exec(ctx, store, pod.Name)
+		err := d.exec(ctx, store, pod)
 		result.Took = time.Since(started)
 		if err != nil {
 			result.Err = err.Error()
 			out = append(out, result)
 			continue
 		}
-		after, settled := d.settled(ctx, sampler, store, pod.Name)
+		after, settled := d.settled(ctx, sampler, store, pod)
 		result.AfterBytes = after.DBTotalBytes
 		result.AfterFreeBytes = after.FreeBytes()
 		result.Settled = settled
 		out = append(out, result)
 	}
 	return out, nil
+}
+
+// defragOrder is the members in name order with the leader moved last.
+//
+// A follower's pause is that follower's, and the reads it was serving move to
+// the others. The leader's pause is every write's. Doing the followers first
+// means that by the time the leader is rewritten the others are compact and
+// serving, and a leader change during its pause, should one happen, lands on
+// a member that has already been done rather than one still waiting.
+func defragOrder(names []string, leader string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != leader {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	if leader != "" {
+		out = append(out, leader)
+	}
+	return out
 }
 
 func (d *Defragmenter) exec(ctx context.Context, store StoreLocation, pod string) error {
@@ -318,6 +387,12 @@ func DescribeDefrag(results []DefragResult) string {
 			parts = append(parts, fmt.Sprintf("%s (%s)%s", part, r.Err, asLeader(r)))
 			continue
 		}
+		if r.Skipped {
+			parts = append(parts, fmt.Sprintf("%s left alone: %s of its %s is free (%.0f%%), which is not worth "+
+				"a stop-the-world rewrite%s", r.Pod, humanBytes(r.BeforeFreeBytes), humanBytes(r.BeforeBytes),
+				100*float64(r.BeforeFreeBytes)/float64(max(r.BeforeBytes, 1)), asLeader(r)))
+			continue
+		}
 		if !r.Measured() {
 			// "reclaimed 0 B (0 B to 1.3 GiB)" is what this used to print, and
 			// it reads as a member that grew from nothing — a defect in the
@@ -332,6 +407,11 @@ func DescribeDefrag(results []DefragResult) string {
 			part += " in " + r.Took.Round(time.Second).String()
 		}
 		part += asLeader(r)
+		if r.StalledLeases() {
+			part += fmt.Sprintf(" — **longer than the %s renew deadline** kube-vip and the cloud controller "+
+				"manager hold their leases on, so a lease lost through this member during it is this "+
+				"defragmentation's doing rather than the fleet's", shortestRenewDeadline)
+		}
 		if !r.Settled {
 			part += fmt.Sprintf(" — **the size did not settle**: %s of the file is still free "+
 				"after defragmenting, so this reading is the gauge lagging rather than the store "+

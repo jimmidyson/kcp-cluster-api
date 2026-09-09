@@ -658,6 +658,22 @@ rather than a maintenance window. A member that will not defragment is reported
 and does not abandon the climb — it is simply the one whose file reaches the
 quota first.
 
+Two more rules, learned at 5,000 clusters. The defragmentation before that
+rung reclaimed 0 B from every member and paused the raft leader for twelve
+seconds doing it, and the cloud controller manager, which renews its lease
+through its local API server and so through that member, exited inside those
+twelve seconds: its renew deadline is ten. So:
+
+- **A member with little to reclaim is left alone.** Below a fifth of the
+  file free, the rewrite buys nothing and costs the pause, and the report
+  says the member was left alone and how much was free. Production etcd
+  operators defragment on a fragmentation threshold for the same reason.
+- **The leader goes last**, so the followers are compact and serving before
+  every write in the cluster is paused, and a rewrite that runs longer than
+  the ten-second renew deadline kube-vip and the cloud controller manager
+  hold their leases on is flagged on the line, so a lease lost during it is
+  charged to the defragmentation rather than to the fleet.
+
 The report also carries the gap either way, so a run that hits the quota can say
 whether defragmenting would have bought room or whether the store is genuinely
 full.
@@ -1662,10 +1678,14 @@ now says so by size. The restart recipe is above.
 
 The runs on 32 and 64 GiB control plane nodes give a fit, written into the
 harness as `upstreamscale.Capacity` and tabulated in the sizing spec: the
-hottest API server at 13 GiB plus 1 GiB per thousand Machines, etcd and the
-controller manager beside it, 90% of the busiest node's allocatable memory as
-the line; and each manager's live heap per cluster against its own memory
-limit, twice the live heap as the line. Before anything is created the run
+hottest API server as the measured curve of resident memory against Machines,
+steep to 25,000 and flat at about 52 GiB from 35,000 to 50,000, with etcd and
+the controller manager beside it and 90% of the busiest node's allocatable
+memory as the line; and each manager's live heap per cluster against its own
+memory limit, twice the live heap as the line. The first version of the fit
+was a straight line through the early points, and it put the 5,000-cluster
+rung past a 64 GiB node that then held it at 89%; the curve is what the
+warning said to do with that evidence. Before anything is created the run
 reads the control plane nodes' allocatable memory and the managers' deployed
 limits, applies the fit to the ladder's top rung, records the verdict as the
 report's `capacity` fact, and logs a warning naming the node or the manager

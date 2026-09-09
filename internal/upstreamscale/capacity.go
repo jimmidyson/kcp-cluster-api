@@ -43,15 +43,19 @@ import (
 // The control plane's ceiling is one node, not the sum. The node holding the
 // VIP and the controller manager's lease carries the largest API server and
 // does two to three times the CPU of the others, so the model is of that
-// node. The hottest API server's resident set fitted to the fleet's Machines
-// runs at 13 GiB plus 1 GiB per thousand, with the 64 GiB run's points at
-// 10,000 Machines reading 23.7 GiB and at 35,000 reading 49.4. etcd beside it
-// holds its heap and its backend file, 1.5 GiB plus three quarters of a
-// gigabyte per ten thousand Machines; kube-controller-manager grows at
-// 50 MiB per thousand; and the CNI, kube-vip, the scheduler and the kubelet
-// take about 1.5 GiB between them. Headroom is 90% of allocatable: the 32 GiB
-// node that held 1000 was at 82%, the 64 GiB node that held 3500 at 87%, and
-// the 32 GiB node that failed 2000 would have needed 97%.
+// node. The hottest API server's resident set is carried as the measured
+// curve rather than a line, because it is not one: 24 GiB at 10,000 Machines,
+// 39 at 20,000, 50 at 30,000, and then flat between 50 and 52 GiB from 35,000
+// to 50,000 with the live heap flat at about 35 GiB while the object count
+// went on rising. A line through the early points put 50,000 Machines past a
+// 64 GiB node, and the run that held them at 89% is what replaced the line
+// with the curve. etcd beside it
+// holds its heap and its backend file, half a gigabyte plus 20 MiB per
+// thousand Machines between defragmentations; kube-controller-manager grows
+// at 35 MiB per thousand; and the CNI, kube-vip, the scheduler and the rest
+// take about 0.9 GiB between them. Headroom is 90% of allocatable: the 32 GiB
+// node that held 1000 clusters was at 82%, the 64 GiB node that held 4500
+// cleanly at 89%, and the 32 GiB node that failed 2000 would have needed 97%.
 //
 // The managers' ceiling is their own memory limits, which the prepare tool
 // sets and GOMEMLIMIT holds them to. What the fleet costs each one is its live
@@ -72,10 +76,11 @@ import (
 // modelled on Machines rather than clusters. And it says nothing about CPU,
 // disk or the network, none of which was the ceiling in any run so far.
 type Capacity struct {
-	// APIServerBaseBytes and APIServerPerMachineBytes describe the hottest
-	// API server's resident set against the fleet's Machines.
-	APIServerBaseBytes       float64
-	APIServerPerMachineBytes float64
+	// APIServerCurve is the hottest API server's resident set against the
+	// fleet's Machines, as measured, read by straight lines between the
+	// points; APIServerTailPerMachineBytes carries it on past the last one.
+	APIServerCurve               []CurvePoint
+	APIServerTailPerMachineBytes float64
 	// EtcdBaseBytes and EtcdPerMachineBytes describe one member's heap and
 	// backend file.
 	EtcdBaseBytes       float64
@@ -101,15 +106,35 @@ type Capacity struct {
 
 const gib = float64(1 << 30)
 
+// CurvePoint is one measured point on a curve of bytes against Machines.
+type CurvePoint struct {
+	Machines int
+	Bytes    float64
+}
+
 // MeasuredCapacity is the fit described on Capacity.
 func MeasuredCapacity() Capacity {
 	return Capacity{
-		APIServerBaseBytes:               13 * gib,
-		APIServerPerMachineBytes:         1 * gib / 1000,
-		EtcdBaseBytes:                    1.5 * gib,
-		EtcdPerMachineBytes:              0.75 * gib / 10000,
-		ControllerManagerPerMachineBytes: 0.05 * gib / 1000,
-		NodeOverheadBytes:                1.5 * gib,
+		// The hottest API server's resident set, across the runs of 8 and
+		// 9 September: steep to 25,000 Machines and flat from 35,000, where
+		// it sat between 50 and 52 GiB through 50,000 with the live heap
+		// flat at about 35 GiB while the object count went on rising. The
+		// tail is a guess at half the early slope, since nothing above
+		// 50,000 has been climbed.
+		APIServerCurve: []CurvePoint{
+			{0, 0.6 * gib}, {5000, 17 * gib}, {10000, 24 * gib}, {15000, 31 * gib},
+			{20000, 39 * gib}, {25000, 45 * gib}, {30000, 50 * gib}, {35000, 51.5 * gib},
+			{50000, 52 * gib},
+		},
+		APIServerTailPerMachineBytes: 0.5 * gib / 1000,
+		// The rest of the busiest node, measured at 45,000 Machines: etcd
+		// at 1.2 GiB between defragmentations, kube-controller-manager at
+		// 1.7 GiB, and the CNI, kube-vip, the scheduler and the rest at
+		// three quarters of a gigabyte between them.
+		EtcdBaseBytes:                    0.5 * gib,
+		EtcdPerMachineBytes:              0.02 * gib / 1000,
+		ControllerManagerPerMachineBytes: 0.035 * gib / 1000,
+		NodeOverheadBytes:                0.9 * gib,
 		Headroom:                         0.9,
 		ManagerLiveHeapPerClusterBytes: map[string]float64{
 			"core":                  1.05 * gib / 1000,
@@ -125,26 +150,66 @@ func MeasuredCapacity() Capacity {
 	}
 }
 
+// APIServerBytes is the hottest API server's expected resident set at a fleet
+// of this many Machines: straight lines between the measured points, and the
+// tail slope beyond the last.
+func (c Capacity) APIServerBytes(machines int) float64 {
+	if len(c.APIServerCurve) == 0 {
+		return 0
+	}
+	m := float64(machines)
+	first := c.APIServerCurve[0]
+	if m <= float64(first.Machines) {
+		return first.Bytes
+	}
+	for i := 1; i < len(c.APIServerCurve); i++ {
+		a, b := c.APIServerCurve[i-1], c.APIServerCurve[i]
+		if m <= float64(b.Machines) {
+			span := float64(b.Machines - a.Machines)
+			if span <= 0 {
+				return b.Bytes
+			}
+			return a.Bytes + (b.Bytes-a.Bytes)*(m-float64(a.Machines))/span
+		}
+	}
+	last := c.APIServerCurve[len(c.APIServerCurve)-1]
+	return last.Bytes + c.APIServerTailPerMachineBytes*(m-float64(last.Machines))
+}
+
 // ControlPlaneNodeBytes is what the busiest control plane node is expected to
 // hold at a fleet of this many Machines.
 func (c Capacity) ControlPlaneNodeBytes(machines int) float64 {
 	m := float64(machines)
-	return c.APIServerBaseBytes + c.APIServerPerMachineBytes*m +
+	return c.APIServerBytes(machines) +
 		c.EtcdBaseBytes + c.EtcdPerMachineBytes*m +
 		c.ControllerManagerPerMachineBytes*m +
 		c.NodeOverheadBytes
 }
 
 // MachinesForNode is the largest fleet, in Machines, a control plane node of
-// this allocatable memory is expected to hold.
+// this allocatable memory is expected to hold: the node's cost is monotone in
+// the fleet, so this is a search rather than a formula.
 func (c Capacity) MachinesForNode(allocatable uint64) int {
-	fixed := c.APIServerBaseBytes + c.EtcdBaseBytes + c.NodeOverheadBytes
-	perMachine := c.APIServerPerMachineBytes + c.EtcdPerMachineBytes + c.ControllerManagerPerMachineBytes
-	room := float64(allocatable)*c.Headroom - fixed
-	if room <= 0 || perMachine <= 0 {
+	room := float64(allocatable) * c.Headroom
+	if c.ControlPlaneNodeBytes(0) > room {
 		return 0
 	}
-	return int(math.Floor(room / perMachine))
+	lo, hi := 0, 1
+	for c.ControlPlaneNodeBytes(hi) <= room {
+		hi *= 2
+		if hi > 1<<30 {
+			return hi
+		}
+	}
+	for hi-lo > 1 {
+		mid := (lo + hi) / 2
+		if c.ControlPlaneNodeBytes(mid) <= room {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return lo
 }
 
 // ManagerLiveHeapBytes is a manager's predicted live heap at this many

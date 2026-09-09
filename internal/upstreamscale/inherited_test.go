@@ -131,24 +131,33 @@ func TestAnAPIServerHoldingGigabytesAtZeroClustersIsInherited(t *testing.T) {
 	}
 }
 
-// TestAManagerReadThroughPprofIsJudgedByItsContainerStart. The managers publish
-// no start time on the endpoint the sampler reads, so a run whose managers were
-// not restarted took its baseline with yesterday's fleet still in their heaps
-// and said nothing. The kubelet knows when it started the container.
-func TestAManagerReadThroughPprofIsJudgedByItsContainerStart(t *testing.T) {
-	now := time.Now()
+// TestAManagerHoldingGigabytesAtZeroClustersIsInherited. The managers publish
+// no start time on the endpoint the sampler reads, so they are judged the way
+// the API servers are: a manager reconciling nothing and holding gigabytes is
+// holding the fleet before. Judging by the container's start time instead
+// named every long-lived process on the control plane's nodes.
+func TestAManagerHoldingGigabytesAtZeroClustersIsInherited(t *testing.T) {
+	controllers := Controllers()
 	yesterday := deployedscale.ComponentSample{
 		Component: "capi-controller-manager",
-		Pod:       deployedscale.PodFacts{StartedAt: now.Add(-26 * time.Hour)},
+		Process:   deployedscale.ProcessSample{ResidentBytes: 6700 << 20, HeapAllocBytes: 82 << 20},
 	}
 	fresh := deployedscale.ComponentSample{
 		Component: "capd-controller-manager",
-		Pod:       deployedscale.PodFacts{StartedAt: now.Add(-time.Minute)},
+		Process:   deployedscale.ProcessSample{ResidentBytes: 31 << 20},
 	}
-	silent := deployedscale.ComponentSample{Component: "capi-kubeadm-bootstrap-controller-manager"}
+	notAManager := deployedscale.ComponentSample{
+		Component: "kube-controller-manager-cp-0",
+		Process:   deployedscale.ProcessSample{ResidentBytes: 1200 << 20},
+		Pod:       deployedscale.PodFacts{StartedAt: time.Now().Add(-12 * time.Hour)},
+	}
 
-	old := Inherited([]deployedscale.ComponentSample{yesterday, fresh, silent}, now)
-	if len(old) != 1 || !strings.HasPrefix(old[0], "capi-controller-manager (running 26h") {
-		t.Errorf("Inherited() = %v, want only the manager whose container started yesterday", old)
+	old := InheritedManagers([]deployedscale.ComponentSample{yesterday, fresh, notAManager}, controllers)
+	if len(old) != 1 || !strings.HasPrefix(old[0], "capi-controller-manager (6.5 GiB resident") {
+		t.Errorf("InheritedManagers() = %v, want only the manager holding gigabytes", old)
+	}
+	// And age alone accuses nobody who did not publish a start time.
+	if got := Inherited([]deployedscale.ComponentSample{notAManager}, time.Now()); len(got) != 0 {
+		t.Errorf("a container's age was treated as a process's: %v", got)
 	}
 }

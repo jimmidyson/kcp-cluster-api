@@ -42,12 +42,21 @@ func TestTheModelReproducesTheMeasuredRuns(t *testing.T) {
 	if got := c.MachinesForNode(gib32); got < 10000 || got >= 20000 {
 		t.Errorf("a 32 GiB node is expected to hold %d Machines, want between 10000 (held) and 20000 (failed)", got)
 	}
-	if got := c.MachinesForNode(gib64); got < 35000 || got >= 45000 {
-		t.Errorf("a 64 GiB node is expected to hold %d Machines, want at least the 35000 held and under 45000", got)
+	// 64 GiB held 45000 Machines cleanly at 89% and reached 50000.
+	if got := c.MachinesForNode(gib64); got < 45000 || got >= 55000 {
+		t.Errorf("a 64 GiB node is expected to hold %d Machines, want the 45000 held cleanly at 89%% and under 55000", got)
 	}
-	// The busiest 64 GiB node read 54 GiB at 35000 Machines.
+	// The busiest 64 GiB node read 54 GiB at 35000 Machines and 55 at 45000.
 	if got := c.ControlPlaneNodeBytes(35000) / float64(1<<30); got < 50 || got > 58 {
 		t.Errorf("the model puts a node at %.1f GiB for 35000 Machines, measured 54", got)
+	}
+	if got := c.ControlPlaneNodeBytes(45000) / float64(1<<30); got < 52 || got > 58 {
+		t.Errorf("the model puts a node at %.1f GiB for 45000 Machines, measured 55", got)
+	}
+	// Past the last measured point the curve keeps climbing rather than
+	// promising a plateau nobody has seen.
+	if c.ControlPlaneNodeBytes(80000) <= c.ControlPlaneNodeBytes(50000) {
+		t.Error("the curve stops climbing past the last measured point")
 	}
 	// The core manager's 8 GiB limit was at 93% at 3500 clusters and the
 	// control plane manager's 6 GiB at 96%: both at the line, neither over.
@@ -69,9 +78,9 @@ func TestALadderPastTheClusterIsWarnedAboutAndOneWithinItIsNot(t *testing.T) {
 	nodes := []NodeMemory{{Name: "cp-a", Allocatable: gib64}, {Name: "cp-b", Allocatable: gib32}}
 	managers := []ManagerLimit{{Name: "core", Limit: 8 << 30}, {Name: "kubeadm-control-plane", Limit: 6 << 30}}
 
-	past := c.Expect(3500, 35000, nodes, managers)
+	past := c.Expect(6000, 60000, nodes, managers)
 	short := past.Short()
-	if !strings.Contains(short, "cp-b") || !strings.Contains(short, "35000") {
+	if !strings.Contains(short, "cp-b") || !strings.Contains(short, "60000") {
 		t.Errorf("the smallest node is not the one named as short: %s", short)
 	}
 	if strings.Contains(short, "cp-a") {
@@ -90,7 +99,7 @@ func TestALadderPastTheClusterIsWarnedAboutAndOneWithinItIsNot(t *testing.T) {
 	}
 
 	// A manager can be the short one on its own, with the node fine.
-	manager := c.Expect(6000, 60000, []NodeMemory{{Name: "cp-a", Allocatable: 4 * gib64}}, managers)
+	manager := c.Expect(6000, 60000, []NodeMemory{{Name: "cp-a", Allocatable: 8 * gib64}}, managers)
 	if got := manager.Short(); !strings.Contains(got, "core manager") || strings.Contains(got, "cp-a") {
 		t.Errorf("a manager at the edge with a large node was not the one named: %s", got)
 	}
