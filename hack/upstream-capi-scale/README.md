@@ -103,6 +103,24 @@ substitutions in your environment (`NUTANIX_ENDPOINT`, `NUTANIX_USER`,
 `KUBERNETES_VERSION`, and a `KUBERNETES_SERVICE_LOAD_BALANCER_IP`), which is
 what `clusterctl generate cluster` reads.
 
+## `create` waits for the rollout, and says what it is waiting on
+
+An apply to a Cluster that already exists is a rollout, and the Cluster's
+`Available` condition stays True through one: the control plane keeps quorum
+and the workers keep their minimum. The step used to wait on `Available` with
+`kubectl wait`, which on a rollout returned at once or, when the rollout took
+`Available` down for longer than the wait allowed, printed "timed out waiting
+for the condition" with no condition named and no reason, on a cluster that
+then converged.
+
+The step now waits on `ControlPlaneInitialized`, then `Available`, and when
+the apply reported the Cluster as `configured` rather than `created`, on
+`RollingOut` rising and then falling again, which is every machine on the spec
+just applied. Each wait says what the condition currently reads whenever that
+changes, and a wait that gives up prints every condition the Cluster reports.
+`CLUSTER_WAIT_MINUTES` (120) is the budget per condition, sized for a full
+rollout rather than a first boot.
+
 ## The generated manifest is trimmed before it is applied
 
 CAREN's example is a fine cluster and a poor scale-test cluster, in two ways

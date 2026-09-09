@@ -248,6 +248,11 @@ KEEP_CSI="${KEEP_CSI:-false}"
 CONTROL_PLANE_POOL_WORKERS="${CONTROL_PLANE_POOL_WORKERS:-0}"
 
 CONTROL_PLANE_VCPUS="${CONTROL_PLANE_VCPUS:-16}"
+# How long create waits for the Cluster, per condition. Sized for a rollout of
+# every machine rather than a first boot: three control plane machines replaced
+# one at a time and four workers behind them took longer than 45 minutes on
+# Nutanix, and the wait gave up on a cluster that then converged.
+CLUSTER_WAIT_MINUTES="${CLUSTER_WAIT_MINUTES:-120}"
 CONTROL_PLANE_MEMORY="${CONTROL_PLANE_MEMORY:-64Gi}"
 CONTROL_PLANE_DISK="${CONTROL_PLANE_DISK:-200Gi}"
 WORKER_VCPUS="${WORKER_VCPUS:-16}"
@@ -755,13 +760,63 @@ create() {
   #     stay: without the CNI nothing networks, and without the cloud provider
   #     nodes keep the uninitialized taint and never become schedulable.
   log "Review ${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml, then apply it"
-  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml"
+  local applied
+  applied="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" apply -f "${REPO_ROOT}/bin/${CLUSTER_NAME}.yaml")"
+  printf '%s\n' "${applied}"
 
   log "Waiting for the control plane"
-  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" \
-    wait cluster "${CLUSTER_NAME}" --for=condition=ControlPlaneInitialized --timeout=30m
-  kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" \
-    wait cluster "${CLUSTER_NAME}" --for=condition=Available --timeout=45m
+  wait_cluster ControlPlaneInitialized True "${CLUSTER_WAIT_MINUTES}"
+  wait_cluster Available True "${CLUSTER_WAIT_MINUTES}"
+
+  # An apply to a Cluster that already exists is a rollout, and Available
+  # stays True through one: the control plane keeps quorum and the workers
+  # keep their minimum, and neither is what the apply was for. What it was
+  # for is every machine on the spec just applied, which is RollingOut going
+  # False again. The topology controller takes a moment to turn the new spec
+  # into a rollout, so RollingOut is given time to rise before it is waited
+  # on to fall — and an apply that changed nothing simply never rises.
+  if grep -q "^cluster.cluster.x-k8s.io/${CLUSTER_NAME} configured" <<<"${applied}"; then
+    log "The Cluster already existed, so this apply is a rollout: waiting for every machine to be on the spec just applied"
+    wait_cluster RollingOut True 3 || log "Nothing started rolling within 3 minutes, so the apply changed nothing a machine is built from"
+    wait_cluster RollingOut False "${CLUSTER_WAIT_MINUTES}"
+  fi
+}
+
+# wait_cluster waits for one condition on the Cluster under test to reach a
+# status, saying what it is waiting on while it waits and what the Cluster
+# said when it gives up.
+#
+# kubectl wait said neither. A rollout to 64 GiB control plane nodes ran past
+# its 45 minute wait and the whole of what the script had to say was "timed
+# out waiting for the condition on clusters/capi-scale": no condition named,
+# no reason, and by the time anyone looked the cluster had converged. The
+# timeout is CLUSTER_WAIT_MINUTES, sized for a full rollout of every machine
+# rather than for a first boot, and the give-up line carries every condition
+# the Cluster reports so the reason is on the screen rather than in a
+# kubectl command to be typed afterwards.
+wait_cluster() {
+  local condition="$1" want="$2" minutes="$3"
+  local deadline=$(( $(date +%s) + minutes * 60 )) last="" now status
+  while :; do
+    now="$(kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" get cluster "${CLUSTER_NAME}" \
+      -o jsonpath="{range .status.conditions[?(@.type==\"${condition}\")]}{.status} {.reason}: {.message}{end}" 2>/dev/null || true)"
+    status="${now%% *}"
+    if [[ "${status}" == "${want}" ]]; then
+      log "${condition} is ${want}"
+      return 0
+    fi
+    if [[ "${now}" != "${last}" ]]; then
+      log "Waiting for ${condition} to be ${want}; it is ${now:-not reported yet}"
+      last="${now}"
+    fi
+    if (( $(date +%s) >= deadline )); then
+      log "Gave up after ${minutes} minutes waiting for ${condition} to be ${want} on cluster ${CLUSTER_NAME}, whose conditions are:"
+      kubectl --kubeconfig "${BOOTSTRAP_KUBECONFIG}" -n "${CLUSTER_NAMESPACE}" get cluster "${CLUSTER_NAME}" \
+        -o jsonpath='{range .status.conditions[*]}{"  "}{.type}={.status} {.reason}: {.message}{"\n"}{end}' 2>/dev/null || true
+      return 1
+    fi
+    sleep 15
+  done
 }
 
 kubeconfig() {
