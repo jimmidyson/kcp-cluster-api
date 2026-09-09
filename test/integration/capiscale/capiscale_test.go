@@ -94,6 +94,12 @@ var (
 	clientQPS = flag.Float64("capi-client-qps", 200,
 		"The driver's client-side rate limit. client-go defaults to 5, which throttles the run rather than the cluster.")
 	clientBurst = flag.Int("capi-client-burst", 400, "Its burst.")
+
+	capacityCheck = flag.Bool("capi-capacity-check", true,
+		"Before anything is created, compare the ladder's top rung with what the measured runs say "+
+			"control plane nodes of this size and managers at these limits can hold, and warn when the "+
+			"ladder asks for more. A warning, never a refusal: a run that reaches its top rung cleanly "+
+			"regardless is the evidence that moves the model.")
 )
 
 // TestStockClusterApiClimbsUntilSomethingGives is the whole run: a baseline, a
@@ -146,6 +152,12 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 		NodesPerCluster: *nodesPer,
 	}
 
+	var capacity *upstreamscale.Capacity
+	if *capacityCheck {
+		measured := upstreamscale.MeasuredCapacity()
+		capacity = &measured
+	}
+
 	runner := &upstreamscale.Runner{
 		Target:       target,
 		Host:         cl,
@@ -167,6 +179,7 @@ func TestStockClusterApiClimbsUntilSomethingGives(t *testing.T) {
 			TeardownTimeout:   *teardownTimeout,
 			APIHeapSamples:    *apiHeapSamples,
 			APIHeapGap:        *apiHeapGap,
+			Capacity:          capacity,
 			DriverFact: fmt.Sprintf("creates %d namespaces' objects at once, at %g QPS "+
 				"(burst %d): client-go's default is 5 QPS, which times the driver rather than "+
 				"the cluster", *createConcurrency, *clientQPS, *clientBurst),

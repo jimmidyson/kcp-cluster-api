@@ -152,4 +152,8 @@ type RunOptions struct {
 	// DriverFact describes the driver's own limits, which belong in the report
 	// because they bound what its timings mean.
 	DriverFact string
+
+	// Capacity is the model a run is judged against before anything is
+	// created, or nil to judge nothing. See Capacity.
+	Capacity *Capacity
 }

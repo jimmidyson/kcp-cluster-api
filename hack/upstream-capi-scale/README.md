@@ -1658,6 +1658,38 @@ server serving nothing costs about half a gigabyte on this cluster; anything in
 gigabytes at zero clusters is the fleet before, and `InheritedControlPlane`
 now says so by size. The restart recipe is above.
 
+### The run says what its cluster is expected to hold before it starts
+
+The runs on 32 and 64 GiB control plane nodes give a fit, written into the
+harness as `upstreamscale.Capacity` and tabulated in the sizing spec: the
+hottest API server at 13 GiB plus 1 GiB per thousand Machines, etcd and the
+controller manager beside it, 90% of the busiest node's allocatable memory as
+the line; and each manager's live heap per cluster against its own memory
+limit, twice the live heap as the line. Before anything is created the run
+reads the control plane nodes' allocatable memory and the managers' deployed
+limits, applies the fit to the ladder's top rung, records the verdict as the
+report's `capacity` fact, and logs a warning naming the node or the manager
+that is expected to run out and at what fleet.
+
+A warning, never a refusal. A run that reaches its top rung cleanly on a
+cluster the model said was too small is the evidence that moves the model,
+and stopping it would throw that evidence away. `CAPACITY_CHECK=false` turns
+the check off.
+
+The managers' limits are the ones judged, read from the deployments rather
+than from the table, so a limit raised through the prepare tool's flags is
+the limit the expectation is computed against:
+
+```sh
+go run ./cmd/capiscale-prepare --kubeconfig bin/capi-scale.kubeconfig \
+  -core-memory 16Gi -kubeadm-control-plane-memory 12Gi \
+  -kubeadm-bootstrap-memory 8Gi -devcluster-memory 32Gi
+```
+
+The defaults stay what the recorded runs used. A run taken with raised limits
+is a run on a differently sized cluster, and the report's `capacity` fact
+carries the limits it was judged against.
+
 ### The soak holds the fleet it is labelled with
 
 Rungs are cumulative: each keeps the fleet below it and adds to it. So when the

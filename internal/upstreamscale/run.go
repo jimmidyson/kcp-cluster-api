@@ -128,6 +128,17 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 	store := r.Target.Store()
 	started := time.Now()
 
+	// What this cluster is expected to hold against what the ladder asks,
+	// before a rung is created: a warning here costs nothing, and a climb
+	// that stops at 2000 on a node the model put at 1500 cost a day. Never a
+	// refusal, since a run that reaches its top rung cleanly regardless is
+	// exactly the evidence that moves the model. See Capacity.
+	if opts.Capacity != nil {
+		if fleet, err := r.Target.Plan(opts.MaxClusters); err == nil {
+			r.expect(ctx, report, controllers, opts.MaxClusters, fleet.Machines())
+		}
+	}
+
 	sample := func(label string, clusters, machines int) {
 		components, throttling, err := r.Sampler.Sample(ctx, r.Host, controllers)
 		if err != nil {
@@ -366,6 +377,34 @@ func (r *Runner) Run(ctx context.Context) (*deployedscale.Report, Ceiling, error
 		return report, ceiling, fmt.Errorf("measured nothing: %s", ceiling.Describe())
 	}
 	return report, ceiling, nil
+}
+
+// expect applies the capacity model to the ladder's top rung and records
+// the verdict as a fact, and as a warning when the cluster is not expected
+// to get there. Errors are logged rather than fatal, for the reason the
+// model is a warning: a preflight that cannot read a node must not stop a
+// run that could measure one.
+func (r *Runner) expect(ctx context.Context, report *deployedscale.Report, controllers []Controller,
+	clusters, machines int,
+) {
+	nodes, err := ReadNodeMemory(ctx, r.Host)
+	if err != nil {
+		r.logf("NOTE: could not read the control plane nodes for the capacity check: %v", err)
+	}
+	limits, err := ManagerLimits(ctx, r.Host, controllers)
+	if err != nil {
+		r.logf("NOTE: could not read the managers' limits for the capacity check: %v", err)
+	}
+	if len(nodes) == 0 && len(limits) == 0 {
+		return
+	}
+	expectation := r.Options.Capacity.Expect(clusters, machines, nodes, limits)
+	report.AddFact("capacity", expectation.Describe())
+	if short := expectation.Short(); short != "" {
+		r.logf("WARNING: the ladder asks for more than this cluster is expected to hold: %s", short)
+		return
+	}
+	r.logf("%s", expectation.Describe())
 }
 
 // defragment runs one round against the target's store and records what it

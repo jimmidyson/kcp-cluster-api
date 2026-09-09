@@ -27,6 +27,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -679,5 +680,50 @@ func TestASidecarDeathIsAnIncidentNotACeiling(t *testing.T) {
 		if !strings.Contains(described, want) {
 			t.Errorf("the ceiling does not say %q: %s", want, described)
 		}
+	}
+}
+
+// TestALadderPastTheClusterIsWarnedAboutBeforeAnythingIsCreated. A climb that
+// stops at 2000 on a node the measured runs put at 1500 costs a day; the model
+// says so at the start, as a warning and a fact, and the run goes on to find
+// out.
+func TestALadderPastTheClusterIsWarnedAboutBeforeAnythingIsCreated(t *testing.T) {
+	small := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "cp-small", Labels: map[string]string{ControlPlaneNodeLabel: ""}},
+		Status:     corev1.NodeStatus{Allocatable: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("14Gi")}},
+	}
+	target := &fakeTarget{name: "stock", tenant: "Namespace"}
+	runner := testRunner(t, target, 2, 8, small)
+	target.host = runner.Host
+	measured := MeasuredCapacity()
+	runner.Options.Capacity = &measured
+	var logged []string
+	runner.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	report, ceiling, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	fact := report.Facts["capacity"]
+	if !strings.Contains(fact, "cp-small") || !strings.Contains(fact, "past that") {
+		t.Errorf("the capacity fact does not say the ladder is past the node: %q", fact)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.HasPrefix(l, "WARNING: the ladder asks for more") }) {
+		t.Errorf("no warning was logged before the climb: %q", logged)
+	}
+	if ceiling.LastGood == nil || ceiling.LastGood.Clusters != 8 {
+		t.Errorf("the warning stopped the climb: %+v", ceiling)
+	}
+
+	// Without the model, nothing is said.
+	quiet := &fakeTarget{name: "stock", tenant: "Namespace"}
+	plain := testRunner(t, quiet, 2, 4, small)
+	quiet.host = plain.Host
+	report, _, err = plain.Run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, ok := report.Facts["capacity"]; ok {
+		t.Error("a run with no model carried a capacity fact")
 	}
 }

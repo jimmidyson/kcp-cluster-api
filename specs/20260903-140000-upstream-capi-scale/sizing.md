@@ -112,6 +112,49 @@ The workers at 32 GiB were not the limit at any rung. At 1,500 clusters the
 four managers held 1.2 to 8.8 GiB resident each with live heaps of 0.4 to
 3.0 GiB, all within their limits.
 
+### How many clusters a management cluster is expected to hold
+
+The two node sizes climbed give a fit, and the fit is written into the
+harness as `upstreamscale.Capacity` so that a run is told before it creates
+anything whether its ladder is past what its cluster is expected to give. The
+model is of the busiest control plane node, since that node and not the sum
+was the limit every time, and of each manager against its own limit:
+
+| Component | Fit, from the runs of 8 and 9 September 2026 |
+|---|---|
+| hottest API server, resident | 13 GiB + 1 GiB per 1,000 Machines |
+| etcd member beside it, heap and file | 1.5 GiB + 0.75 GiB per 10,000 Machines |
+| kube-controller-manager | 50 MiB per 1,000 Machines |
+| everything else on the node | 1.5 GiB |
+| a node holds a fleet when the sum is | under 90% of its allocatable memory |
+| core manager, live heap | 0.1 GiB + 1.05 GiB per 1,000 clusters |
+| kubeadm control plane manager, live heap | 0.1 GiB + 0.63 GiB per 1,000 clusters |
+| kubeadm bootstrap manager, live heap | 0.05 GiB + 0.27 GiB per 1,000 clusters |
+| DevCluster provider, live heap | 0.4 GiB + 1.0 GiB per 1,000 clusters |
+| a manager holds a fleet when its limit is | at least twice its live heap |
+
+Read against the measured points: a 32 GiB node (30.9 GiB allocatable) is
+expected to hold about 12,000 Machines, and it held 10,000 and failed 20,000;
+a 64 GiB node (61.9 GiB) about 39,000, and it held 35,000 at 87%. An 8 GiB
+core manager is expected to hold about 3,700 clusters and was at 93% of its
+limit at 3,500; a 6 GiB control plane manager about 4,600 and was at 96%,
+which is where the twice-live-heap line was drawn. The DevCluster provider's
+slope is an in-memory backend holding every fake node and stands in for no
+real provider; CPU, disk and network are not modelled because none was the
+ceiling in any run.
+
+So, for clusters of ten nodes on this topology: 3 x 32 GiB is a 1,000-cluster
+control plane, 3 x 64 GiB a 3,500-cluster one, and 3 x 128 GiB would be
+expected to reach about 9,000 before the managers, at the prepare tool's
+default limits, run out at about 3,700 for core. The managers' limits are
+flags on the prepare tool and the model reads the deployed limit, so raising
+them moves the expectation without touching the code.
+
+The run reports the expectation as its `capacity` fact and logs a warning
+when the ladder is past it. A warning, never a refusal: a run that reaches its
+top rung cleanly regardless is exactly the evidence that moves the fit, and
+the fit should then be moved.
+
 ### Why there is no dedicated node any more
 
 There was one, and Guaranteed resources took the reason away. Guaranteed means

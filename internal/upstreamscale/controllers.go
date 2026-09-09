@@ -17,8 +17,13 @@ limitations under the License.
 package upstreamscale
 
 import (
+	"context"
+	"fmt"
+
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/deployedscale"
 )
@@ -62,6 +67,28 @@ type Controller struct {
 // container's, not whichever container happens to be first.
 func (c Controller) PodFacts(pod *corev1.Pod) deployedscale.PodFacts {
 	return deployedscale.PodFactsFrom(pod, c.Container)
+}
+
+// DeployedMemoryLimit reads the manager container's memory limit from the
+// deployment as it stands, which is the limit a run is actually judged
+// against: the table below is what the prepare tool starts from, and a flag
+// can have raised it.
+func (c Controller) DeployedMemoryLimit(ctx context.Context, cl client.Client) (uint64, error) {
+	var d appsv1.Deployment
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Deployment}, &d); err != nil {
+		return 0, fmt.Errorf("reading the %s deployment: %w", c.Name, err)
+	}
+	for i := range d.Spec.Template.Spec.Containers {
+		container := &d.Spec.Template.Spec.Containers[i]
+		if container.Name != c.Container {
+			continue
+		}
+		if limit := container.Resources.Limits.Memory(); limit != nil && limit.Value() > 0 {
+			//nolint:gosec // A memory limit is not negative.
+			return uint64(limit.Value()), nil
+		}
+	}
+	return 0, nil
 }
 
 // Quantities parses the resources, so a bad flag fails before the cluster is

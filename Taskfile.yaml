@@ -465,6 +465,10 @@ tasks:
       # the driver waiting for itself rather than the cluster working.
       CREATE_CONCURRENCY: '{{.CREATE_CONCURRENCY | default "16"}}'
       CLIENT_QPS: '{{.CLIENT_QPS | default "200"}}'
+      # Before anything is created, the run says what the measured runs expect
+      # control plane nodes of this size and managers at these limits to hold,
+      # and warns when the ladder asks for more. A warning, never a refusal.
+      CAPACITY_CHECK: '{{.CAPACITY_CHECK | default "true"}}'
     cmds:
       - >-
         go test -tags integration -count 1 -v -timeout 24h ./test/integration/capiscale/...
@@ -485,6 +489,7 @@ tasks:
         -capi-apiserver-heap-samples={{.APISERVER_HEAP_SAMPLES}}
         -capi-create-concurrency={{.CREATE_CONCURRENCY}}
         -capi-client-qps={{.CLIENT_QPS}}
+        -capi-capacity-check={{.CAPACITY_CHECK}}
 
   test:kcp:scale:
     desc: Climb this project's Cluster API on a kcp shard, with the same ladder the stock run climbs
