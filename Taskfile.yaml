@@ -21,6 +21,10 @@ vars:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
   KCP_VERSION: v0.32.3
+  # envtest for the workloadsim end-to-end test: the Kubernetes version of the
+  # management cluster it stands up, and the setup-envtest that fetches it.
+  ENVTEST_K8S_VERSION: 1.35.x
+  SETUP_ENVTEST_VERSION: latest
   # The release-please CLI, pinned to the version CI resolves:
   # googleapis/release-please-action v5.0 — the pin in
   # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
@@ -235,6 +239,24 @@ tasks:
       - PATH="{{.BIN}}:$PATH" go test -tags=integration -timeout=60m -count=1 ./test/integration/scale/...
         -args -ceiling-target={{.CEILING_TARGET}} -throughput-workers={{.WORKERS}} {{.SCALE_FLAGS}}
 
+  test:workloadsim:e2e:
+    desc: Prove workloadsim against stock Cluster API — real core, bootstrap and KubeadmControlPlane managers, a fake provider where CAPX goes
+    deps: [tools:envtest]
+    # Not part of `verify`: it builds three stock managers from the module cache
+    # on first run and takes minutes, and what it proves is the simulator, not
+    # this repository's wiring. Read it as the standing answer to "does a
+    # KubeadmControlPlane reach its replicas against workloadsim".
+    #
+    # Manager logs land in ARTIFACT_DIR when set, for the same reason the
+    # container-runtime suite's do.
+    cmds:
+      - >-
+        cd workloadsim &&
+        KUBEBUILDER_ASSETS="$(ls -d {{.BIN}}/envtest/k8s/{{.ENVTEST_K8S_VERSION}}*-* | head -1)"
+        WORKLOADSIM_E2E_BINDIR="{{.BIN}}/workloadsim-e2e"
+        ARTIFACT_DIR="{{.BIN}}/artifacts"
+        go test -tags e2e -count=1 -timeout 40m -v -run TestKubeadmControlPlane .
+
   scale:census:
     desc: Count the controllers and watches a deployment registers, by parsing its setup functions
     # The two counts the whole per-workspace cost model turns on. Derived by an
@@ -270,6 +292,17 @@ tasks:
   tools:
     desc: Install pinned tooling into bin/
     deps: [tools:kcp]
+
+  tools:envtest:
+    desc: Download envtest binaries (kube-apiserver, etcd) into bin/envtest for the workloadsim end-to-end test
+    # setup-envtest is its own module, versioned apart from controller-runtime,
+    # so it is pinned by itself. Only the workloadsim end-to-end test needs
+    # this: everything else in this repository tests against a real kcp.
+    status:
+      - test -n "$(ls -d {{.BIN}}/envtest/k8s/{{.ENVTEST_K8S_VERSION}}*-* 2>/dev/null)"
+    cmds:
+      - mkdir -p {{.BIN}}/envtest
+      - go run sigs.k8s.io/controller-runtime/tools/setup-envtest@{{.SETUP_ENVTEST_VERSION}} use {{.ENVTEST_K8S_VERSION}} -p path --bin-dir {{.BIN}}/envtest
 
   tools:kcp:
     desc: Download the pinned kcp server binary into bin/
