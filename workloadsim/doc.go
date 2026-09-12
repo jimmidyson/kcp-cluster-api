@@ -37,8 +37,10 @@ limitations under the License.
 // makes this package generate them when they are absent, and is a no-op when a
 // control plane provider has generated them already.
 //
-// What it deliberately does not fake: etcd members, the kube-apiserver Pods,
-// kubeadm's ConfigMap, kube-proxy and CoreDNS. Those are what a
-// KubeadmControlPlane inspects to report initialized, and are the next
-// increment if a control plane provider is wanted in the loop.
+// A control plane Machine.s Node additionally carries what a
+// KubeadmControlPlane inspects before it counts a replica healthy and adds
+// the next: an etcd member, the static Pods, kubeadm.s ConfigMap and RBAC,
+// kube-proxy and CoreDNS. See controlplane.go. Nothing decides how many
+// control plane nodes there are: one Node per Machine, so the count is the
+// control plane provider.s, or the harness.s when there is none.
 package workloadsim

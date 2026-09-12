@@ -34,6 +34,15 @@ nothing about the provider:
   cluster's API server with that providerID, the `Machine`'s addresses and
   version, a `Ready` condition, and the control plane label and taint when the
   `Machine` is one.
+- **A control plane `Machine`** additionally gets everything a
+  `KubeadmControlPlane` inspects before it counts a replica healthy and adds
+  the next: an etcd Pod and a member behind it that answers member lists and
+  health through a port-forward, the `kube-apiserver`, `kube-scheduler` and
+  `kube-controller-manager` Pods, kubeadm's `ConfigMap` and RBAC, `kube-proxy`
+  and CoreDNS. The shapes are the docker/dev provider's in-memory backend's,
+  where they were worked out against `KubeadmControlPlane`. The first replica
+  mints the etcd cluster and leads it, every later one joins, and a replica
+  that goes leaves.
 
 The contract with whatever creates the clusters is a single thing: **the
 `Cluster`'s control plane endpoint must name this process's host and a port in
@@ -51,15 +60,13 @@ way to reach the workload cluster to find its `Node`. `--generate-cluster-secret
 helpers, and never replaces what exists — with a control plane provider present
 it does nothing.
 
-## What it deliberately does not fake
+## How many control plane nodes
 
-etcd members, the `kube-apiserver` Pods, kubeadm's `ConfigMap`, `kube-proxy`
-and CoreDNS. Those are what a `KubeadmControlPlane` inspects to report
-initialized and to join further members, and they are the next increment if a
-control plane provider is wanted in the loop. Until then the shape is: Machines
-reach `Running`, a `Cluster` reports its control plane initialized once a
-control plane `Machine` has a `NodeRef`, and no `KubeadmControlPlane` is
-involved.
+`workloadsim` never decides that. It writes one `Node` per `Machine`, so the
+count is whatever produced the `Machines`: a `KubeadmControlPlane` at three
+replicas yields three control plane `Machines`, three VMs from the provider,
+three `Nodes`, and three etcd members. With no control plane provider, the
+harness decides by labelling `Machines` as control plane.
 
 ## Running it
 
@@ -76,15 +83,50 @@ bin/workloadsim --kubeconfig "$KUBECONFIG" --host 127.0.0.1 --port-min 20000 --p
 | `--generate-cluster-secrets` | `true` | Generate absent CA and kubeconfig secrets, standing in for a control plane provider |
 | `--max-concurrent-reconciles` | `10` | Workers per controller |
 
-Against CAPX and `ntnx-sim`, the fork's `simrun` driver starts it as a fourth
-process next to the simulator, the core manager and the CAPX manager, sets
-each `NutanixCluster`'s endpoint into the port range, and waits for `Running`
-instead of `Provisioned`. Nothing on either side imports the other.
+## Plugging it into the CAPX scale harness
+
+Against CAPX and `ntnx-sim`, the fork's `simrun` driver starts `workloadsim`
+as a fourth process next to the simulator, the core manager and the CAPX
+manager, puts `127.0.0.1:20000` on the `NutanixCluster`, labels the first
+`--control-plane-machines` of its `Machines` as control plane, and waits for
+`Running` instead of `Provisioned`. Nothing on either side imports the other:
+`make test-sim` installs `workloadsim` with `go install`, and
+`WORKLOADSIM_REF` picks the branch or tag.
+
+That change to the fork is
+[`workloadsim/simrun-workloadsim.patch`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/workloadsim/simrun-workloadsim.patch)
+in this repository, ready to `git am` onto the simulator branch. Swapping
+CAPD for CAPX in a scale run is then a matter of which harness is started;
+`workloadsim` is the same either way.
 
 ## What is proven
 
-The package's unit tests stand up the real in-memory mux and read the result
-the way the core `Machine` controller would: through the kubeconfig secret
-written for the `Cluster`, listing nodes on the API server it points at. That
-is proof at the seam. Machines reaching `Running` end to end against CAPX is
-what `simrun` measures, on the fork branch, and is not asserted here.
+Three tiers, each stated for what it is.
+
+**At the seam**, by the unit tests: the real in-memory mux is stood up and
+read the way the core `Machine` controller would, through the kubeconfig
+secret written for the `Cluster`, listing nodes on the API server it points
+at; and etcd's member list is read the way `KubeadmControlPlane` does, through
+a port-forward with a certificate signed by the cluster's etcd CA, from more
+than one member.
+
+**Against stock Cluster API**, by `task test:workloadsim:e2e`: the real core,
+kubeadm bootstrap and `KubeadmControlPlane` managers, as the binaries a user
+deploys, run against envtest with `workloadsim` and a fake infrastructure
+provider that does exactly what CAPX does against `ntnx-sim`. A
+`KubeadmControlPlane` at three replicas reports initialized with three ready
+replicas, two worker `Machines` reach `Running`, and the `Cluster` deletes
+cleanly. One run on a development container took about a minute to come up
+and ten seconds to go; that is a timing from one run, not a measurement of
+anything.
+
+**Against CAPX itself**, by the patched `simrun` on the fork branch: the
+unmodified CAPX manager against `ntnx-sim` takes `Machines` to `Running`
+through `workloadsim`. One run with five `Machines`, three of them control
+plane, had every VM created and powered on by `ntnx-sim`, every `Machine`
+`Running` with a `NodeRef` eight seconds after creation, and the `Cluster`
+and every VM gone six seconds after deletion. Timings from one run on a
+development container, with the simulator's task durations at zero.
+
+The test builds the three stock managers from the module cache on first run
+and needs envtest binaries, which `task tools:envtest` fetches.

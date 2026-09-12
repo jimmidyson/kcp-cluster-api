@@ -1,0 +1,284 @@
+From d1d8d296008ab9cf28f9b2d35c019d5e05640a4f Mon Sep 17 00:00:00 2001
+From: Jimmi Dyson <464659+jimmidyson@users.noreply.github.com>
+Date: Sat, 12 Sep 2026 09:18:51 +0000
+Subject: [PATCH] feat(test): drive Machines to Running against workloadsim in
+ simrun
+
+simrun starts workloadsim as a fourth process next to ntnx-sim, the core
+manager and the CAPX manager. workloadsim fakes the workload cluster: an
+API server at each Cluster's declared endpoint and a Node per Machine
+carrying the providerID CAPX reported, and it writes the cluster's CA and
+kubeconfig since no control plane provider runs here. The endpoint moves
+from a placeholder to 127.0.0.1:20000, inside workloadsim's port range,
+and the run waits for Running rather than Provisioned.
+
+--control-plane-machines labels the first N Machines as control plane, so
+their Nodes are labelled and tainted and the Cluster reports its control
+plane initialized. make test-sim installs workloadsim from
+kcp-cluster-api; WORKLOADSIM_REF picks the branch or tag.
+---
+ Makefile                          | 10 +++-
+ test/simulator/README.md          | 20 ++++---
+ test/simulator/cmd/simrun/main.go | 90 ++++++++++++++++++++-----------
+ 3 files changed, 82 insertions(+), 38 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 0862761..37f997b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -248,8 +248,16 @@ ntnx-sim: ## Build the ntnx-sim Prism Central simulator binary (see test/simulat
+ 
+ SIM_MACHINES ?= 1
+ SIM_ARGS ?=
++# workloadsim fakes the workload cluster (an API server per Cluster, a Node per
++# Machine) so Machines reach Running. It lives in kcp-cluster-api as its own
++# module pinned to stock Cluster API, so `go install` reaches it directly.
++WORKLOADSIM_REF ?= main
++.PHONY: workloadsim
++workloadsim: ## Install the workloadsim binary into bin/ (WORKLOADSIM_REF selects the branch, tag or commit).
++	GOBIN=$(PWD)/bin GOFLAGS= go install github.com/jimmidyson/kcp-cluster-api/workloadsim/cmd/workloadsim@$(WORKLOADSIM_REF)
++
+ .PHONY: test-sim
+-test-sim: ntnx-sim ## Run the CAPX manager and CAPI core against ntnx-sim under envtest; no Nutanix hardware needed.
++test-sim: ntnx-sim workloadsim ## Run the CAPX manager and CAPI core against ntnx-sim and workloadsim under envtest; no Nutanix hardware needed.
+ 	go build -o bin/manager .
+ 	go build -o bin/capi-manager sigs.k8s.io/cluster-api
+ 	go build -o bin/simrun ./test/simulator/cmd/simrun
+diff --git a/test/simulator/README.md b/test/simulator/README.md
+index b303ab1..ad1607a 100644
+--- a/test/simulator/README.md
++++ b/test/simulator/README.md
+@@ -86,15 +86,18 @@ image names in the cluster template must match the seed
+ ## Running CAPX against it with no hardware
+ 
+ `make test-sim` builds the CAPX manager, the CAPI core manager (from the
+-version in `go.mod`), `ntnx-sim` and a driver (`cmd/simrun`), then:
++version in `go.mod`), `ntnx-sim`, a driver (`cmd/simrun`) and installs
++[`workloadsim`](https://github.com/jimmidyson/kcp-cluster-api/tree/main/workloadsim)
++(`WORKLOADSIM_REF` picks its branch or tag), then:
+ 
+ 1. starts envtest (kube-apiserver and etcd) with the CAPI and CAPX CRDs,
+-2. starts all three processes against it,
++2. starts all four processes against it,
+ 3. creates a Cluster and NutanixCluster pointing at the simulator, then
+    `SIM_MACHINES` Machines and NutanixMachines with hand-made bootstrap
+    secrets,
+-4. waits for every Machine to reach `Provisioned` with a providerID and an
+-   address, prints the simulator's per-route request statistics,
++4. waits for every Machine to reach `Running`: a VM from ntnx-sim, a Node from
++   workloadsim, and the two matched on providerID by the core Machine
++   controller; then prints the simulator's per-route request statistics,
+ 5. deletes the Cluster and waits for CAPI and CAPX to remove every VM.
+ 
+ ```sh
+@@ -107,9 +110,12 @@ Logs, certificates and the kubeconfig land in the work directory printed at
+ start (`--workdir` to choose it). `--keep` leaves everything running for
+ poking at with `kubectl --kubeconfig <workdir>/kubeconfig`.
+ 
+-Machines stop at `Provisioned` rather than `Running` because nothing fakes the
+-workload cluster's nodes; that is the harness's job (see below). The driver
+-also stamps the `cluster.x-k8s.io/v1beta1` contract label on the CAPX CRDs,
++`--control-plane-machines N` labels the first N Machines as control plane, so
++their Nodes carry the control plane label and taint and the Cluster reports
++its control plane initialized. The workload cluster is faked by `workloadsim`,
++which also writes the cluster's CA and kubeconfig secrets since no control
++plane provider runs here; its endpoint is `127.0.0.1:20000`, which the driver
++puts on the NutanixCluster. The driver also stamps the `cluster.x-k8s.io/v1beta1` contract label on the CAPX CRDs,
+ which kustomize normally adds and CAPI core requires.
+ 
+ ## Using it as a library
+diff --git a/test/simulator/cmd/simrun/main.go b/test/simulator/cmd/simrun/main.go
+index 7216197..8915e73 100644
+--- a/test/simulator/cmd/simrun/main.go
++++ b/test/simulator/cmd/simrun/main.go
+@@ -15,9 +15,11 @@ limitations under the License.
+ */
+ 
+ // simrun runs CAPX without hardware: it stands up envtest (kube-apiserver and
+-// etcd), the real CAPI core manager, the CAPX manager and ntnx-sim, then
+-// drives a Cluster with N Machines to the Provisioned phase and deletes it
+-// again, printing timings and the simulator's request statistics.
++// etcd), the real CAPI core manager, the CAPX manager, ntnx-sim and
++// workloadsim (which fakes the workload cluster: an API server per Cluster and
++// a Node per Machine), then drives a Cluster with N Machines to the Running
++// phase and deletes it again, printing timings and the simulator's request
++// statistics.
+ //
+ // Run it through `make test-sim`, which builds the three binaries and points
+ // KUBEBUILDER_ASSETS at the envtest binaries.
+@@ -66,20 +68,28 @@ const (
+ 	simPass  = "sim-secret"
+ 	ns       = "sim-test"
+ 	clusterN = "c1"
++
++	// Where workloadsim answers as the workload cluster's API server. The
++	// endpoint is user input on a NutanixCluster, so the harness picks it from
++	// workloadsim's port range and workloadsim opens the listener there.
++	endpointHost      = "127.0.0.1"
++	endpointPort      = 20000
++	workloadsimHealth = "127.0.0.1:19081"
+ )
+ 
+ var (
+-	repoRoot   = flag.String("repo", ".", "CAPX checkout (needs config/crd/bases)")
+-	binDir     = flag.String("bin", "bin", "directory holding the manager, capi-manager and ntnx-sim binaries")
+-	assets     = flag.String("assets", os.Getenv("KUBEBUILDER_ASSETS"), "envtest binaries (default $KUBEBUILDER_ASSETS; see `setup-envtest use -p path`)")
+-	workdir    = flag.String("workdir", "", "working directory for logs and certs")
+-	machines   = flag.Int("machines", 1, "number of machines to create")
+-	vmCreate   = flag.Duration("vm-create", 0, "ntnx-sim VM create task duration")
+-	vmPowerOn  = flag.Duration("vm-power-on", 0, "ntnx-sim VM power-on task duration")
+-	vmDelete   = flag.Duration("vm-delete", 0, "ntnx-sim VM delete task duration")
+-	timeout    = flag.Duration("timeout", 10*time.Minute, "overall timeout")
+-	concurrent = flag.Int("max-concurrent-reconciles", 10, "CAPX --max-concurrent-reconciles")
+-	keep       = flag.Bool("keep", false, "do not delete the cluster at the end")
++	repoRoot      = flag.String("repo", ".", "CAPX checkout (needs config/crd/bases)")
++	binDir        = flag.String("bin", "bin", "directory holding the manager, capi-manager, ntnx-sim and workloadsim binaries")
++	assets        = flag.String("assets", os.Getenv("KUBEBUILDER_ASSETS"), "envtest binaries (default $KUBEBUILDER_ASSETS; see `setup-envtest use -p path`)")
++	workdir       = flag.String("workdir", "", "working directory for logs and certs")
++	machines      = flag.Int("machines", 1, "number of machines to create")
++	controlPlanes = flag.Int("control-plane-machines", 1, "how many of the machines are control plane machines (labelled cluster.x-k8s.io/control-plane)")
++	vmCreate      = flag.Duration("vm-create", 0, "ntnx-sim VM create task duration")
++	vmPowerOn     = flag.Duration("vm-power-on", 0, "ntnx-sim VM power-on task duration")
++	vmDelete      = flag.Duration("vm-delete", 0, "ntnx-sim VM delete task duration")
++	timeout       = flag.Duration("timeout", 10*time.Minute, "overall timeout")
++	concurrent    = flag.Int("max-concurrent-reconciles", 10, "CAPX --max-concurrent-reconciles")
++	keep          = flag.Bool("keep", false, "do not delete the cluster at the end")
+ )
+ 
+ type procs struct {
+@@ -173,8 +183,8 @@ func run() error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	fmt.Printf("\nRESULT: %d machine(s) provisioned in %s and deleted in %s through the unmodified CAPX manager against ntnx-sim\n",
+-		*machines, provisionedIn.Round(time.Millisecond), deletedIn.Round(time.Millisecond))
++	fmt.Printf("\nRESULT: %d machine(s) (%d control plane) Running in %s and deleted in %s through the unmodified CAPX manager against ntnx-sim and workloadsim\n",
++		*machines, *controlPlanes, provisionedIn.Round(time.Millisecond), deletedIn.Round(time.Millisecond))
+ 	return nil
+ }
+ 
+@@ -258,12 +268,24 @@ func startProcesses(ctx context.Context, p *procs, cfg *rest.Config) error {
+ 	if err := waitHTTP(ctx, "http://127.0.0.1:19441/healthz"); err != nil {
+ 		return fmt.Errorf("capx-manager: %w (see %s)", err, filepath.Join(*workdir, "capx-manager.log"))
+ 	}
++	// workloadsim stands in for the workload cluster and, with no control
++	// plane provider here, for the one that would write the cluster's CA and
++	// kubeconfig. It is built from github.com/jimmidyson/kcp-cluster-api/workloadsim.
++	if err := p.start("workloadsim", *workdir, kenv, filepath.Join(bin, "workloadsim"),
++		"--host="+endpointHost, "--generate-cluster-secrets=true",
++		"--health-probe-bind-address="+workloadsimHealth); err != nil {
++		return err
++	}
++	if err := waitHTTP(ctx, "http://"+workloadsimHealth+"/healthz"); err != nil {
++		return fmt.Errorf("workloadsim: %w (see %s)", err, filepath.Join(*workdir, "workloadsim.log"))
++	}
+ 	fmt.Println("all processes healthy")
+ 	return nil
+ }
+ 
+ // provision creates the cluster and machines and waits for every Machine to
+-// reach Provisioned. It returns how long the machines took.
++// reach Running: a VM from ntnx-sim, a Node from workloadsim, and the two
++// matched on providerID by the core Machine controller. It returns how long the machines took.
+ func provision(ctx context.Context, c client.Client) (time.Duration, error) {
+ 	start := time.Now()
+ 	if err := createCluster(ctx, c); err != nil {
+@@ -292,13 +314,13 @@ func provision(ctx context.Context, c client.Client) (time.Duration, error) {
+ 		}
+ 	}
+ 	fmt.Printf("created %d machines\n", *machines)
+-	if err := waitFor(ctx, fmt.Sprintf("%d machines Provisioned", *machines), func() (bool, string, error) {
+-		return machinesProvisioned(ctx, c)
++	if err := waitFor(ctx, fmt.Sprintf("%d machines Running", *machines), func() (bool, string, error) {
++		return machinesRunning(ctx, c)
+ 	}); err != nil {
+ 		return 0, err
+ 	}
+ 	provisionedIn := time.Since(mstart)
+-	fmt.Printf("all %d machines Provisioned after %s\n", *machines, provisionedIn.Round(time.Millisecond))
++	fmt.Printf("all %d machines Running after %s\n", *machines, provisionedIn.Round(time.Millisecond))
+ 	printMachines(ctx, c)
+ 	printSimStats("after provisioning")
+ 	return provisionedIn, nil
+@@ -340,7 +362,7 @@ func createCluster(ctx context.Context, c client.Client) error {
+ 		&clusterv1.Cluster{
+ 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterN},
+ 			Spec: clusterv1.ClusterSpec{
+-				ControlPlaneEndpoint: clusterv1.APIEndpoint{Host: "10.10.255.1", Port: 6443},
++				ControlPlaneEndpoint: clusterv1.APIEndpoint{Host: endpointHost, Port: endpointPort},
+ 				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+ 					APIGroup: infrav1.GroupVersion.Group, Kind: "NutanixCluster", Name: clusterN,
+ 				},
+@@ -349,7 +371,7 @@ func createCluster(ctx context.Context, c client.Client) error {
+ 		&infrav1.NutanixCluster{
+ 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterN},
+ 			Spec: infrav1.NutanixClusterSpec{
+-				ControlPlaneEndpoint: capiv1beta1.APIEndpoint{Host: "10.10.255.1", Port: 6443},
++				ControlPlaneEndpoint: capiv1beta1.APIEndpoint{Host: endpointHost, Port: endpointPort},
+ 				PrismCentral: &credentials.NutanixPrismEndpoint{
+ 					Address:  "127.0.0.1",
+ 					Port:     9440,
+@@ -371,6 +393,11 @@ func createCluster(ctx context.Context, c client.Client) error {
+ 
+ func createMachine(ctx context.Context, c client.Client, i int) error {
+ 	name := fmt.Sprintf("%s-md-0-%03d", clusterN, i)
++	labels := map[string]string{clusterv1.ClusterNameLabel: clusterN}
++	if i < *controlPlanes {
++		name = fmt.Sprintf("%s-cp-%03d", clusterN, i)
++		labels[clusterv1.MachineControlPlaneLabel] = ""
++	}
+ 	objs := []client.Object{
+ 		&corev1.Secret{
+ 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name + "-bootstrap"},
+@@ -392,7 +419,7 @@ func createMachine(ctx context.Context, c client.Client, i int) error {
+ 		&clusterv1.Machine{
+ 			ObjectMeta: metav1.ObjectMeta{
+ 				Namespace: ns, Name: name,
+-				Labels: map[string]string{clusterv1.ClusterNameLabel: clusterN},
++				Labels: labels,
+ 			},
+ 			Spec: clusterv1.MachineSpec{
+ 				ClusterName: clusterN,
+@@ -412,7 +439,7 @@ func createMachine(ctx context.Context, c client.Client, i int) error {
+ 	return nil
+ }
+ 
+-func machinesProvisioned(ctx context.Context, c client.Client) (bool, string, error) {
++func machinesRunning(ctx context.Context, c client.Client) (bool, string, error) {
+ 	ml := &clusterv1.MachineList{}
+ 	if err := c.List(ctx, ml, client.InNamespace(ns)); err != nil {
+ 		return false, "", err
+@@ -422,11 +449,14 @@ func machinesProvisioned(ctx context.Context, c client.Client) (bool, string, er
+ 		return false, "", err
+ 	}
+ 	phases := map[string]int{}
+-	provisioned := 0
++	running, withNode := 0, 0
+ 	for _, m := range ml.Items {
+ 		phases[string(m.Status.Phase)]++
+-		if m.Status.Phase == string(clusterv1.MachinePhaseProvisioned) && m.Spec.ProviderID != "" {
+-			provisioned++
++		if m.Status.NodeRef.Name != "" {
++			withNode++
++		}
++		if m.Status.Phase == string(clusterv1.MachinePhaseRunning) && m.Spec.ProviderID != "" {
++			running++
+ 		}
+ 	}
+ 	ready, withAddr := 0, 0
+@@ -448,9 +478,9 @@ func machinesProvisioned(ctx context.Context, c client.Client) (bool, string, er
+ 		parts = append(parts, fmt.Sprintf("%s=%d", k, phases[k]))
+ 	}
+ 	stats := simStats()
+-	return provisioned == *machines,
+-		fmt.Sprintf("machines[%s] nutanixMachines(ready=%d addresses=%d) sim(vms=%d on=%d tasksPending=%d)",
+-			strings.Join(parts, " "), ready, withAddr, stats.VMs, stats.VMsPoweredOn, stats.TasksPending), nil
++	return running == *machines,
++		fmt.Sprintf("machines[%s] nodeRefs=%d nutanixMachines(ready=%d addresses=%d) sim(vms=%d on=%d tasksPending=%d)",
++			strings.Join(parts, " "), withNode, ready, withAddr, stats.VMs, stats.VMsPoweredOn, stats.TasksPending), nil
+ }
+ 
+ func printMachines(ctx context.Context, c client.Client) {
+-- 
+2.43.0
+
