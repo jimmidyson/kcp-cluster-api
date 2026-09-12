@@ -37,6 +37,12 @@ import (
 // fake API server, which the ClusterReconciler brings up independently.
 const clusterRequeue = 2 * time.Second
 
+// nodeRecord is what deletion needs to know about a Machine that is gone.
+type nodeRecord struct {
+	cluster      client.ObjectKey
+	controlPlane bool
+}
+
 // MachineReconciler gives each Machine a Node in its Cluster's fake API
 // server, carrying the providerID the infrastructure provider reported. That
 // is what the core Machine controller matches on to set the Machine's NodeRef
@@ -45,10 +51,11 @@ type MachineReconciler struct {
 	client.Client
 	Backend *Backend
 
-	// nodes remembers which resource group each Machine's Node was written
-	// to, so the Node can be removed once the Machine is gone and can no
-	// longer say which Cluster it belonged to. In-process, like the Nodes.
-	nodes sync.Map
+	// nodes remembers, per Machine this process wrote a Node for, which
+	// Cluster it belonged to and whether it was a control plane Machine, so
+	// that everything can be taken down once the Machine is gone and can no
+	// longer say. In-process, like the Nodes.
+	nodes sync.Map // types.NamespacedName -> nodeRecord
 }
 
 // Reconcile writes a Machine's Node once the Machine has a providerID, and
@@ -73,13 +80,13 @@ func (r *MachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	clusterKey := types.NamespacedName{Namespace: machine.Namespace, Name: machine.Spec.ClusterName}.String()
-	if _, err := r.Backend.Mux.ResourceGroupByWorkloadCluster(clusterKey); err != nil {
+	clusterKey := client.ObjectKey{Namespace: machine.Namespace, Name: machine.Spec.ClusterName}
+	if _, err := r.Backend.Mux.ResourceGroupByWorkloadCluster(clusterKey.String()); err != nil {
 		log.V(4).Info("Waiting for the Cluster's API server", "cluster", clusterKey)
 		return ctrl.Result{RequeueAfter: clusterRequeue}, nil
 	}
 
-	inmemoryClient := r.Backend.Manager.GetResourceGroup(clusterKey).GetClient()
+	inmemoryClient := r.Backend.Manager.GetResourceGroup(clusterKey.String()).GetClient()
 	node := newNode(machine)
 	if err := inmemoryClient.Get(ctx, client.ObjectKeyFromObject(node), node); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -90,19 +97,33 @@ func (r *MachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		log.Info("Created the Machine's Node", "cluster", clusterKey, "providerID", machine.Spec.ProviderID)
 	}
-	r.nodes.Store(req.NamespacedName, clusterKey)
+	controlPlane := util.IsControlPlaneMachine(machine)
+	r.nodes.Store(req.NamespacedName, nodeRecord{cluster: clusterKey, controlPlane: controlPlane})
+
+	if controlPlane {
+		if err := r.reconcileControlPlane(ctx, clusterKey, machine); err != nil {
+			return ctrl.Result{}, fmt.Errorf("bringing up the control plane on %s: %w", machine.Name, err)
+		}
+	}
 	return ctrl.Result{}, nil
 }
 
 // deleteNode removes the Node of a Machine that no longer exists, if this
-// process wrote one. The core Machine controller usually deletes it first,
+// process wrote one, and the control plane pieces on it if it was a control
+// plane Machine. The core Machine controller usually deletes it first,
 // through the fake API server, which is why NotFound is not an error here.
 func (r *MachineReconciler) deleteNode(ctx context.Context, machine types.NamespacedName) error {
-	clusterKey, ok := r.nodes.LoadAndDelete(machine)
+	v, ok := r.nodes.LoadAndDelete(machine)
 	if !ok {
 		return nil
 	}
-	inmemoryClient := r.Backend.Manager.GetResourceGroup(clusterKey.(string)).GetClient() //nolint:errcheck,forcetypeassert // Store only ever writes a string.
+	record := v.(nodeRecord) //nolint:errcheck,forcetypeassert // Store only ever writes a nodeRecord.
+	if record.controlPlane {
+		if err := r.deleteControlPlane(ctx, record.cluster, machine.Name); err != nil {
+			return fmt.Errorf("taking down the control plane on %s: %w", machine.Name, err)
+		}
+	}
+	inmemoryClient := r.Backend.Manager.GetResourceGroup(record.cluster.String()).GetClient()
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: machine.Name}}
 	if err := inmemoryClient.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("deleting Node %s: %w", node.Name, err)

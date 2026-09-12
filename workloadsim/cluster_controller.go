@@ -18,18 +18,17 @@ package workloadsim
 
 import (
 	"context"
-	"crypto/rsa"
-	"crypto/x509"
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/cluster-api/util/certs"
+	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
 	"sigs.k8s.io/cluster-api/util/secret"
 )
@@ -103,13 +102,16 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("registering the resource group for %s: %w", key, err)
 	}
 	r.Backend.Manager.AddResourceGroup(key)
+	if err := ensureNamespaces(ctx, r.Backend.Manager.GetResourceGroup(key).GetClient()); err != nil {
+		return ctrl.Result{}, fmt.Errorf("creating the default namespaces for %s: %w", key, err)
+	}
 
 	apiServer := apiServerName(cluster)
 	if r.Backend.Mux.HasAPIServer(key, apiServer) {
 		return ctrl.Result{}, nil
 	}
 
-	caCert, caKey, err := r.clusterCA(ctx, cluster)
+	caCert, caKey, err := loadCA(ctx, r.Client, client.ObjectKeyFromObject(cluster), secret.ClusterCA)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.V(4).Info("Waiting for the cluster CA secret", "secret", secret.Name(cluster.Name, secret.ClusterCA))
@@ -160,34 +162,24 @@ func (r *ClusterReconciler) ensureClusterSecrets(ctx context.Context, cluster *c
 	return nil
 }
 
-// clusterCA reads the cluster's CA, which signs the fake API server's serving
-// certificate and the admin credentials the kubeconfig carries.
-func (r *ClusterReconciler) clusterCA(ctx context.Context, cluster *clusterv1.Cluster) (*x509.Certificate, *rsa.PrivateKey, error) {
-	s, err := secret.Get(ctx, r.Client, client.ObjectKeyFromObject(cluster), secret.ClusterCA)
-	if err != nil {
-		return nil, nil, err
-	}
-	cert, err := certs.DecodeCertPEM(s.Data[secret.TLSCrtDataName])
-	if err != nil {
-		return nil, nil, fmt.Errorf("decoding the cluster CA certificate: %w", err)
-	}
-	signer, err := certs.DecodePrivateKeyPEM(s.Data[secret.TLSKeyDataName])
-	if err != nil {
-		return nil, nil, fmt.Errorf("decoding the cluster CA key: %w", err)
-	}
-	key, ok := signer.(*rsa.PrivateKey)
-	if !ok {
-		// The mux signs with RSA only. Cluster API's own generators produce
-		// RSA unless the bootstrap config asks for ECDSA, which nothing in a
-		// simulation should.
-		return nil, nil, fmt.Errorf("the cluster CA key is %T, and the fake API server can only sign with RSA", signer)
-	}
-	return cert, key, nil
-}
-
 // apiServerName is the name of the one fake kube-apiserver instance a Cluster
 // gets. The mux counts instances to decide when to stop listening, so it has
 // to be stable across reconciles.
 func apiServerName(cluster *clusterv1.Cluster) string {
 	return "kube-apiserver-" + cluster.Name
+}
+
+// ensureNamespaces creates the namespaces every cluster has, so that what
+// lands in kube-system has somewhere to land.
+func ensureNamespaces(ctx context.Context, c inmemoryruntime.Client) error {
+	for _, name := range []string{metav1.NamespaceDefault, metav1.NamespacePublic, metav1.NamespaceSystem} {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{"kubernetes.io/metadata.name": name},
+		}}
+		if err := create(ctx, c, ns); err != nil {
+			return err
+		}
+	}
+	return nil
 }
