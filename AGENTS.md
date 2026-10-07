@@ -284,7 +284,21 @@ Breaking changes take a `!` before the colon (`feat!: ...`) or a
 minor**, not the major: `bump-minor-pre-major` is set, so `0.3.0` and a
 breaking change gives `0.4.0`. Nothing promotes `0.x` to `1.0.0` on its own —
 that takes a deliberate `Release-As: 1.0.0` commit, and only then do breaking
-changes start bumping the major. See [README.md](README.md#releases).
+changes start bumping the major.
+
+`release-please-config.json` cannot say why these are set, so this does:
+
+- `initial-version` is `0.1.0`. With no prior release, release-please ignores
+  the bump strategy and ships `1.0.0` unless this is set.
+- `bump-minor-pre-major` stays. Removing it makes the next breaking change
+  `1.0.0`.
+- `bootstrap-sha` is the last upstream commit before this project's own
+  history. Until `v0.1.0` is tagged, release-please would otherwise walk into
+  upstream commits and release them as this project's. Delete the key once
+  that tag exists.
+
+Open a release from `main` with `task release-please`. CI keeps that pull
+request current afterwards; it cannot create the first one.
 
 The title must **not** contain an issue or PR number — link issues in the body
 instead (`Fixes #123`). Individual commits on a branch follow the same
