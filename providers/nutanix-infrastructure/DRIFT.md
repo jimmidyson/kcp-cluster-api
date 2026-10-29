@@ -10,6 +10,14 @@ diverges without an entry here.
 Fork: [`github.com/jimmidyson/cluster-api-provider-nutanix`](https://github.com/jimmidyson/cluster-api-provider-nutanix),
 branch `kcp/v1.11`, tag `v1.11.0-kcp.2`
 
+> **Dependencies are aligned with upstream CAPX.** This module is excluded
+> from Dependabot (`exclude-paths` in `.github/dependabot.yaml`). Its Go
+> dependencies track the CAPX fork's base and the pins the repository root
+> restates (`sigs.k8s.io/cluster-api`, `sigs.k8s.io/controller-runtime`,
+> `k8s.io/*`, …). They move only when the fork pin moves — not on
+> independent Dependabot bumps — because otherwise the provider desyncs
+> from both its upstream and the main module.
+
 > One tag, not three. CAPX is a single Go module, where Cluster API is three —
 > the "three tags per release" rule in the root record is a fact about
 > Cluster API's `api/` and `test/` submodules rather than about forks.
@@ -20,7 +28,6 @@ branch `kcp/v1.11`, tag `v1.11.0-kcp.2`
 > different CAPX into one repository.
 
 Base: `0b2405dc5eae5fbb5d810ba16d40f64098e05a47`
-
 The base is an upstream `main` commit past `v1.10.3`, which is why the branch
 is `kcp/v1.11`: it names the release line that commit becomes, as `kcp/v1.15`
 does for Cluster API.
