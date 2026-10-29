@@ -1,5 +1,8 @@
 /bin/
 
+# Feature worktrees created by spex-worktrees extension.
+.worktrees/
+
 # Agent tooling. .claude/skills/ is tracked deliberately: it is how a fresh
 # container picks up this project's spec-driven workflow without re-running
 # extension setup, which is the delegation model this project targets. The
