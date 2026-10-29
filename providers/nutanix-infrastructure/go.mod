@@ -10,7 +10,7 @@
 // name everywhere - module, binary and APIExport alike.
 module github.com/jimmidyson/kcp-cluster-api/providers/nutanix-infrastructure
 
-go 1.26.3
+go 1.27.3
 
 require (
 	github.com/jimmidyson/kcp-cluster-api v0.0.0
