@@ -13,8 +13,7 @@ updates:
   commit-message:
       prefix: "build"
   labels:
-    - "area/ci"
-    - "ok-to-test"
+    - "dependencies"
 
 # Go modules
 - package-ecosystem: "gomod"
@@ -62,5 +61,4 @@ updates:
   commit-message:
     prefix: "build"
   labels:
-    - "area/dependency"
-    - "ok-to-test"
+    - "dependencies"
