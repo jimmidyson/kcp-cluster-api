@@ -20,6 +20,15 @@ updates:
 - package-ecosystem: "gomod"
   directories:
   - "/"
+  # The Nutanix provider (providers/nutanix-infrastructure/) is a separate
+  # module whose dependencies are aligned with upstream CAPX
+  # (nutanix-cloud-native/cluster-api-provider-nutanix). It is intentionally
+  # excluded from Dependabot here: bumping its dependencies independently
+  # desyncs it from the fork it is built against and from the pins the main
+  # module restates. Dependencies move only when the CAPX fork pin moves.
+  # See providers/nutanix-infrastructure/DRIFT.md.
+  exclude-paths:
+  - "providers/nutanix-infrastructure/**"
   schedule:
     interval: "weekly"
     day: "monday"
