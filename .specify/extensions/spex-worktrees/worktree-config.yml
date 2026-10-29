@@ -1,0 +1,2 @@
+worktrees:
+  base_path: ".worktrees"

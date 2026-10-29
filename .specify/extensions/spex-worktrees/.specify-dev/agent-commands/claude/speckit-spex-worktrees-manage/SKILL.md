@@ -85,10 +85,10 @@ Determine if the worktree should be inside or outside the project, then build th
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
-# Detect inside-project worktrees (.claude/worktrees is the default)
+# Detect inside-project worktrees (.claude/worktrees and .worktrees are allowed)
 INSIDE_PROJECT=false
 case "$BASE_PATH" in
-  .claude/worktrees*) INSIDE_PROJECT=true ;;
+  .claude/worktrees*|.worktrees*) INSIDE_PROJECT=true ;;
 esac
 ```
 
@@ -132,11 +132,11 @@ WORKTREE_PATH="${RESOLVED_BASE}/${REPO_NAME}@${BRANCH_NAME}"
 
 ```bash
 case "$WORKTREE_PATH" in
-  "$REPO_ROOT"/.claude/worktrees/*)
-    ;; # Allowed: inside .claude/worktrees/
+  "$REPO_ROOT"/.claude/worktrees/*|"$REPO_ROOT"/.worktrees/*)
+    ;; # Allowed: inside .claude/worktrees/ or .worktrees/
   "$REPO_ROOT"/*)
     echo "ERROR: Worktree path is inside the main repository: $WORKTREE_PATH"
-    echo "Set base_path to '.claude/worktrees' or a directory outside the repo"
+    echo "Set base_path to '.claude/worktrees', '.worktrees', or a directory outside the repo"
     # Stop here. Do not proceed to subsequent steps.
     ;;
 esac
@@ -254,9 +254,8 @@ Gitignored config directories (`.claude/` and `.specify/`) won't exist in the ne
 if [ -d ".specify" ]; then
   rsync -a --exclude='.git' ".specify/" "$WORKTREE_PATH/.specify/"
 fi
-
 # Copy .claude/ (skills, settings, commands)
-# Exclude worktrees/ to avoid copying the worktree into itself when base_path is .claude/worktrees
+# Exclude worktrees/ to avoid copying nested worktrees when base_path is .claude/worktrees
 if [ -d ".claude" ]; then
   rsync -a --exclude='worktrees/' ".claude/" "$WORKTREE_PATH/.claude/"
 fi
