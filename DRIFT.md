@@ -71,7 +71,7 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.12`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.13`
 
 > All three modules are at the same version. `api/` was left behind at
 > `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
@@ -163,6 +163,9 @@ cannot build without them. See the feature's research notes (R2).
 | `test/infrastructure/docker/internal/docker/logicalcluster_test.go` | New file. Covers the entry points rather than only the helpers: reverting the load balancer's name or a Machine's knowledge of its workspace fails it, and the unqualified path is asserted to be exactly what upstream produces. | **Pending** |
 | `go.mod` | **Modified.** Adds `sigs.k8s.io/multicluster-runtime`. | None — carried deliberately, ADR-0003 |
 | `go.sum` | **Modified.** As above. | None — carried deliberately, ADR-0003 |
+| `api/go.mod` | **Modified.** Kubernetes 1.37 (k8s.io/* v0.37.1, CR 0.25.2). | None — deliberate (follows CAPX 1.11) |
+| `api/go.sum` | **Modified.** As above. | None — deliberate (follows CAPX 1.37) |
+| `test/infrastructure/inmemory/pkg/server/etcd/handler.go` | **Modified.** etcd 3.7 embedding fix (Unimplemented*). | None — deliberate (k8s 1.37 bump) |
 
 The first two paths belong to a single patch, carried as one commit in the
 fork. The rest are the workspace-aware wiring, and they are listed

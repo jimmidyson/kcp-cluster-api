@@ -8,7 +8,7 @@ API's, and the reasoning both are governed by.
 diverges without an entry here.
 
 Fork: [`github.com/jimmidyson/cluster-api-provider-nutanix`](https://github.com/jimmidyson/cluster-api-provider-nutanix),
-branch `kcp/v1.11`, tag `v1.11.0-kcp.2`
+branch `kcp/v1.11`, tag `v1.11.0-kcp.3`
 
 > **Dependencies are aligned with upstream CAPX.** This module is excluded
 > from Dependabot (`exclude-paths` in `.github/dependabot.yaml`). Its Go
@@ -27,10 +27,8 @@ branch `kcp/v1.11`, tag `v1.11.0-kcp.2`
 > main module. They must move together — a pair that disagreed would build two
 > different CAPX into one repository.
 
-Base: `0b2405dc5eae5fbb5d810ba16d40f64098e05a47`
-The base is an upstream `main` commit past `v1.10.3`, which is why the branch
-is `kcp/v1.11`: it names the release line that commit becomes, as `kcp/v1.15`
-does for Cluster API.
+Base: `b3b16750a6f19e9e6de4fd5eedbcf09d328b462b`
+The base is `v1.11.0-dev.1`, the first tag on the `release-1.11` line.
 
 ## What kind of divergence this is
 
@@ -70,6 +68,8 @@ any of them lands upstream it stops being drift.
 | `pkg/context/context.go` | **Modified.** Removes `GetRemoteClient`, `RemoveRemoteClient` and `RemoteClientCache`. The cache was keyed on `ObjectKey` and would have handed one workspace another's workload-cluster client, but nothing populated it: `GetRemoteClient` had no callers and was the only writer. Removing it also fixed the one compile error the Cluster API bump caused, since it was the only user of the removed `remote.NewClusterClient`. | **Upstreamable** — dead code either way |
 | `go.mod` | **Modified.** Cluster API pinned at this project's fork, and the runtime raised to match: controller-runtime v0.24, `k8s.io` v0.36. | None — deliberate |
 | `go.sum` | **Modified.** As above. | None — deliberate |
+| `.github/workflows/build-dev.yaml` | **Modified.** Upstream workflow change (allow-unsafe-pr-checkout, projects matrix) not yet synced due to GitHub OAuth scope on push. | None — deliberate (sync pending) |
+| `.github/workflows/e2e.yaml` | **Modified.** As above. | None — deliberate (sync pending) |
 
 ## Credentials are per cluster, or absent
 
