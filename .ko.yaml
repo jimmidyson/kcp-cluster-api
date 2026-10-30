@@ -1,0 +1,27 @@
+# ko build config — one entry per published image.
+#
+# Extensibility (T026 / FR-009, research R6): adding a provider is one new
+# `builds` entry here:
+#   - id: kcp-capi-<name>
+#     main: ./providers/<name>/cmd/<name>-manager
+# That is sufficient when ko can resolve the nested module from the root
+# .ko.yaml (the expected case — `main:` is a filesystem path and ko delegates
+# to that directory's module). Fallback from R6: if ko instead fails with
+# "does not contain main module" for the new entry, remove that entry here and
+# add `providers/<name>/.ko.yaml` with its single builds entry, then teach
+# Taskfile image:build to run ko once per PROVIDER_MODULES entry (see R6).
+#
+# Per research R2, no `defaultBaseImage` override: ko's Wolfi default is used.
+builds:
+  - id: kcp-capi-core
+    main: ./cmd/core-manager
+  - id: kcp-capi-kubeadm-bootstrap
+    main: ./cmd/kubeadm-bootstrap-manager
+  - id: kcp-capi-kubeadm-control-plane
+    main: ./cmd/kubeadm-control-plane-manager
+  - id: kcp-capi-workspace
+    main: ./cmd/workspace-manager
+  - id: kcp-capi-dev-infrastructure
+    main: ./cmd/dev-infrastructure-manager
+  - id: kcp-capi-nutanix-infrastructure
+    main: ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager

@@ -11,7 +11,29 @@ vars:
   # API provider whose dependency graph does not belong in this one's. They are
   # listed rather than globbed so that adding one is a deliberate edit here: a
   # module nobody added is a module nothing builds.
+  #
+  # Extensibility contract — PROVIDER_MODULES is the single source (T023 / FR-009).
+  # Adding a provider is exactly 4 edits, no redesign elsewhere:
+  #   1) providers/<name>/ with go.mod (replace kcp-cluster-api => ../..,
+  #      restated CAPI fork pins), cmd/<name>-manager/main.go, and DRIFT.md
+  #   2) one space-separated entry here in PROVIDER_MODULES
+  #   3) one packages key in release-please-config.json (T027) — see comment there
+  #   4) .release-please-manifest.json entry (auto-created by release-please
+  #      on next release PR; do not hand-edit unless backfilling)
+  # All of build, lint, test:unit, drift, image:build, image:verify, and
+  # image:check-modules iterate this var via `for: {var: PROVIDER_MODULES}`.
+  # No other file needs per-provider logic for versioning — scripts/image-tags.sh
+  # needs only one new table row (T025), .ko.yaml one new builds entry (T026;
+  # per-provider .ko.yaml fallback from research R6 if ko cannot resolve the
+  # nested module from the root config). Drift per-provider entries below must
+  # stay in sync with this list; a module here without a drift entry is
+  # unchecked, which the drift task's comment flags (T024).
   PROVIDER_MODULES: providers/nutanix-infrastructure
+  # Image defaults (T029/T030): ko.local locally (no GHCR creds), ghcr.io/jimmidyson in CI.
+  IMAGE_REGISTRY: '{{.IMAGE_REGISTRY | default "ghcr.io/jimmidyson"}}'
+  IMAGE_REPO_PREFIX: '{{.IMAGE_REPO_PREFIX | default "kcp-capi"}}'
+  KO_DOCKER_REPO: '{{.KO_DOCKER_REPO | default "ko.local"}}'
+  KO_PLATFORMS: '{{.KO_PLATFORMS | default "linux/amd64"}}'
   # Pinned. Tooling is installed at fixed versions with the Go toolchain only:
   # no package manager, no environment manager, nothing on the critical path
   # that an ephemeral container has to materialise first (FR-009).
@@ -283,14 +305,46 @@ tasks:
       # the ref comes from that module's own graph, so a checker run from the
       # wrong directory would measure the wrong version. A fork whose record is
       # not listed here is one nothing checks.
+      #
+      # Extensibility (T024): when adding a provider, add one more `- cd
+      # providers/<name> && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
+      # --record DRIFT.md --module <upstreamImport> --fork <forkURL>
+      # --upstream <upstreamURL>` line here. The CI drift workflow
+      # (.github/workflows/drift.yaml) already watches providers/*/DRIFT.md and
+      # providers/*/go.mod, so no workflow change is needed — it gates on
+      # `task drift`, which iterates PROVIDER_MODULES like the other tasks.
       - cd providers/nutanix-infrastructure && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
           --record DRIFT.md
           --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
           --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
 
+  # T028 extensibility smoke (FR-009 / SC-003): validate a 7th image by
+  # creating an ephemeral fixture provider, registering it briefly, and
+  # confirming both `task build && task image:build` handle it. Run:
+  #   mkdir -p providers/fixture-test/cmd/fixture-manager
+  #   # go.mod: module github.com/jimmidyson/kcp-cluster-api/providers/fixture-test
+  #   #         with `replace kcp-cluster-api => ../..`
+  #   # main.go: package main / fmt.Println stub
+  #   # DRIFT.md: minimal record (no fork)
+  #   # then add to PROVIDER_MODULES, .ko.yaml builds, and scripts/image-tags.sh
+  #   # TABLESPEC (one row), run `task build && ./scripts/image-tags.sh --check`
+  #   # (should report 7 images) and `task image:build` (should build 7), then
+  #   # revert the 3 registrations and `rm -rf providers/fixture-test`.
+  # CI runs this as a separate job with `docker unavailable` skip; locally
+  # document and skip if no docker daemon.
+
   release-please:
     desc: Open the release pull request — run once from main to start a release
+    # T011: `task release-please -- --dry-run` (from main, with network/GitHub
+    # token) lists both packages from release-please-config.json and would create
+    # `vX.Y.Z` (root, package-name kcp-cluster-api) and
+    # `providers/nutanix-infrastructure/vX.Y.Z` (package-name nutanix-infrastructure)
+    # at the same commit because include-component-in-tag is false (so the tag is
+    # `path/vX.Y.Z`, not `component-vX.Y.Z`). Offline / without a token, verify by
+    # inspecting release-please-config.json:packages (must have two keys) and
+    # .release-please-manifest.json (two keys, both 0.1.0 initially). The dry-run
+    # requires network (GitHub API) and is not run in `task verify` / `task check`.
     # Why this exists at all, when `.github/workflows/release-please.yaml` runs
     # the same tool on every push to main: GitHub refuses the *creation* of a
     # pull request by GITHUB_TOKEN unless "Allow GitHub Actions to create and
@@ -532,6 +586,192 @@ tasks:
       # Signs whatever is now checked out. You are left on the release branch:
       # switch back to main yourself once the pull request is merged.
       - task: pr:sign
+
+  # ── Image publishing (spec 20261030-111900-kcp-capi-image-publishing) ──────
+  # Label path (T019): Taskfile --image-label (not .ko.yaml labels:) because
+  # --image-label is per-invocation and derives values from `go list -m` at task
+  # time, matching versions embedded in longTag. .ko.yaml `labels:` is static
+  # and would duplicate derivation. ko supports both; --image-label is chosen
+  # for provenance consistency (labels == tag-embedded versions, themselves
+  # `go list -m` values). See also .ko.yaml header notes.
+
+  image:check-modules:
+    desc: Fail if a providers/*/go.mod exists outside PROVIDER_MODULES
+    cmds:
+      - |
+        set -euo pipefail
+        listed="{{.PROVIDER_MODULES}}"
+        found="$(find providers -maxdepth 2 -name go.mod -print 2>/dev/null | xargs -I{} dirname {} | sort || true)"
+        if [ -z "$found" ]; then exit 0; fi
+        missing=""
+        for dir in $found; do
+          case " $listed " in
+            *" $dir "*) ;;
+            *) missing="$missing $dir" ;;
+          esac
+        done
+        if [ -n "$missing" ]; then
+          echo "providers present but not in PROVIDER_MODULES:$missing" >&2
+          echo "Add them to Taskfile.yaml:PROVIDER_MODULES" >&2
+          exit 1
+        fi
+
+  image:build:
+    desc: Build all 6 images locally with ko (no GHCR creds; KO_DOCKER_REPO=ko.local)
+    deps: [image:check-modules]
+    vars:
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
+    cmds:
+      - scripts/image-tags.sh --check
+      - |
+        set -euo pipefail
+        if ! command -v ko >/dev/null 2>&1; then
+          echo "ko not found. Install via devbox (devbox shell) or: go install github.com/google/ko@latest" >&2
+          exit 1
+        fi
+        repo="{{.KO_DOCKER_REPO}}"
+        plat="{{.KO_PLATFORMS}}"
+        tag="{{.IMAGE_TAGS}}"
+        plat_flag=""
+        if [ -n "$plat" ]; then plat_flag="--platform=$plat"; fi
+        echo "Building 6 images KO_DOCKER_REPO=$repo IMAGE_TAGS=$tag"
+        for mod in {{.PROVIDER_MODULES}}; do
+          name="$(basename "$mod")"
+          if ! grep -q "providers/$name/cmd/" .ko.yaml 2>/dev/null; then
+            echo "PROVIDER_MODULES member $mod has no .ko.yaml entry for providers/$name/cmd/* — add one" >&2
+            exit 1
+          fi
+        done
+        # Use -json + python to extract Version without needing a Go template fmt that collides with Taskfile's own.
+        capi_ver="$(go list -m -json sigs.k8s.io/cluster-api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        k8s_ver="$(go list -m -json k8s.io/api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        base="$(sed -n 's/^Base: *`//p' DRIFT.md | sed 's/`.*$//' | tr -d '[:space:]')"
+        rev="$(git rev-parse HEAD 2>/dev/null || echo dev)"
+        repo_ver="$(./scripts/image-tags.sh --repo-version 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0-dev)"
+        common="org.opencontainers.image.source=https://github.com/jimmidyson/kcp-cluster-api,org.opencontainers.image.revision=$rev,org.opencontainers.image.version=$repo_ver,io.kcp-capi.capi-version=$capi_ver,io.kcp-capi.k8s-version=$k8s_ver,io.kcp-capi.capi-base=$base"
+        KO_DOCKER_REPO="$repo" ko build --bare $plat_flag --tags "$tag" \
+          --image-label "$common" \
+          ./cmd/core-manager ./cmd/kubeadm-bootstrap-manager ./cmd/kubeadm-control-plane-manager ./cmd/workspace-manager ./cmd/dev-infrastructure-manager
+        capx_json="$(go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
+        capx_ver="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version','') or d.get('Version',''))" 2>/dev/null || go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        KO_DOCKER_REPO="$repo" ko build --bare $plat_flag --tags "$tag" \
+          --image-label "$common,io.kcp-capi.capx-version=$capx_ver" \
+          ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager
+        echo "Done. Verify: docker images | grep kcp-capi  (expect 6 ko.local/kcp-capi-*:local)"
+
+  image:verify:
+    desc: Verify image tags/labels are consistent (needs local docker daemon or skips)
+    deps: [image:check-modules]
+    cmds:
+      - scripts/image-tags.sh --check
+      - |
+        set -euo pipefail
+        capi_ver="$(go list -m -json sigs.k8s.io/cluster-api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        capi_oci="${capi_ver//+/-}"
+        capx_json="$(go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
+        capx_ver="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version','') or d.get('Version',''))" 2>/dev/null || go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        capx_ver="${capx_ver:-unknown}"
+        capx_oci="${capx_ver//+/-}"
+        repo_ver="$(./scripts/image-tags.sh --repo-version 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0-dev)"
+        k8s_ver="$(go list -m -json k8s.io/api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+        base="$(sed -n 's/^Base: *`//p' DRIFT.md | sed 's/`.*$//' | tr -d '[:space:]')"
+        root_long="${repo_ver}-capi-${capi_oci}"
+        capx_long="${repo_ver}-capx-${capx_oci}-capi-${capi_oci}"
+        echo "Expected: CAPI=$capi_ver ($capi_oci) CAPX=$capx_ver K8S=$k8s_ver base=$base"
+        echo "Tags: repo=$repo_ver root_long=$root_long capx_long=$capx_long"
+        case "$root_long" in *"-capi-$capi_oci") echo "OK: longTag capi segment matches label" ;; *) echo "FAIL: longTag capi segment mismatch" >&2; exit 1 ;; esac
+        case "$capx_long" in *"-capi-$capi_oci") echo "OK: capx longTag capi segment matches" ;; *) echo "FAIL: capx longTag capi mismatch" >&2; exit 1 ;; esac
+        tool=""
+        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then tool=docker
+        elif command -v buildah >/dev/null 2>&1; then tool=buildah
+        elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then tool=podman; fi
+        if [ -z "$tool" ]; then
+          echo "No docker/buildah/podman daemon — skipping image label inspection."
+          echo "This check runs in GHA (publish-images.yaml) where docker is present."
+          echo "SKIPPED: inspect requires docker/buildah/podman"
+          exit 0
+        fi
+        echo "Using $tool for inspection"
+        failures=0
+        # Use docker inspect without Go template format (avoids Taskfile brace collision);
+        # parse JSON output directly via python.
+        get_label() {
+          local image="$1" key="$2"
+          case "$tool" in
+            docker) docker inspect "$image" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('Config',{}).get('Labels',{}).get('$key',''))" 2>/dev/null || true ;;
+            buildah) buildah inspect --type image "$image" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Docker',{}).get('config',{}).get('Labels',{}).get('$key',''))" 2>/dev/null || true ;;
+            podman) podman inspect "$image" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('Config',{}).get('Labels',{}).get('$key',''))" 2>/dev/null || true ;;
+          esac
+        }
+        check_image() {
+          local imp="$1" exp_capi="$2" exp_long="$3" extra_key="$4" extra_val="$5"
+          local tag="{{.IMAGE_TAGS}}"
+          local ref=""
+          for cand in "ko.local:$tag" "{{.KO_DOCKER_REPO}}:$tag" "{{.KO_DOCKER_REPO}}/${imp##*/}:$tag"; do
+            if [ "$tool" = "buildah" ]; then
+              buildah images --format "$(printf '{{.Name}}:{{.Tag}}')" 2>/dev/null | grep -q "$cand" && ref="$cand" && break
+            else
+              $tool images --format '$(printf '{{.Repository}}:{{.Tag}}')' 2>/dev/null | grep -qF "$cand" && ref="$cand" && break
+              $tool image inspect "$cand" >/dev/null 2>&1 && ref="$cand" && break
+            fi
+          done
+          if [ -z "$ref" ]; then
+            echo "  WARN: image for $imp not found (tag $tag) — run image:build first"
+            $tool images 2>/dev/null | head -20 || true
+            echo "  SKIPPED: $imp not found locally"
+            return 0
+          fi
+          echo "  Checking $imp via $ref..."
+          got_capi="$(get_label "$ref" "io.kcp-capi.capi-version")"
+          got_k8s="$(get_label "$ref" "io.kcp-capi.k8s-version")"
+          got_base="$(get_label "$ref" "io.kcp-capi.capi-base")"
+          if [ "$got_capi" != "$exp_capi" ]; then
+            echo "    FAIL: io.kcp-capi.capi-version got '$got_capi' expected '$exp_capi'" >&2; failures=$((failures+1))
+          else echo "    OK: io.kcp-capi.capi-version=$got_capi"; fi
+          if [ -n "$got_k8s" ] && [ "$got_k8s" != "$k8s_ver" ]; then
+            echo "    FAIL: io.kcp-capi.k8s-version got '$got_k8s'" >&2; failures=$((failures+1))
+          fi
+          if [ -n "$got_base" ] && [ "$got_base" != "$base" ]; then
+            echo "    FAIL: io.kcp-capi.capi-base got '$got_base' expected '$base'" >&2; failures=$((failures+1))
+          fi
+          if [ -n "$extra_key" ]; then
+            got_extra="$(get_label "$ref" "$extra_key")"
+            if [ "$got_extra" != "$extra_val" ]; then
+              echo "    FAIL: $extra_key got '$got_extra' expected '$extra_val'" >&2; failures=$((failures+1))
+            else echo "    OK: $extra_key=$got_extra"; fi
+          fi
+        }
+        for imp in core-manager kubeadm-bootstrap-manager kubeadm-control-plane-manager workspace-manager dev-infrastructure-manager; do
+          check_image "$imp" "$capi_ver" "$root_long" "" ""
+        done
+        check_image "nutanix-infrastructure-manager" "$capi_ver" "$capx_long" "io.kcp-capi.capx-version" "$capx_ver"
+        if [ "$failures" -gt 0 ]; then echo "$failures mismatch(es)" >&2; exit 1; fi
+        echo "OK: label/tag verification passed (or skipped where images absent)"
+
+  image:load-kind:
+    desc: Load locally-built images into kind (KIND_CLUSTER=kcp-capi-smoke)
+    vars:
+      KIND_CLUSTER: '{{.KIND_CLUSTER | default "kcp-capi-smoke"}}'
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
+    cmds:
+      - |
+        set -euo pipefail
+        if ! command -v kind >/dev/null 2>&1; then
+          echo "kind not found — https://kind.sigs.k8s.io/docs/user/quick-start/#installation" >&2; exit 1
+        fi
+        cluster="{{.KIND_CLUSTER}}"
+        repo="{{.KO_DOCKER_REPO}}"
+        tag="{{.IMAGE_TAGS}}"
+        for name in core kubeadm-bootstrap kubeadm-control-plane workspace dev-infrastructure nutanix-infrastructure; do
+          img="$repo/kcp-capi-$name:$tag"
+          if ! docker image inspect "$img" >/dev/null 2>&1; then
+            echo "Local image $img not found — run: task image:build" >&2; exit 1
+          fi
+          echo "Loading $img into kind cluster $cluster ..."
+          kind load docker-image "$img" --name "$cluster"
+        done
+        echo "All 6 images loaded into kind/$cluster. Deploy with manifests pointing at $repo/kcp-capi-*:$tag"
+
 
   docs:build:
     desc: Build the documentation site

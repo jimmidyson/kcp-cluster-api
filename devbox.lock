@@ -80,6 +80,54 @@
           "store_path": "/nix/store/1fng2iqlx5y8rqvhjp9203mymzyny6cz-go-1.27.3"
         }
       }
+    },
+    "ko@0.19.1": {
+      "last_modified": "2026-10-28T22:04:29Z",
+      "resolved": "github:NixOS/nixpkgs/e62746b0b472753ef019baceab6f1e2e52014980#ko",
+      "source": "devbox-search",
+      "version": "0.19.1",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/znlsfpv8pz6ab9mgpmri9li603qmwsl6-ko-0.19.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/znlsfpv8pz6ab9mgpmri9li603qmwsl6-ko-0.19.1"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/21cisrmwsc5iblwprab4pgy1m7r44cyv-ko-0.19.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/21cisrmwsc5iblwprab4pgy1m7r44cyv-ko-0.19.1"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/1f5j1chicqia1cz9ycgjbd25pbmc61as-ko-0.19.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/1f5j1chicqia1cz9ycgjbd25pbmc61as-ko-0.19.1"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/cqjq0l8k3z90klk8w16yy83s4smayb0d-ko-0.19.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/cqjq0l8k3z90klk8w16yy83s4smayb0d-ko-0.19.1"
+        }
+      }
     }
   }
 }
