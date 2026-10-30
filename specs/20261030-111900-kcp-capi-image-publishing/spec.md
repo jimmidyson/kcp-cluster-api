@@ -1,6 +1,6 @@
 # Feature Specification: KCP CAPI Image Publishing
 
-**Feature Branch**: `001-kcp-capi-image-publishing`
+**Feature Branch**: `20261030-111900-kcp-capi-image-publishing`
 
 **Created**: 2026-10-30
 
