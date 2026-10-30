@@ -9,6 +9,7 @@ SHORT_NAME=""
 BRANCH_NUMBER=""
 USE_TIMESTAMP=false
 NUMBER_EXPLICIT=false
+_TIMESTAMP_EXPLICIT=false
 ARGS=()
 i=1
 while [ $i -le $# ]; do
@@ -55,6 +56,11 @@ while [ $i -le $# ]; do
             ;;
         --timestamp)
             USE_TIMESTAMP=true
+            _TIMESTAMP_EXPLICIT=true
+            ;;
+        --sequential)
+            USE_TIMESTAMP=false
+            _TIMESTAMP_EXPLICIT=true
             ;;
         --help|-h)
             echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>"
@@ -66,6 +72,7 @@ while [ $i -le $# ]; do
             echo "  --short-name <name> Provide a custom short name (2-4 words) for the feature"
             echo "  --number N          Prefer a feature number (auto-corrected if its specs prefix exists)"
             echo "  --timestamp         Use timestamp prefix (YYYYMMDD-HHMMSS) instead of sequential numbering"
+            echo "  --sequential        Use sequential numbering (overrides init-options.json if set to timestamp)"
             echo "  --help, -h          Show this help message"
             echo ""
             echo "Examples:"
@@ -83,8 +90,32 @@ done
 
 FEATURE_DESCRIPTION="${ARGS[*]}"
 if [ -z "$FEATURE_DESCRIPTION" ]; then
-    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>" >&2
+    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp|--sequential] <feature_description>" >&2
     exit 1
+fi
+
+# Default USE_TIMESTAMP from init-options.json when no explicit flag was given.
+if [ "$_TIMESTAMP_EXPLICIT" = false ]; then
+    _CONFIG_FN=""
+    if [ -f ".specify/init-options.json" ]; then
+        _CONFIG_FN=".specify/init-options.json"
+    else
+        _SCRIPT_DIR_FB="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        _REPO_FB=""
+        if [ -f "$_SCRIPT_DIR_FB/common.sh" ]; then
+            _REPO_FB="$(bash -c "source \"$_SCRIPT_DIR_FB/common.sh\" && get_repo_root" 2>/dev/null || true)"
+        fi
+        if [ -n "$_REPO_FB" ] && [ -f "$_REPO_FB/.specify/init-options.json" ]; then
+            _CONFIG_FN="$_REPO_FB/.specify/init-options.json"
+        fi
+    fi
+    if [ -n "$_CONFIG_FN" ]; then
+        _FN_VAL="$(python3 -c "import json;print(json.load(open('$_CONFIG_FN')).get('feature_numbering',''))" 2>/dev/null || \
+                   grep -o '"feature_numbering"[[:space:]]*:[[:space:]]*"[^"]*"' "$_CONFIG_FN" 2>/dev/null | sed -E 's/.*\"([^\"]+)\"$/\1/' || true)"
+        if [ "$_FN_VAL" = "timestamp" ]; then
+            USE_TIMESTAMP=true
+        fi
+    fi
 fi
 
 # Trim whitespace and validate description is not empty (e.g., user passed only whitespace)
@@ -134,12 +165,19 @@ get_highest_from_specs() {
 }
 
 # Return success when a spec directory owns the given numeric prefix.
+# Timestamp-named specs (YYYYMMDD-HHMMSS-*) are ignored so they do not
+# count against sequential numbers like 001.
 spec_prefix_exists() {
     local specs_dir="$1"
     local feature_num="$2"
 
     for spec_path in "$specs_dir/${feature_num}-"*; do
-        [ -d "$spec_path" ] && return 0
+        [ -d "$spec_path" ] || continue
+        _spec_base=$(basename "$spec_path")
+        if echo "$_spec_base" | grep -Eq '^[0-9]{8}-[0-9]{6}-'; then
+            continue
+        fi
+        return 0
     done
     return 1
 }
@@ -287,9 +325,10 @@ else
     # Force base-10 interpretation to prevent octal conversion (e.g., 010 → 8 in octal, but should be 10 in decimal)
     FEATURE_NUM=$(printf "%03d" "$((10#$BRANCH_NUMBER))")
 
-    # Treat an explicit number as a preference when its prefix is already used
-    # by a feature directory. Auto-detected numbers are already conflict-free.
-    if [ "$NUMBER_EXPLICIT" = true ]; then
+    # Only handle explicit-number conflicts in sequential mode; timestamp
+    # mode must not treat timestamp specs as colliding with sequential
+    # prefixes (see spec_prefix_exists filtering above).
+    if [ "$USE_TIMESTAMP" = false ] && [ "$NUMBER_EXPLICIT" = true ]; then
         SPEC_CONFLICT=false
         REQUESTED_BRANCH_NAME=$(fit_branch_name "$FEATURE_NUM" "$BRANCH_SUFFIX")
         REQUESTED_DIR="$SPECS_DIR/$REQUESTED_BRANCH_NAME"
