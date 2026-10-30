@@ -34,7 +34,7 @@ jobs:
           hugo-version: '0.161.0'
           extended: true
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
@@ -84,4 +84,4 @@ jobs:
       # over the API wants `administration: write`, which `GITHUB_TOKEN`
       # cannot be granted.
       - id: deploy
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
