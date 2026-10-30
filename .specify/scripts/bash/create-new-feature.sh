@@ -165,12 +165,19 @@ get_highest_from_specs() {
 }
 
 # Return success when a spec directory owns the given numeric prefix.
+# Timestamp-named specs (YYYYMMDD-HHMMSS-*) are ignored so they do not
+# count against sequential numbers like 001.
 spec_prefix_exists() {
     local specs_dir="$1"
     local feature_num="$2"
 
     for spec_path in "$specs_dir/${feature_num}-"*; do
-        [ -d "$spec_path" ] && return 0
+        [ -d "$spec_path" ] || continue
+        _spec_base=$(basename "$spec_path")
+        if echo "$_spec_base" | grep -Eq '^[0-9]{8}-[0-9]{6}-'; then
+            continue
+        fi
+        return 0
     done
     return 1
 }
@@ -318,9 +325,10 @@ else
     # Force base-10 interpretation to prevent octal conversion (e.g., 010 → 8 in octal, but should be 10 in decimal)
     FEATURE_NUM=$(printf "%03d" "$((10#$BRANCH_NUMBER))")
 
-    # Treat an explicit number as a preference when its prefix is already used
-    # by a feature directory. Auto-detected numbers are already conflict-free.
-    if [ "$NUMBER_EXPLICIT" = true ]; then
+    # Only handle explicit-number conflicts in sequential mode; timestamp
+    # mode must not treat timestamp specs as colliding with sequential
+    # prefixes (see spec_prefix_exists filtering above).
+    if [ "$USE_TIMESTAMP" = false ] && [ "$NUMBER_EXPLICIT" = true ]; then
         SPEC_CONFLICT=false
         REQUESTED_BRANCH_NAME=$(fit_branch_name "$FEATURE_NUM" "$BRANCH_SUFFIX")
         REQUESTED_DIR="$SPECS_DIR/$REQUESTED_BRANCH_NAME"
