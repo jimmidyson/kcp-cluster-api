@@ -22,7 +22,7 @@ set -euo pipefail
 #   Every version component is OCI-sanitized (+→-). ForkTag is the provider/capi
 #   version itself — a floating alias that ko overwrites on every release.
 #
-# No-fork-bump (T022 / tag-schema.md#no-fork-bump):
+# Unchanged pins reuse the same forkTag/labels; ko push is an upsert so
 #   When CAPI/CAPX pins are unchanged between two repo releases, forkTag and
 #   labels stay identical. The new digest overwrites the old fork alias (ko push
 #   is upsert), so `:<capiVersion>` always points at the newest release. No extra
@@ -57,7 +57,7 @@ derive() {
     capi_version="$(go -C "$REPO_ROOT" list -m -f '{{.Version}}' sigs.k8s.io/cluster-api 2>/dev/null || echo unknown)"
   fi
   if [[ -z "$capx_version" ]]; then
-    # T025: for a new provider with a different upstreamImport, add a sibling
+    # For a new provider with a different upstreamImport, add a sibling
     # block here that runs `go -C providers/<name> list -m -json <import>` and
     # extracts Replace.Version the same way. Alternatively, keep this capx block
     # and add a new var (e.g. capa_version) alongside it — the table row then
@@ -116,7 +116,7 @@ derive() {
   declare -ga ALL_TAGS=()
   declare -ga TAGS_BY_IMAGE=()
 
-  # validate_tag: enforces tag-schema.md#oci-tag-grammar + T020 invariants:
+  # validate_tag: enforces tag-schema.md#oci-tag-grammar:
   # OCI regex, no '+', long-tag ≤100 (hard OCI limit 128, reserve headroom).
   validate_tag() {
     local label="$1" value="$2"
@@ -141,7 +141,7 @@ derive() {
   }
 
   # Define images: name|repoTag|longTag|forkTag
-  # 4-edit contract lives here (T025 / FR-009 / data-model.md#image):
+  # Adding a provider is one new row in this table:
   #   Adding a provider is one new row in this table:
   #     "ghcr.io/jimmidyson/kcp-capi-<name>|${repo}|${repo}-<upstream>-<ver>-capi-<capiOci>|<upstreamOci>"
   #   where <upstream> is the short upstream name (capx for Nutanix, capa for
@@ -168,7 +168,7 @@ derive() {
     validate_tag "$img repoTag" "$r"
     validate_tag "$img longTag" "$l"
     validate_tag "$img forkTag" "$f"
-    # Per-image uniqueness (T020): the three aliases for one image must be
+    # The three aliases for one image must be
     # distinct — otherwise a release would collapse two intended tags onto one.
     if [[ "$r" == "$l" ]] || [[ "$r" == "$f" ]] || [[ "$l" == "$f" ]]; then
       DERIVED_ERRORS+=("$img: repo/long/fork not unique — repo=$r long=$l fork=$f")
