@@ -9,6 +9,7 @@ SHORT_NAME=""
 BRANCH_NUMBER=""
 USE_TIMESTAMP=false
 NUMBER_EXPLICIT=false
+_TIMESTAMP_EXPLICIT=false
 ARGS=()
 i=1
 while [ $i -le $# ]; do
@@ -55,6 +56,11 @@ while [ $i -le $# ]; do
             ;;
         --timestamp)
             USE_TIMESTAMP=true
+            _TIMESTAMP_EXPLICIT=true
+            ;;
+        --sequential)
+            USE_TIMESTAMP=false
+            _TIMESTAMP_EXPLICIT=true
             ;;
         --help|-h)
             echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>"
@@ -66,6 +72,7 @@ while [ $i -le $# ]; do
             echo "  --short-name <name> Provide a custom short name (2-4 words) for the feature"
             echo "  --number N          Prefer a feature number (auto-corrected if its specs prefix exists)"
             echo "  --timestamp         Use timestamp prefix (YYYYMMDD-HHMMSS) instead of sequential numbering"
+            echo "  --sequential        Use sequential numbering (overrides init-options.json if set to timestamp)"
             echo "  --help, -h          Show this help message"
             echo ""
             echo "Examples:"
@@ -83,8 +90,32 @@ done
 
 FEATURE_DESCRIPTION="${ARGS[*]}"
 if [ -z "$FEATURE_DESCRIPTION" ]; then
-    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>" >&2
+    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp|--sequential] <feature_description>" >&2
     exit 1
+fi
+
+# Default USE_TIMESTAMP from init-options.json when no explicit flag was given.
+if [ "$_TIMESTAMP_EXPLICIT" = false ]; then
+    _CONFIG_FN=""
+    if [ -f ".specify/init-options.json" ]; then
+        _CONFIG_FN=".specify/init-options.json"
+    else
+        _SCRIPT_DIR_FB="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        _REPO_FB=""
+        if [ -f "$_SCRIPT_DIR_FB/common.sh" ]; then
+            _REPO_FB="$(bash -c "source \"$_SCRIPT_DIR_FB/common.sh\" && get_repo_root" 2>/dev/null || true)"
+        fi
+        if [ -n "$_REPO_FB" ] && [ -f "$_REPO_FB/.specify/init-options.json" ]; then
+            _CONFIG_FN="$_REPO_FB/.specify/init-options.json"
+        fi
+    fi
+    if [ -n "$_CONFIG_FN" ]; then
+        _FN_VAL="$(python3 -c "import json;print(json.load(open('$_CONFIG_FN')).get('feature_numbering',''))" 2>/dev/null || \
+                   grep -o '"feature_numbering"[[:space:]]*:[[:space:]]*"[^"]*"' "$_CONFIG_FN" 2>/dev/null | sed -E 's/.*\"([^\"]+)\"$/\1/' || true)"
+        if [ "$_FN_VAL" = "timestamp" ]; then
+            USE_TIMESTAMP=true
+        fi
+    fi
 fi
 
 # Trim whitespace and validate description is not empty (e.g., user passed only whitespace)
