@@ -35,10 +35,26 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
+          enable-cache: true
       - id: tags
+        run: |
+          set -euo pipefail
+          devbox run -- scripts/image-tags.sh --check
+          devbox run -- scripts/image-tags.sh --gha-output
+          # Record ref classification for the publish matrix (tag vs branch).
+          ref="${GITHUB_REF_NAME:-}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "ref_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "ref_type=tag" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            echo "ref_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
+            echo "ref_type=branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
+            echo "ref_type=unknown" >> "$GITHUB_OUTPUT"
+          fi
         run: |
           set -euo pipefail
           scripts/image-tags.sh --check
@@ -85,9 +101,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
+          enable-cache: true
       - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
       - uses: docker/setup-buildx-action@e468171a13893785b0fa2da75f3b02e8e1f74fb32 # v3.11.1
       - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039 # v3.5.0
@@ -95,13 +111,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install ko
-        run: go install github.com/google/ko@v0.19.1
       - name: Validate tags
-        run: scripts/image-tags.sh --check
+        run: devbox run -- scripts/image-tags.sh --check
       - name: Build and push ${{ matrix.image }}
         env:
-          # KO_DOCKER_REPO is set per-image in the run step (matrix.image)
           REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
           CAPI_VERSION: ${{ needs.derive-tags.outputs.capi_version }}
           CAPX_VERSION: ${{ needs.derive-tags.outputs.capx_version }}
@@ -124,8 +137,6 @@ jobs:
           imp="${{ matrix.image }}"
           image="${{ matrix.image }}"
           importpath="${{ matrix.importpath }}"
-          # Tag matrix (T003/T017-T018): repoTag + longTag + forkTag; provider vs root differ.
-          # forkTag uses oci-sanitized values (+→-) so OCI tag charset never violated.
           if [[ "$image" == "kcp-capi-nutanix-infrastructure" ]]; then
             long="${repo_ver}-capx-${capx_oci}-capi-${capi_oci}"
             tags="${repo_ver},${long},${capx_oci}"
@@ -135,10 +146,9 @@ jobs:
             tags="${repo_ver},${long},${capi_oci}"
             labels="$common"
           fi
-          # KO_DOCKER_REPO per image: with --bare, KO_DOCKER_REPO is the full image name (no suffix).
           KO_DOCKER_REPO="ghcr.io/jimmidyson/${image}"
           echo "Publishing $image ($importpath) -> $KO_DOCKER_REPO with tags: $tags"
-          KO_DOCKER_REPO="$KO_DOCKER_REPO" ko build --bare --push --platform=linux/amd64,linux/arm64 \
+          KO_DOCKER_REPO="$KO_DOCKER_REPO" devbox run -- ko build --bare --push --platform=linux/amd64,linux/arm64 \
             --tags "$tags" --image-label "$labels" "$importpath"
 
   publish-branch:
@@ -170,9 +180,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
+          enable-cache: true
       - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
       - uses: docker/setup-buildx-action@e468171a13893785b0fa2da75f3b02e8e1f74fb32 # v3.11.1
       - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039
@@ -180,13 +190,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install ko
-        run: go install github.com/google/ko@v0.19.1
       - name: Validate tags
-        run: scripts/image-tags.sh --check
+        run: devbox run -- scripts/image-tags.sh --check
       - name: Build and push ${{ matrix.image }} (:main, :sha-<short>)
         env:
-          # KO_DOCKER_REPO is set per-image in the run step (matrix.image)
           REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
           CAPI_VERSION: ${{ needs.derive-tags.outputs.capi_version }}
           CAPX_VERSION: ${{ needs.derive-tags.outputs.capx_version }}
@@ -204,8 +211,7 @@ jobs:
             common="$common,io.kcp-capi.capx-version=$CAPX_VERSION"
           fi
           tags="main,sha-${short}"
-          # KO_DOCKER_REPO per image: with --bare, KO_DOCKER_REPO is the full image name (no suffix).
           KO_DOCKER_REPO="ghcr.io/jimmidyson/${image}"
           echo "Publishing $image ($importpath) -> $KO_DOCKER_REPO with tags: $tags"
-          KO_DOCKER_REPO="$KO_DOCKER_REPO" ko build --bare --push --platform=linux/amd64,linux/arm64 \
+          KO_DOCKER_REPO="$KO_DOCKER_REPO" devbox run -- ko build --bare --push --platform=linux/amd64,linux/arm64 \
             --tags "$tags" --image-label "$common" "$importpath"

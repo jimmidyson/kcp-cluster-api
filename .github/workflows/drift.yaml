@@ -35,9 +35,6 @@ on:
       - 'providers/*/DRIFT.md'
       - 'providers/*/go.mod'
 
-permissions:
-  contents: read
-
 jobs:
   drift:
     name: drift
@@ -47,12 +44,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
-
-      - name: Install task
-        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          enable-cache: true
 
       - name: Check drift against DRIFT.md
-        run: task drift
+        run: devbox run -- task drift
+
