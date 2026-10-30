@@ -104,6 +104,41 @@ Verification:
 
 Invariants: `include-component-in-tag` stays `false` (Go `path/vX.Y.Z` form); `bootstrap-sha` and `initial-version` are untouched (FR-010).
 
+## No-Fork-Bump Contract (T022)
+
+When a repo release bumps `vX.Y.Z → vX.Y.Z+1` but the CAPI/CAPX pins are
+unchanged between the two commits (no `go.mod` change to
+`sigs.k8s.io/cluster-api` or
+`github.com/nutanix-cloud-native/cluster-api-provider-nutanix`):
+
+- The derived `forkTag` (`v1.15.0-kcp.13` or `v1.11.0-kcp.3`) is identical for
+  both releases.
+- The derived OCI labels (`io.kcp-capi.capi-version`, `io.kcp-capi.k8s-version`,
+  `io.kcp-capi.capi-base`, and for provider images
+  `io.kcp-capi.capx-version`) are identical — they come from the same
+  `go list -m` values.
+- Only `repoTag` (`vX.Y.Z → vX.Y.Z+1`) and the prefix of `longTag`
+  (`vX.Y.Z-capi-… → vX.Y.Z+1-capi-…`) differ; the suffix (`-capi-v1.15.0-kcp.13`)
+  is the same.
+- The `forkTag` alias (`:<capiVersion>`) is a **floating alias** — `ko` pushes
+  with `--tags repo,long,fork`, so the new digest overwrites the old alias.
+  After the release, `:v1.15.0-kcp.13` points at the newest digest. No history
+  tag or retention is needed; consumers pinning the fork version always get
+  the latest security-fix digest.
+
+  The implementation is in `scripts/image-tags.sh`: `forkTag` is the
+  OCI-sanitized `CAPI_VERSION`/`CAPX_VERSION` from `go list -m` (not a separate
+  counter), and the publish workflow runs `ko build --push --tags repo,long,fork`
+  which upserts all three. Labels come from the same `go list -m` values via
+  Taskfile `--image-label` passthrough, so unchanged pins give identical labels.
+
+  Verification: `scripts/image-tags.sh --check` prints the three tags per image
+  and validates uniqueness; `task image:verify` asserts `longTag`'s `-capi-`
+  segment equals the `io.kcp-capi.capi-version` label (SC-002), so a no-fork-bump
+  release is verified by the same path as any other.
+
+
+
 ## Edge case: mismatched Go tags (T037)
 
 `providers/nutanix-infrastructure/go.mod` has `replace kcp-cluster-api => ../..`, so

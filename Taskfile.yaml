@@ -742,8 +742,7 @@ tasks:
           done
           set -e
           if [ -z "$ref" ]; then
-            echo "  WARN: image for $imp not found (tag $outer_tag) — run image:build first"
-            $tool images 2>/dev/null | head -20 || true
+            echo "  WARN: image for $imp not found (tag $outer_tag) — run image:build first (expected: ko.local/kcp-capi-$imp:$outer_tag)"
             echo "  SKIPPED: $imp not found locally"
             return 0
           fi
