@@ -25,11 +25,15 @@ on:
       - 'internal/drift/**'
       # One record per fork, and each is pinned by its own module. A record or
       # a pin outside this list is one the check stops gating.
+      #
+      # Extensibility (T024): this already handles additional providers — the
+      # `providers/*` globs gate on any per-provider DRIFT.md/go.mod change. No
+      # workflow edit is needed when extending PROVIDER_MODULES. What does need
+      # a new entry is Taskfile:drift (one `cd providers/<name> && …` line),
+      # which `task drift` runs; this workflow gates on that task, so it
+      # inherits coverage automatically.
       - 'providers/*/DRIFT.md'
       - 'providers/*/go.mod'
-
-permissions:
-  contents: read
 
 jobs:
   drift:
@@ -40,12 +44,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
-
-      - name: Install task
-        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          enable-cache: true
 
       - name: Check drift against DRIFT.md
-        run: task drift
+        run: devbox run -- task drift
+

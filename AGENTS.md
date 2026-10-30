@@ -78,6 +78,21 @@ specs/                    spec-driven feature specifications
 .specify/                 Spec Kit state, constitution and extensions
 ```
 
+## Image tasks
+
+Images are built with `ko` (see `specs/20261030-111900-kcp-capi-image-publishing/` and `contracts/tag-schema.md`).
+
+| Task | Purpose | Notes |
+|------|---------|-------|
+| `task image:build` | Build all 6 images locally (`ko.local`, no GHCR creds) | `KO_DOCKER_REPO=ko.local` by default (T029). Override to `ghcr.io/jimmidyson` for publish dry-run. Verify: `docker images \| grep kcp-capi` → 6 `ko.local/kcp-capi-*:local`. |
+| `task image:verify` | Check tag/label consistency (longTag ↔ label) | Skips docker inspection if no daemon; use `task --dry` or CI `publish-images.yaml` for full assert. |
+| `task image:load-kind` | `kind load docker-image` for local kind cluster | `KIND_CLUSTER=kcp-capi-smoke` (can override). See `Taskfile.yaml` for manual `kind load` alternative. |
+| `task image:check-modules` | Fail if `providers/*/go.mod` outside `PROVIDER_MODULES` | Gates adding providers correctly (FR-007). |
+
+Platform override (T030): `KO_PLATFORMS=linux/amd64` single-arch locally for speed; `KO_PLATFORMS=linux/amd64,linux/arm64` for multi-arch parity. CI publish builds both.
+
+Local vs published manifests (T032) differ **only** by image reference: local `ko.local/kcp-capi-*:local` vs published `ghcr.io/jimmidyson/kcp-capi-*:vX.Y.Z` — same flags, same APIExports. See Taskfile comments and `specs/20261030-111900-kcp-capi-image-publishing/quickstart.md` §1.
+
 ## Tracking work
 
 [`docs/conversion-plan.md`](docs/conversion-plan.md) is the record of what

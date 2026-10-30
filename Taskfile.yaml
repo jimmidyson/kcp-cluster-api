@@ -1,9 +1,7 @@
 version: '3'
 
-# Fail loudly: an unset variable or a failing pipe stage must not be mistaken
-# for success (FR-011).
+# Fail loudly: an unset variable or a failing pipe stage must not pass silently.
 set: [errexit, nounset, pipefail]
-
 vars:
   BIN: '{{.ROOT_DIR}}/bin'
 
@@ -11,16 +9,25 @@ vars:
   # API provider whose dependency graph does not belong in this one's. They are
   # listed rather than globbed so that adding one is a deliberate edit here: a
   # module nobody added is a module nothing builds.
+  #
+  # Extensibility contract — PROVIDER_MODULES is the single source of truth.
+  # Adding a provider is 4 edits: providers/<name>/ layout, one entry here,
+  # one packages key in release-please-config.json, and a DRIFT.md record.
+  # All of build, lint, test:unit, drift, image:build, image:verify, and
+  # image:check-modules iterate this var. Per-provider versioning needs only
+  # one new row in scripts/image-tags.sh and one new builds entry in .ko.yaml.
   PROVIDER_MODULES: providers/nutanix-infrastructure
-  # Pinned. Tooling is installed at fixed versions with the Go toolchain only:
-  # no package manager, no environment manager, nothing on the critical path
-  # that an ephemeral container has to materialise first (FR-009).
+  # Image defaults: KO_DOCKER_REPO is ko.local locally (no GHCR creds); set to
+  # ghcr.io/jimmidyson to publish. KO_PLATFORMS is linux/amd64 locally for
+  # speed; use linux/amd64,linux/arm64 for multi-arch parity. CI always builds
+  # multi-arch. See image:build description and quickstart.md section 1.
+  IMAGE_REGISTRY: '{{.IMAGE_REGISTRY | default "ghcr.io/jimmidyson"}}'
+  IMAGE_REPO_PREFIX: '{{.IMAGE_REPO_PREFIX | default "kcp-capi"}}'
+  KO_DOCKER_REPO: '{{.KO_DOCKER_REPO | default "ko.local"}}'
+  KO_PLATFORMS: '{{.KO_PLATFORMS | default "linux/amd64"}}'
+  # Pinned. Tooling is installed at fixed versions via the Go toolchain only.
   KCP_VERSION: v0.32.3
-  # The release-please CLI, pinned to the version CI resolves:
-  # googleapis/release-please-action v5.0 — the pin in
-  # .github/workflows/release-please.yaml — depends on release-please ^17.6.0.
-  # Local and CI must run the same code, because two versions of this tool can
-  # reach two different answers about the next release from the same commits.
+  # The release-please CLI, pinned to match CI's release-please action.
   RELEASE_PLEASE_VERSION: 17.11.1
   GOOS_:
     sh: go env GOOS
@@ -38,9 +45,8 @@ tasks:
     desc: The done-condition. Every step, with three outcomes — see contracts/task-surface.md
     deps: [build:verify]
     cmds:
-      # Runs the built binary, not `go run`: `go run` exits 1 for any non-zero
-      # program status, which collapses "could not run" (2) into "failed" (1)
-      # and destroys the distinction FR-012 requires.
+      # Runs the built binary, not `go run`: `go run` collapses "could not run"
+      # (2) into "failed" (1) by always exiting 1 for a non-zero program status.
       - '{{.BIN}}/verify'
 
   check:
@@ -282,13 +288,14 @@ tasks:
       # One record per fork, and each is checked from the module that pins it:
       # the ref comes from that module's own graph, so a checker run from the
       # wrong directory would measure the wrong version. A fork whose record is
-      # not listed here is one nothing checks.
+      # not listed here is one nothing checks. When adding a provider, add one
+      # more `cd providers/<name> && go run .../cmd/drift --record DRIFT.md`
+      # entry here.
       - cd providers/nutanix-infrastructure && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
           --record DRIFT.md
           --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
           --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
-
   release-please:
     desc: Open the release pull request — run once from main to start a release
     # Why this exists at all, when `.github/workflows/release-please.yaml` runs
@@ -533,6 +540,65 @@ tasks:
       # switch back to main yourself once the pull request is merged.
       - task: pr:sign
 
+  # -- Image publishing ------------------------------------------------
+  # Labels via --image-label so values derive from go list -m at build time.
+
+  image:check-modules:
+    desc: Fail if a providers/*/go.mod exists outside PROVIDER_MODULES
+    cmds:
+      - |
+        set -euo pipefail
+        listed="{{.PROVIDER_MODULES}}"
+        found="$(find providers -maxdepth 2 -name go.mod -print 2>/dev/null | xargs -I{} dirname {} | sort || true)"
+        if [ -z "$found" ]; then exit 0; fi
+        missing=""
+        for dir in $found; do
+          case " $listed " in
+            *" $dir "*) ;;
+            *) missing="$missing $dir" ;;
+          esac
+        done
+        if [ -n "$missing" ]; then
+          echo "providers present but not in PROVIDER_MODULES:$missing" >&2
+          echo "Add them to Taskfile.yaml:PROVIDER_MODULES" >&2
+          exit 1
+        fi
+
+  image:build:
+    desc: Build all 6 images locally with ko (no GHCR creds; KO_DOCKER_REPO=ko.local)
+    deps: [image:check-modules]
+    vars:
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
+    env:
+      KO_DOCKER_REPO: '{{.KO_DOCKER_REPO}}'
+      KO_PLATFORMS: '{{.KO_PLATFORMS}}'
+      IMAGE_TAGS: '{{.IMAGE_TAGS}}'
+      PROVIDER_MODULES: '{{.PROVIDER_MODULES}}'
+    cmds:
+      - scripts/image-tags.sh --check
+      - scripts/image-build.sh
+  image:verify:
+    desc: Verify image tags/labels are consistent (needs local docker daemon or skips)
+    deps: [image:check-modules]
+    vars:
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
+    env:
+      KO_DOCKER_REPO: '{{.KO_DOCKER_REPO}}'
+      IMAGE_TAGS: '{{.IMAGE_TAGS}}'
+    cmds:
+      - scripts/image-tags.sh --check
+      - scripts/image-verify.sh
+  image:load-kind:
+    desc: Load locally-built images into kind (KIND_CLUSTER=kcp-capi-smoke)
+    vars:
+      KIND_CLUSTER: '{{.KIND_CLUSTER | default "kcp-capi-smoke"}}'
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
+    env:
+      KO_DOCKER_REPO: '{{.KO_DOCKER_REPO}}'
+      KIND_CLUSTER: '{{.KIND_CLUSTER}}'
+      IMAGE_TAGS: '{{.IMAGE_TAGS}}'
+    cmds:
+      - scripts/image-load-kind.sh
   docs:build:
     desc: Build the documentation site
     dir: docs/site

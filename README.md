@@ -41,6 +41,12 @@ is reconciled. Prerequisites, the other providers, and webhooks are in
 workspace onto the providers is
 [Onboarding](docs/site/content/en/docs/user/onboarding.md).
 
+## Container images
+
+Published to `ghcr.io/jimmidyson/` (flat, hyphen-separated) — 6 images: `kcp-capi-core`, `kcp-capi-kubeadm-bootstrap`, `kcp-capi-kubeadm-control-plane`, `kcp-capi-nutanix-infrastructure`, `kcp-capi-workspace`, `kcp-capi-dev-infrastructure`. Tags per release: `vX.Y.Z` (deploy pin), `vX.Y.Z-capi-v1.15.0-kcp.13` (provenance), `v1.15.0-kcp.13` (fork alias) — all same digest; on `main`: `main` + `sha-<short>`. See contract `specs/20261030-111900-kcp-capi-image-publishing/contracts/tag-schema.md`.
+
+Local build: `task image:build` → `ko.local/kcp-capi-*:local` (no GHCR creds).
+
 ## Documentation
 
 - [User docs](https://jimmidyson.github.io/kcp-cluster-api/docs/user/) — install, run, onboard a workspace.

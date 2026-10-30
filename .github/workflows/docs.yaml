@@ -38,17 +38,14 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: jetify-com/devbox-install-action@v0.14.0
         with:
-          go-version-file: go.mod
-
-      - name: Install task
-        run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          enable-cache: true
 
       # The build itself lives in a task target, so `task docs:build`
       # reproduces CI locally (FR-014).
       - name: Build site
-        run: task docs:build
+        run: devbox run -- task docs:build
 
       # Uploaded on pull requests too, so what publishes on merge is the
       # artefact a reviewer's run already produced, not a differently built
