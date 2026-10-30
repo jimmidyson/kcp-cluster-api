@@ -88,6 +88,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
+      - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
+      - uses: docker/setup-buildx-action@e468171a13893785b0fa2da75f3b02e8e1f74fb32 # v3.11.1
       - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039 # v3.5.0
         with:
           registry: ghcr.io
@@ -123,9 +125,10 @@ jobs:
           image="${{ matrix.image }}"
           importpath="${{ matrix.importpath }}"
           # Tag matrix (T003/T017-T018): repoTag + longTag + forkTag; provider vs root differ.
+          # forkTag uses oci-sanitized values (+→-) so OCI tag charset never violated.
           if [[ "$image" == "kcp-capi-nutanix-infrastructure" ]]; then
             long="${repo_ver}-capx-${capx_oci}-capi-${capi_oci}"
-            tags="${repo_ver},${long},${capx_ver}"
+            tags="${repo_ver},${long},${capx_oci}"
             labels="$common,io.kcp-capi.capx-version=$capx_ver"
           else
             long="${repo_ver}-capi-${capi_oci}"
@@ -170,6 +173,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
+      - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
+      - uses: docker/setup-buildx-action@e468171a13893785b0fa2da75f3b02e8e1f74fb32 # v3.11.1
       - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039
         with:
           registry: ghcr.io
