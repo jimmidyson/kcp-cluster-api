@@ -246,8 +246,8 @@ github.com/kcp-dev/apimachinery/v2 v2.33.3 h1:hiv6thtQR+g4O3TlIYlf62nNhBVI4MKE8P
 github.com/kcp-dev/apimachinery/v2 v2.33.3/go.mod h1:1Rkhiwoq345wlUYtq1/P+3chL2eE1rdoIgBPwb6Y9x8=
 github.com/kcp-dev/logicalcluster/v3 v3.0.5 h1:JbYakokb+5Uinz09oTXomSUJVQsqfxEvU4RyHUYxHOU=
 github.com/kcp-dev/logicalcluster/v3 v3.0.5/go.mod h1:EWBUBxdr49fUB1cLMO4nOdBWmYifLbP1LfoL20KkXYY=
-github.com/kcp-dev/sdk v0.33.1 h1:VTPUc0X5b1q0J0Sp881cDSBH/fpW+H7EGNqrKPExDsM=
-github.com/kcp-dev/sdk v0.33.1/go.mod h1:zr3pC17BMpMBv2WWEYKlv6VJgM23EVidhS1PH/u1Jco=
+github.com/kcp-dev/sdk v0.33.3 h1:55xePo07cZvrS5XtDKCmoXUOryB06+xr1MQ3jmrEShc=
+github.com/kcp-dev/sdk v0.33.3/go.mod h1:uwXWP65d5t/+hRtcG32XHtRs+beqUeBo1kwCHYEi3zg=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/compress v1.19.0 h1:sXLILfc9jV2QYWkzFOPWStmcUVH2RHEB1JCdY2oVvCQ=
 github.com/klauspost/compress v1.19.0/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=

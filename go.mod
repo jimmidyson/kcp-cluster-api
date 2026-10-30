@@ -8,7 +8,7 @@ require (
 	github.com/kcp-dev/apimachinery/v2 v2.33.3
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5
 	github.com/kcp-dev/multicluster-provider v0.8.0
-	github.com/kcp-dev/sdk v0.33.1
+	github.com/kcp-dev/sdk v0.33.3
 	github.com/moby/moby/client v0.6.2
 	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v1.11.0-dev.1
 	github.com/onsi/gomega v1.44.0
