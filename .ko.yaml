@@ -1,5 +1,13 @@
 # ko build config — one entry per published image.
 #
+# Image naming (T012): ko's Config has no `image` field — verified via
+# ko/pkg/build/config.go: the image name comes from KO_DOCKER_REPO, not
+# .ko.yaml. With --bare, KO_DOCKER_REPO is the full image name; without it,
+# ko appends an importpath-derived suffix. This project uses per-image
+# KO_DOCKER_REPO (e.g. ko.local/kcp-capi-core, ghcr.io/jimmidyson/kcp-capi-core)
+# with --bare, so each importpath maps to a distinct ghcr.io/jimmidyson/kcp-capi-*
+# repo. See Taskfile image:build and .github/workflows/publish-images.yaml.
+#
 # Extensibility (T026 / FR-009, research R6): adding a provider is one new
 # `builds` entry here:
 #   - id: kcp-capi-<name>
@@ -12,6 +20,13 @@
 # Taskfile image:build to run ko once per PROVIDER_MODULES entry (see R6).
 #
 # Per research R2, no `defaultBaseImage` override: ko's Wolfi default is used.
+#
+# Smoke (T016): ko build --push=false produces an image whose entrypoint is the
+# manager binary (e.g. kcp-capi-core responds to --help). Local verification is
+# `task image:verify` (checks labels without a push) and, where docker is
+# available, `docker run --rm <image> --help`. CI cannot push to GHCR without
+# creds; the publish workflow does the real push on tag/main. No registry push
+# is required to validate --help locally — the binary is the same.
 builds:
   - id: kcp-capi-core
     main: ./cmd/core-manager

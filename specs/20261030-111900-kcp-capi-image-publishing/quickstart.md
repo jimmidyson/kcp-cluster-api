@@ -107,3 +107,25 @@ task image:verify   # tag derivation includes the new provider's upstream
 | `ghcr.io/jimmidyson/kcp-capi-core:vX.Y.Z` pull | same digest as `:vX.Y.Z-capi-…` and `:<forkTag>`; labels show correct pin |
 | Adding fixture provider | ≤4 doc edits, `task build` + `task image:build` pick it up, no redesign |
 | Existing `v0.1.0` / `bootstrap-sha` | `git tag --list` still shows them; `go get ...@v0.1.0` resolves |
+
+## Validation gaps (T038)
+
+Checked 2026-10-30 on this worktree (no docker daemon in this env):
+
+- §1 `task image:build`/`image:verify`/`scripts/image-tags.sh --check` pass offline
+  (no registry auth, `KO_DOCKER_REPO=ko.local`); platform override
+  `KO_PLATFORMS=linux/amd64,linux/arm64` requires docker — documented as CI-only
+  multi-arch in Taskfile vars and AGENTS#Image tasks.
+- §2 `task image:load-kind` / `kind load docker-image` validated dry-run only
+  (no kind/k8s cluster in review env); helper is `task image:load-kind`
+  (`KIND_CLUSTER=kcp-capi-smoke`), manual form in `AGENTS.md`/`Taskfile.yaml`.
+- §3 Multi-workspace fleet: requires live kcp host cluster; covered by
+  `task verify` integration suite, not re-run in docs validation. When kcp
+  binary absent, verify reports `could not run` (see Tag schema § Verification).
+- §4 CI publish: `publish-images.yaml` `packages: write` set on both jobs; no live
+  GHCR push in docs pass. Branch tags `main`/`sha-<short>` handled by
+  `publish-branch` job; release tags handled by `publish-tag`.
+- §5 Adding provider: contract (4 edits) documented in `Taskfile.yaml` vars header
+  and `AGENTS.md`; live fixture run requires docker — skip when absent.
+
+No gaps that would require reopening sections 1–5.

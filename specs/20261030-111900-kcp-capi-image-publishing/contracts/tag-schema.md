@@ -103,3 +103,40 @@ Verification:
 ```
 
 Invariants: `include-component-in-tag` stays `false` (Go `path/vX.Y.Z` form); `bootstrap-sha` and `initial-version` are untouched (FR-010).
+
+## Edge case: mismatched Go tags (T037)
+
+`providers/nutanix-infrastructure/go.mod` has `replace kcp-cluster-api => ../..`, so
+`providers/nutanix-infrastructure/vX.Y.Z` and `vX.Y.Z` (root) must be created at the
+**same commit** (FR-006). Building from a commit that has only one of the two tags —
+e.g. checked out at `v0.2.0` but `providers/nutanix-infrastructure/v0.2.0` missing —
+must fail loudly, not resolve a stale dependency. Enforcement:
+
+- `release-please` creates both tags atomically on merge of the release PR; out-of-band
+  tag creation is not supported.
+- `scripts/image-tags.sh --check` derives `CAPI_VERSION`/`CAPX_VERSION` from `go list -m`
+  at that commit; a checkout missing the provider tag will have its `go.mod` replace
+  pointing at a non-existent version and `go list -m` will error, causing `--check`
+  (and thus `task image:build`/`image:verify`) to fail.
+- `task image:check-modules` ensures `PROVIDER_MODULES` covers all provider modules;
+  an untagged module without a `task drift` entry is flagged.
+
+## Verification expectations (T036)
+
+- `task drift` must pass after dual-package changes (preserves `bootstrap-sha`
+  `281e4e3ed2af1d6852651d69e1207a3073b478c2`, `initial-version` `0.1.0`,
+  `bump-minor-pre-major: true`; adds `providers/nutanix-infrastructure` package).
+  Existing `v0.1.0` tag history remains resolvable.
+- `task verify` (and `task check`) remain green; image publish does not add a
+  required verify step. `image:verify`'s label inspection is skipped when no
+  docker/buildah/podman daemon is present (documented as a CI-only assertion
+  in `.github/workflows/publish-images.yaml`); this is not a "could not run"
+  that weakens `task verify` — it is a separate task.
+- In envs without a `kcp` fixture (e.g. `go test -tags=integration` skipped),
+  `task verify`/`task check` may report `could not run` for container-runtime
+  steps — this is **not** a failure; document the skip and record the
+  `bin/verify-result.json` outcome. See `AGENTS.md#Done is a command`.
+
+Gaps recorded during `quickstart.md` §3–§5 validation are listed in
+`specs/20261030-111900-kcp-capi-image-publishing/quickstart.md` under
+`## Validation gaps` (added during T038).

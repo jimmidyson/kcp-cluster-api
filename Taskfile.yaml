@@ -29,7 +29,13 @@ vars:
   # stay in sync with this list; a module here without a drift entry is
   # unchecked, which the drift task's comment flags (T024).
   PROVIDER_MODULES: providers/nutanix-infrastructure
-  # Image defaults (T029/T030): ko.local locally (no GHCR creds), ghcr.io/jimmidyson in CI.
+  # Image defaults (T029/T030): local vs CI.
+  # KO_DOCKER_REPO defaults to ko.local locally (no GHCR creds, T029) - override to
+  # ghcr.io/jimmidyson for publish. KO_PLATFORMS defaults to linux/amd64 locally for
+  # speed (single-platform); set KO_PLATFORMS=linux/amd64,linux/arm64 for multi-arch
+  # parity (e.g. `task image:build KO_PLATFORMS=linux/amd64,linux/arm64`). CI
+  # publish-images.yaml builds linux/amd64,linux/arm64 unconditionally. Documented
+  # further in the image:build task description and quickstart.md §1.
   IMAGE_REGISTRY: '{{.IMAGE_REGISTRY | default "ghcr.io/jimmidyson"}}'
   IMAGE_REPO_PREFIX: '{{.IMAGE_REPO_PREFIX | default "kcp-capi"}}'
   KO_DOCKER_REPO: '{{.KO_DOCKER_REPO | default "ko.local"}}'
@@ -618,6 +624,20 @@ tasks:
 
   image:build:
     desc: Build all 6 images locally with ko (no GHCR creds; KO_DOCKER_REPO=ko.local)
+    # T014: labels are injected via --image-label (Taskfile var), not .ko.yaml `labels:`.
+    # Research R4 showed .ko.yaml `labels:` is static while --image-label is per-invocation
+    # and can be derived from `go list -m` at task time — matching the versions embedded
+    # in longTag. ko supports both mechanisms; Taskfile var is chosen so labels stay
+    # mechanically coupled to tags (labels == tag-embedded versions). The six required
+    # labels are: org.opencontainers.image.{version,revision,source} on all images, plus
+    # io.kcp-capi.{capi-version,k8s-version,capi-base} on all and io.kcp-capi.capx-version
+    # on Nutanix (see cmds). Verified via docker inspect in image:verify.
+    # T016 smoke: ko build --push=false produces an image whose entrypoint responds to
+    # --help; record expected behaviour here since CI-less env cannot push to registry.
+    # Entry-point smoke is a `docker run --rm < image> --help` check on the locally
+    # built image; label presence is checked by image:verify.
+    # T030: KO_PLATFORMS defaults to linux/amd64 (single-arch, fast locally). Override
+    # with KO_PLATFORMS=linux/amd64,linux/arm64 for multi-arch parity testing.
     deps: [image:check-modules]
     vars:
       IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
@@ -649,12 +669,16 @@ tasks:
         rev="$(git rev-parse HEAD 2>/dev/null || echo dev)"
         repo_ver="$(./scripts/image-tags.sh --repo-version 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0-dev)"
         common="org.opencontainers.image.source=https://github.com/jimmidyson/kcp-cluster-api,org.opencontainers.image.revision=$rev,org.opencontainers.image.version=$repo_ver,io.kcp-capi.capi-version=$capi_ver,io.kcp-capi.k8s-version=$k8s_ver,io.kcp-capi.capi-base=$base"
-        KO_DOCKER_REPO="$repo" ko build --bare $plat_flag --tags "$tag" \
-          --image-label "$common" \
-          ./cmd/core-manager ./cmd/kubeadm-bootstrap-manager ./cmd/kubeadm-control-plane-manager ./cmd/workspace-manager ./cmd/dev-infrastructure-manager
+        # Build root images one by one so each gets its own KO_DOCKER_REPO (with --bare,
+        # KO_DOCKER_REPO is the full image name; 5 importpaths to one repo would collide).
+        for imp in ./cmd/core-manager ./cmd/kubeadm-bootstrap-manager ./cmd/kubeadm-control-plane-manager ./cmd/workspace-manager ./cmd/dev-infrastructure-manager; do
+          name="$(basename "$imp" | sed 's/-manager$//')"
+          KO_DOCKER_REPO="$repo/kcp-capi-$name" ko build --bare $plat_flag --tags "$tag" \
+            --image-label "$common" "$imp"
+        done
         capx_json="$(go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
         capx_ver="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version','') or d.get('Version',''))" 2>/dev/null || go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
-        KO_DOCKER_REPO="$repo" ko build --bare $plat_flag --tags "$tag" \
+        KO_DOCKER_REPO="$repo/kcp-capi-nutanix-infrastructure" ko build --bare $plat_flag --tags "$tag" \
           --image-label "$common,io.kcp-capi.capx-version=$capx_ver" \
           ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager
         echo "Done. Verify: docker images | grep kcp-capi  (expect 6 ko.local/kcp-capi-*:local)"
@@ -662,6 +686,8 @@ tasks:
   image:verify:
     desc: Verify image tags/labels are consistent (needs local docker daemon or skips)
     deps: [image:check-modules]
+    vars:
+      IMAGE_TAGS: '{{.IMAGE_TAGS | default "local"}}'
     cmds:
       - scripts/image-tags.sh --check
       - |
@@ -679,6 +705,8 @@ tasks:
         capx_long="${repo_ver}-capx-${capx_oci}-capi-${capi_oci}"
         echo "Expected: CAPI=$capi_ver ($capi_oci) CAPX=$capx_ver K8S=$k8s_ver base=$base"
         echo "Tags: repo=$repo_ver root_long=$root_long capx_long=$capx_long"
+        tag="{{.IMAGE_TAGS}}"
+        # T032 manifest note: local = ko.local/kcp-capi-*:local, published = ghcr.io/jimmidyson/kcp-capi-*:vX.Y.Z (same flags/APIExports).
         case "$root_long" in *"-capi-$capi_oci") echo "OK: longTag capi segment matches label" ;; *) echo "FAIL: longTag capi segment mismatch" >&2; exit 1 ;; esac
         case "$capx_long" in *"-capi-$capi_oci") echo "OK: capx longTag capi segment matches" ;; *) echo "FAIL: capx longTag capi mismatch" >&2; exit 1 ;; esac
         tool=""
@@ -692,6 +720,7 @@ tasks:
           exit 0
         fi
         echo "Using $tool for inspection"
+        outer_tag="{{.IMAGE_TAGS}}"
         failures=0
         # Use docker inspect without Go template format (avoids Taskfile brace collision);
         # parse JSON output directly via python.
@@ -705,18 +734,15 @@ tasks:
         }
         check_image() {
           local imp="$1" exp_capi="$2" exp_long="$3" extra_key="$4" extra_val="$5"
-          local tag="{{.IMAGE_TAGS}}"
           local ref=""
-          for cand in "ko.local:$tag" "{{.KO_DOCKER_REPO}}:$tag" "{{.KO_DOCKER_REPO}}/${imp##*/}:$tag"; do
-            if [ "$tool" = "buildah" ]; then
-              buildah images --format "$(printf '{{.Name}}:{{.Tag}}')" 2>/dev/null | grep -q "$cand" && ref="$cand" && break
-            else
-              $tool images --format '$(printf '{{.Repository}}:{{.Tag}}')' 2>/dev/null | grep -qF "$cand" && ref="$cand" && break
-              $tool image inspect "$cand" >/dev/null 2>&1 && ref="$cand" && break
-            fi
+          # Temporarily disable errexit for the probe loop (inspect fails when image not yet built — expected).
+          set +e
+          for cand in "ko.local:$outer_tag" "{{.KO_DOCKER_REPO}}:$outer_tag" "{{.KO_DOCKER_REPO}}/${imp##*/}:$outer_tag"; do
+            $tool image inspect "$cand" >/dev/null 2>&1 && ref="$cand" && break
           done
+          set -e
           if [ -z "$ref" ]; then
-            echo "  WARN: image for $imp not found (tag $tag) — run image:build first"
+            echo "  WARN: image for $imp not found (tag $outer_tag) — run image:build first"
             $tool images 2>/dev/null | head -20 || true
             echo "  SKIPPED: $imp not found locally"
             return 0

@@ -1,0 +1,206 @@
+name: publish-images
+
+# Publish the 6 ko-built images to GHCR (T015/T035).
+# Triggers: release tags (from release-please) and pushes to main.
+# Local builds (task image:build, KO_DOCKER_REPO=ko.local) never need GHCR creds (T029).
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege; jobs that push elevate via `packages: write` (T035).
+permissions:
+  contents: read
+
+jobs:
+  derive-tags:
+    name: derive tags
+    runs-on: ubuntu-latest
+    outputs:
+      repo_version: ${{ steps.tags.outputs.repo_version }}
+      capi_version: ${{ steps.tags.outputs.capi_version }}
+      capx_version: ${{ steps.tags.outputs.capx_version }}
+      k8s_version: ${{ steps.tags.outputs.k8s_version }}
+      capi_base: ${{ steps.tags.outputs.capi_base }}
+      capi_oci: ${{ steps.tags.outputs.capi_oci }}
+      capx_oci: ${{ steps.tags.outputs.capx_oci }}
+      git_sha: ${{ steps.tags.outputs.git_sha }}
+      short_sha: ${{ steps.tags.outputs.short_sha }}
+      ref_name: ${{ steps.tags.outputs.ref_name }}
+      ref_type: ${{ steps.tags.outputs.ref_type }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - id: tags
+        run: |
+          set -euo pipefail
+          scripts/image-tags.sh --check
+          scripts/image-tags.sh --gha-output
+          # Record ref classification for the publish matrix (tag vs branch).
+          ref="${GITHUB_REF_NAME:-}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "ref_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "ref_type=tag" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            echo "ref_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
+            echo "ref_type=branch" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
+            echo "ref_type=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish-tag:
+    name: publish (${{ matrix.image }})
+    needs: [derive-tags]
+    if: needs.derive-tags.outputs.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: kcp-capi-core
+            importpath: ./cmd/core-manager
+          - image: kcp-capi-kubeadm-bootstrap
+            importpath: ./cmd/kubeadm-bootstrap-manager
+          - image: kcp-capi-kubeadm-control-plane
+            importpath: ./cmd/kubeadm-control-plane-manager
+          - image: kcp-capi-workspace
+            importpath: ./cmd/workspace-manager
+          - image: kcp-capi-dev-infrastructure
+            importpath: ./cmd/dev-infrastructure-manager
+          - image: kcp-capi-nutanix-infrastructure
+            importpath: ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install ko
+        run: go install github.com/google/ko@v0.19.1
+      - name: Validate tags
+        run: scripts/image-tags.sh --check
+      - name: Build and push ${{ matrix.image }}
+        env:
+          # KO_DOCKER_REPO is set per-image in the run step (matrix.image)
+          REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
+          CAPI_VERSION: ${{ needs.derive-tags.outputs.capi_version }}
+          CAPX_VERSION: ${{ needs.derive-tags.outputs.capx_version }}
+          K8S_VERSION: ${{ needs.derive-tags.outputs.k8s_version }}
+          CAPI_BASE: ${{ needs.derive-tags.outputs.capi_base }}
+          CAPI_OCI: ${{ needs.derive-tags.outputs.capi_oci }}
+          CAPX_OCI: ${{ needs.derive-tags.outputs.capx_oci }}
+          GIT_SHA: ${{ needs.derive-tags.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+          repo_ver="$REPO_VERSION"
+          capi_ver="$CAPI_VERSION"
+          capi_oci="$CAPI_OCI"
+          capx_ver="$CAPX_VERSION"
+          capx_oci="$CAPX_OCI"
+          k8s_ver="$K8S_VERSION"
+          base="$CAPI_BASE"
+          sha="$GIT_SHA"
+          common="org.opencontainers.image.source=https://github.com/jimmidyson/kcp-cluster-api,org.opencontainers.image.revision=$sha,org.opencontainers.image.version=$repo_ver,io.kcp-capi.capi-version=$capi_ver,io.kcp-capi.k8s-version=$k8s_ver,io.kcp-capi.capi-base=$base"
+          imp="${{ matrix.image }}"
+          image="${{ matrix.image }}"
+          importpath="${{ matrix.importpath }}"
+          # Tag matrix (T003/T017-T018): repoTag + longTag + forkTag; provider vs root differ.
+          if [[ "$image" == "kcp-capi-nutanix-infrastructure" ]]; then
+            long="${repo_ver}-capx-${capx_oci}-capi-${capi_oci}"
+            tags="${repo_ver},${long},${capx_ver}"
+            labels="$common,io.kcp-capi.capx-version=$capx_ver"
+          else
+            long="${repo_ver}-capi-${capi_oci}"
+            tags="${repo_ver},${long},${capi_oci}"
+            labels="$common"
+          fi
+          # KO_DOCKER_REPO per image: with --bare, KO_DOCKER_REPO is the full image name (no suffix).
+          KO_DOCKER_REPO="ghcr.io/jimmidyson/${image}"
+          echo "Publishing $image ($importpath) -> $KO_DOCKER_REPO with tags: $tags"
+          KO_DOCKER_REPO="$KO_DOCKER_REPO" ko build --bare --push --platform=linux/amd64,linux/arm64 \
+            --tags "$tags" --image-label "$labels" "$importpath"
+
+  publish-branch:
+    name: publish branch (${{ matrix.image }} :main/:sha)
+    needs: [derive-tags]
+    if: needs.derive-tags.outputs.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: kcp-capi-core
+            importpath: ./cmd/core-manager
+          - image: kcp-capi-kubeadm-bootstrap
+            importpath: ./cmd/kubeadm-bootstrap-manager
+          - image: kcp-capi-kubeadm-control-plane
+            importpath: ./cmd/kubeadm-control-plane-manager
+          - image: kcp-capi-workspace
+            importpath: ./cmd/workspace-manager
+          - image: kcp-capi-dev-infrastructure
+            importpath: ./cmd/dev-infrastructure-manager
+          - image: kcp-capi-nutanix-infrastructure
+            importpath: ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: docker/login-action@18f68fae49f0d5b87b9ff1d335ce0821ad4a039
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install ko
+        run: go install github.com/google/ko@v0.19.1
+      - name: Validate tags
+        run: scripts/image-tags.sh --check
+      - name: Build and push ${{ matrix.image }} (:main, :sha-<short>)
+        env:
+          # KO_DOCKER_REPO is set per-image in the run step (matrix.image)
+          REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
+          CAPI_VERSION: ${{ needs.derive-tags.outputs.capi_version }}
+          CAPX_VERSION: ${{ needs.derive-tags.outputs.capx_version }}
+          K8S_VERSION: ${{ needs.derive-tags.outputs.k8s_version }}
+          CAPI_BASE: ${{ needs.derive-tags.outputs.capi_base }}
+          GIT_SHA: ${{ needs.derive-tags.outputs.git_sha }}
+          SHORT_SHA: ${{ needs.derive-tags.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          capi_ver="$CAPI_VERSION"; k8s_ver="$K8S_VERSION"; base="$CAPI_BASE"; sha="$GIT_SHA"; short="$SHORT_SHA"
+          common="org.opencontainers.image.source=https://github.com/jimmidyson/kcp-cluster-api,org.opencontainers.image.revision=$sha,org.opencontainers.image.version=main,io.kcp-capi.capi-version=$capi_ver,io.kcp-capi.k8s-version=$k8s_ver,io.kcp-capi.capi-base=$base"
+          importpath="${{ matrix.importpath }}"
+          image="${{ matrix.image }}"
+          if [[ "$image" == "kcp-capi-nutanix-infrastructure" ]]; then
+            common="$common,io.kcp-capi.capx-version=$CAPX_VERSION"
+          fi
+          tags="main,sha-${short}"
+          # KO_DOCKER_REPO per image: with --bare, KO_DOCKER_REPO is the full image name (no suffix).
+          KO_DOCKER_REPO="ghcr.io/jimmidyson/${image}"
+          echo "Publishing $image ($importpath) -> $KO_DOCKER_REPO with tags: $tags"
+          KO_DOCKER_REPO="$KO_DOCKER_REPO" ko build --bare --push --platform=linux/amd64,linux/arm64 \
+            --tags "$tags" --image-label "$common" "$importpath"

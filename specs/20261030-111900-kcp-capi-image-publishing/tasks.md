@@ -20,10 +20,10 @@
 
 **Purpose**: Add build tooling and config skeleton that all later work depends on
 
-- [ ] T001 Add `ko` to `devbox.json` with pinned version per research R7 in `devbox.json`
-- [ ] T002 Create root `.ko.yaml` with `builds` entries mapping 5 root images (`cmd/core-manager`, `cmd/kubeadm-bootstrap-manager`, `cmd/kubeadm-control-plane-manager`, `cmd/workspace-manager`, `cmd/dev-infrastructure-manager`) to `ghcr.io/jimmidyson/kcp-capi-*` in `.ko.yaml`
-- [ ] T003 Create root `.ko.yaml` build entry for Nutanix provider image (`providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager` → `ghcr.io/jimmidyson/kcp-capi-nutanix-infrastructure`) in `.ko.yaml`, verifying ko can resolve nested-module importpaths from the root context (spike: `ko build --dry-run` or `--push=false`)
-- [ ] T004 Create `scripts/image-tags.sh` with shebang, error handling (`set -euo pipefail`), and derivation logic reading `REPO_VERSION` from `git describe`, `CAPI_VERSION`/`CAPX_VERSION`/`K8S_VERSION` from `go list -m -json` (with `+`→`-` sanitization), and `CAPI_BASE` from `DRIFT.md`, plus OCI tag regex validation in `scripts/image-tags.sh`
+- [x] T001 Add `ko` to `devbox.json` with pinned version per research R7 in `devbox.json`
+- [x] T002 Create root `.ko.yaml` with `builds` entries mapping 5 root images (`cmd/core-manager`, `cmd/kubeadm-bootstrap-manager`, `cmd/kubeadm-control-plane-manager`, `cmd/workspace-manager`, `cmd/dev-infrastructure-manager`) to `ghcr.io/jimmidyson/kcp-capi-*` in `.ko.yaml`
+- [x] T003 Create root `.ko.yaml` build entry for Nutanix provider image (`providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager` → `ghcr.io/jimmidyson/kcp-capi-nutanix-infrastructure`) in `.ko.yaml`, verifying ko can resolve nested-module importpaths from the root context (spike: `ko build --dry-run` or `--push=false`)
+- [x] T004 Create `scripts/image-tags.sh` with shebang, error handling (`set -euo pipefail`), and derivation logic reading `REPO_VERSION` from `git describe`, `CAPI_VERSION`/`CAPX_VERSION`/`K8S_VERSION` from `go list -m -json` (with `+`→`-` sanitization), and `CAPI_BASE` from `DRIFT.md`, plus OCI tag regex validation in `scripts/image-tags.sh`
 
 ---
 
@@ -33,13 +33,13 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 Update `release-please-config.json` to declare second package `providers/nutanix-infrastructure` with `include-component-in-tag: false` per research R3 in `release-please-config.json`
-- [ ] T006 Update `.release-please-manifest.json` to add second key `"providers/nutanix-infrastructure": "0.1.0"` in `.release-please-manifest.json`
-- [ ] T007 Add `image:build` task to `Taskfile.yaml` that sets `KO_DOCKER_REPO=ko.local` and runs `ko build --bare` for all 6 images with `--tags local` (or `sha-<short>`), iterating `PROVIDER_MODULES` for provider images in `Taskfile.yaml`
-- [ ] T008 Add `image:verify` task to `Taskfile.yaml` that asserts: (a) every image's `io.kcp-capi.capi-version` label equals `go list -m sigs.k8s.io/cluster-api` version, (b) long-tag `-capi-` segment matches label, (c) no tag contains `+`, (d) `image-tags.sh --check` passes in `Taskfile.yaml`
-- [ ] T009 Extend `scripts/image-tags.sh` with `--check` mode (validate all derived tags against OCI regex, no `+`, length < 128, exit non-zero on violation) and `--gha-output` mode (write `tags`, `capi_version`, `capx_version`, etc. to `GITHUB_OUTPUT`) in `scripts/image-tags.sh`
-- [ ] T010 Add check that `PROVIDER_MODULES` covers all `providers/*/go.mod` directories — fail CI if a nested module exists outside the list in `Taskfile.yaml` (new task `image:check-modules` or extension to existing `check` task)
-- [ ] T011 Verify `task release-please -- --dry-run` includes both packages and would create `vX.Y.Z` + `providers/nutanix-infrastructure/vX.Y.Z` at the same commit (manual or CI validation step)
+- [x] T005 Update `release-please-config.json` to declare second package `providers/nutanix-infrastructure` with `include-component-in-tag: false` per research R3 in `release-please-config.json`
+- [x] T006 Update `.release-please-manifest.json` to add second key `"providers/nutanix-infrastructure": "0.1.0"` in `.release-please-manifest.json`
+- [x] T007 Add `image:build` task to `Taskfile.yaml` that sets `KO_DOCKER_REPO=ko.local` and runs `ko build --bare` for all 6 images with `--tags local` (or `sha-<short>`), iterating `PROVIDER_MODULES` for provider images in `Taskfile.yaml`
+- [x] T008 Add `image:verify` task to `Taskfile.yaml` that asserts: (a) every image's `io.kcp-capi.capi-version` label equals `go list -m sigs.k8s.io/cluster-api` version, (b) long-tag `-capi-` segment matches label, (c) no tag contains `+`, (d) `image-tags.sh --check` passes in `Taskfile.yaml`
+- [x] T009 Extend `scripts/image-tags.sh` with `--check` mode (validate all derived tags against OCI regex, no `+`, length < 128, exit non-zero on violation) and `--gha-output` mode (write `tags`, `capi_version`, `capx_version`, etc. to `GITHUB_OUTPUT`) in `scripts/image-tags.sh`
+- [x] T010 Add check that `PROVIDER_MODULES` covers all `providers/*/go.mod` directories — fail CI if a nested module exists outside the list in `Taskfile.yaml` (new task `image:check-modules` or extension to existing `check` task)
+- [x] T011 Verify `task release-please -- --dry-run` includes both packages and would create `vX.Y.Z` + `providers/nutanix-infrastructure/vX.Y.Z` at the same commit (manual or CI validation step)
 
 **Checkpoint**: Foundation ready — `task image:build` and `task image:verify` are actionable; versioning is dual-package; user story work can begin
 
@@ -51,11 +51,11 @@
 
 **Independent Test**: Pull 6 images from GHCR at a release tag, deploy via sample manifests against a kcp-backed cluster with APIExports published, create ClusterClass + Cluster in two workspaces, assert both reach `Available` and Machines provision (see quickstart.md §3)
 
-- [ ] T012 [P] [US1] Verify `.ko.yaml` builds produce runnable entrypoints for all 6 managers — confirm each `cmd/*/main.go` `package main` builds via `KO_DOCKER_REPO=ko.local ko build --bare --push=false` without error in `.ko.yaml` and respective `cmd/*/main.go`
-- [ ] T013 [US1] Implement `scripts/image-tags.sh` derivation for all 6 images — per-image tag sets: `repoTag` (`vX.Y.Z`), `longTag` (`vX.Y.Z-capi-…` for root, `vX.Y.Z-capx-…-capi-…` for Nutanix), `forkTag` (for root: CAPI fork, for Nutanix: CAPX fork) in `scripts/image-tags.sh`
-- [ ] T014 [P] [US1] Add `--image-label` passthrough for `org.opencontainers.image.version`, `org.opencontainers.image.revision`, `org.opencontainers.image.source`, `io.kcp-capi.capi-version`, `io.kcp-capi.k8s-version`, `io.kcp-capi.capi-base` (all images) and `io.kcp-capi.capx-version` (Nutanix) to Taskfile image tasks in `Taskfile.yaml`
-- [ ] T015 [US1] Create `.github/workflows/publish-images.yaml` — trigger on `push: tags: ['v*']` (release) and `push: branches: [main]`, login via `docker/login-action`, derive tags via `scripts/image-tags.sh --gha-output`, run `ko build --bare --push --platform=linux/amd64,linux/arm64` for each image with 3-alias tag matrix (release) or `:main`/`:sha-*` (main branch) in `.github/workflows/publish-images.yaml`
-- [ ] T016 [US1] Validate published images are deployment-ready — smoke test that each image's entrypoint responds to `--help`/`--version` flags and that `org.opencontainers.image.*` labels are present via `docker inspect` in `scripts/image-tags.sh` or `Taskfile.yaml` (`image:verify` extension)
+- [x] T012 [P] [US1] Verify `.ko.yaml` builds produce runnable entrypoints for all 6 managers — confirm each `cmd/*/main.go` `package main` builds via `KO_DOCKER_REPO=ko.local ko build --bare --push=false` without error in `.ko.yaml` and respective `cmd/*/main.go`
+- [x] T013 [US1] Implement `scripts/image-tags.sh` derivation for all 6 images — per-image tag sets: `repoTag` (`vX.Y.Z`), `longTag` (`vX.Y.Z-capi-…` for root, `vX.Y.Z-capx-…-capi-…` for Nutanix), `forkTag` (for root: CAPI fork, for Nutanix: CAPX fork) in `scripts/image-tags.sh`
+- [x] T014 [P] [US1] Add `--image-label` passthrough for `org.opencontainers.image.version`, `org.opencontainers.image.revision`, `org.opencontainers.image.source`, `io.kcp-capi.capi-version`, `io.kcp-capi.k8s-version`, `io.kcp-capi.capi-base` (all images) and `io.kcp-capi.capx-version` (Nutanix) to Taskfile image tasks in `Taskfile.yaml`
+- [x] T015 [US1] Create `.github/workflows/publish-images.yaml` — trigger on `push: tags: ['v*']` (release) and `push: branches: [main]`, login via `docker/login-action`, derive tags via `scripts/image-tags.sh --gha-output`, run `ko build --bare --push --platform=linux/amd64,linux/arm64` for each image with 3-alias tag matrix (release) or `:main`/`:sha-*` (main branch) in `.github/workflows/publish-images.yaml`
+- [x] T016 [US1] Validate published images are deployment-ready — smoke test that each image's entrypoint responds to `--help`/`--version` flags and that `org.opencontainers.image.*` labels are present via `docker inspect` in `scripts/image-tags.sh` or `Taskfile.yaml` (`image:verify` extension)
 
 **Checkpoint**: User Story 1 complete — `task image:build` produces 6 GHCR-ready images that deploy as KCP-aware managers and together deliver ready clusters
 
@@ -67,12 +67,12 @@
 
 **Independent Test**: `docker pull ghcr.io/jimmidyson/kcp-capi-core:v0.2.0` and verify: 3 OCI tags share same digest, labels match `go list -m sigs.k8s.io/cluster-api`, long-tag suffix equals label with `+`→`-`
 
-- [ ] T017 [P] [US2] Implement root-image long-tag format `vX.Y.Z-capi-<capiVersion>` derived from `go list -m sigs.k8s.io/cluster-api` with `+`→`-` sanitization in `scripts/image-tags.sh`
-- [ ] T018 [P] [US2] Implement Nutanix-image tags: `vX.Y.Z-capx-<capxVersion>-capi-<capiVersion>` and fork-alias `v1.11.0-kcp.3`, derived from `go list -m` inside `providers/nutanix-infrastructure` for CAPX version in `scripts/image-tags.sh`
-- [ ] T019 [US2] Ensure `io.kcp-capi.capi-version`, `io.kcp-capi.k8s-version`, `io.kcp-capi.capi-base`, `io.kcp-capi.capx-version` labels are injected via `ko --image-label` per image and match the tag-embedded versions in `Taskfile.yaml` and `.ko.yaml`
-- [ ] T020 [US2] Add `scripts/image-tags.sh --check` validation that every tag matches `^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`, contains no `+`, and long-tag length < 100 in `scripts/image-tags.sh`
-- [ ] T021 [US2] Add `image:verify` assertions that `io.kcp-capi.capi-version` label equals the `-capi-` segment of the longTag for each built image (using `docker inspect` or `skopeo inspect` equivalent) in `Taskfile.yaml`
-- [ ] T022 [US2] Handle no-fork-bump case — when CAPI/CAPX pins unchanged between releases, verify that `forkTag` alias still moves to newest digest and labels remain identical across consecutive releases (contract verification) in `scripts/image-tags.sh` or release notes documentation
+- [x] T017 [P] [US2] Implement root-image long-tag format `vX.Y.Z-capi-<capiVersion>` derived from `go list -m sigs.k8s.io/cluster-api` with `+`→`-` sanitization in `scripts/image-tags.sh`
+- [x] T018 [P] [US2] Implement Nutanix-image tags: `vX.Y.Z-capx-<capxVersion>-capi-<capiVersion>` and fork-alias `v1.11.0-kcp.3`, derived from `go list -m` inside `providers/nutanix-infrastructure` for CAPX version in `scripts/image-tags.sh`
+- [x] T019 [US2] Ensure `io.kcp-capi.capi-version`, `io.kcp-capi.k8s-version`, `io.kcp-capi.capi-base`, `io.kcp-capi.capx-version` labels are injected via `ko --image-label` per image and match the tag-embedded versions in `Taskfile.yaml` and `.ko.yaml`
+- [x] T020 [US2] Add `scripts/image-tags.sh --check` validation that every tag matches `^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`, contains no `+`, and long-tag length < 100 in `scripts/image-tags.sh`
+- [x] T021 [US2] Add `image:verify` assertions that `io.kcp-capi.capi-version` label equals the `-capi-` segment of the longTag for each built image (using `docker inspect` or `skopeo inspect` equivalent) in `Taskfile.yaml`
+- [x] T022 [US2] Handle no-fork-bump case — when CAPI/CAPX pins unchanged between releases, verify that `forkTag` alias still moves to newest digest and labels remain identical across consecutive releases (contract verification) in `scripts/image-tags.sh` or release notes documentation
 
 **Checkpoint**: User Stories 1 AND 2 complete — images deploy AND are traceable to upstream via tags/labels
 
@@ -84,12 +84,12 @@
 
 **Independent Test**: Add fixture provider `providers/example/` with trivial `cmd/example-manager`, register in `PROVIDER_MODULES` + `release-please-config.json:packages`, run `task build && task release-please -- --dry-run` — both include it; tag derivation covers it
 
-- [ ] T023 [P] [US3] Document provider-addition contract in `Taskfile.yaml` — ensure `PROVIDER_MODULES` iteration pattern in `build`, `lint`, `test:unit`, `drift`, and `image:build`/`image:verify` is consistent (extract to shared var so all tasks iterate `PROVIDER_MODULES`) in `Taskfile.yaml`
-- [ ] T024 [US3] Verify `task drift` checks per-provider `DRIFT.md` for each `PROVIDER_MODULES` entry — test with existing Nutanix entry and document expected `drift.yaml` behaviour for additional providers in `.github/workflows/drift.yaml` or `Taskfile.yaml`
-- [ ] T025 [US3] Extend `scripts/image-tags.sh` image table to be extensible — confirm adding a new row (mapping `kcp-capi-<name>` → `go list -m <upstreamImport>`) requires only one table edit, not code restructure in `scripts/image-tags.sh`
-- [ ] T026 [US3] Extend `.ko.yaml` extensibility — confirm adding a new provider means adding one `builds` entry for `./providers/<name>/cmd/<name>-manager` with its image name, or document when a per-provider `.ko.yaml` is needed (R6 spike result) in `.ko.yaml`
-- [ ] T027 [P] [US3] Extend `release-please-config.json` / `.release-please-manifest.json` handling — document that each new `providers/<name>` entry is one `packages` key; verify `include-component-in-tag: false` still produces `providers/<name>/vX.Y.Z` for each in `release-please-config.json`
-- [ ] T028 [US3] Integration test: add ephemeral fixture provider to validate extensibility end-to-end — scaffold `providers/fixture-test/` with minimal `go.mod`/`cmd/fixture-manager/main.go`/`DRIFT.md`, register it, run `task build && task image:build` to confirm the 7th image builds, then remove fixture (CI-only or local validation step)
+- [x] T023 [P] [US3] Document provider-addition contract in `Taskfile.yaml` — ensure `PROVIDER_MODULES` iteration pattern in `build`, `lint`, `test:unit`, `drift`, and `image:build`/`image:verify` is consistent (extract to shared var so all tasks iterate `PROVIDER_MODULES`) in `Taskfile.yaml`
+- [x] T024 [US3] Verify `task drift` checks per-provider `DRIFT.md` for each `PROVIDER_MODULES` entry — test with existing Nutanix entry and document expected `drift.yaml` behaviour for additional providers in `.github/workflows/drift.yaml` or `Taskfile.yaml`
+- [x] T025 [US3] Extend `scripts/image-tags.sh` image table to be extensible — confirm adding a new row (mapping `kcp-capi-<name>` → `go list -m <upstreamImport>`) requires only one table edit, not code restructure in `scripts/image-tags.sh`
+- [x] T026 [US3] Extend `.ko.yaml` extensibility — confirm adding a new provider means adding one `builds` entry for `./providers/<name>/cmd/<name>-manager` with its image name, or document when a per-provider `.ko.yaml` is needed (R6 spike result) in `.ko.yaml`
+- [x] T027 [P] [US3] Extend `release-please-config.json` / `.release-please-manifest.json` handling — document that each new `providers/<name>` entry is one `packages` key; verify `include-component-in-tag: false` still produces `providers/<name>/vX.Y.Z` for each in `release-please-config.json`
+- [x] T028 [US3] Integration test: add ephemeral fixture provider to validate extensibility end-to-end — scaffold `providers/fixture-test/` with minimal `go.mod`/`cmd/fixture-manager/main.go`/`DRIFT.md`, register it, run `task build && task image:build` to confirm the 7th image builds, then remove fixture (CI-only or local validation step)
 
 **Checkpoint**: User Stories 1–3 complete — fleet publishes, is traceable, and is extensible to new providers with the 4-edit contract
 
@@ -101,10 +101,10 @@
 
 **Independent Test**: `task image:build` with no GHCR login produces `ko.local/kcp-capi-*:local` images; `kind load docker-image` + sample manifests reconcile as the published path
 
-- [ ] T029 [US4] Ensure `task image:build` works with `KO_DOCKER_REPO=ko.local` and no registry auth — verify all 6 images are listed by `docker images` as `ko.local/kcp-capi-*:local` or `sha-<short>` on a clean checkout in `Taskfile.yaml`
-- [ ] T030 [P] [US4] Add `image:build` platform handling — default local build is single-platform (`linux/amd64` or host arch) for speed; document `KO_PLATFORMS=linux/amd64,linux/arm64` override for multi-arch parity testing in `Taskfile.yaml`
-- [ ] T031 [US4] Add `image:load-kind` task (or document in `AGENTS.md`) that runs `kind load docker-image` for each built image into the configured kind cluster name in `Taskfile.yaml`
-- [ ] T032 [US4] Validate local images run identically to published — document that manifests differ only by image reference and that local + published paths both satisfy `task verify` (when a kcp test harness is available) in `quickstart.md` or `Taskfile.yaml`
+- [x] T029 [US4] Ensure `task image:build` works with `KO_DOCKER_REPO=ko.local` and no registry auth — verify all 6 images are listed by `docker images` as `ko.local/kcp-capi-*:local` or `sha-<short>` on a clean checkout in `Taskfile.yaml`
+- [x] T030 [P] [US4] Add `image:build` platform handling — default local build is single-platform (`linux/amd64` or host arch) for speed; document `KO_PLATFORMS=linux/amd64,linux/arm64` override for multi-arch parity testing in `Taskfile.yaml`
+- [x] T031 [US4] Add `image:load-kind` task (or document in `AGENTS.md`) that runs `kind load docker-image` for each built image into the configured kind cluster name in `Taskfile.yaml`
+- [x] T032 [US4] Validate local images run identically to published — document that manifests differ only by image reference and that local + published paths both satisfy `task verify` (when a kcp test harness is available) in `quickstart.md` or `Taskfile.yaml`
 
 **Checkpoint**: All user stories complete — full publish lifecycle plus local development loop
 
@@ -114,12 +114,12 @@
 
 **Purpose**: Docs, CI wiring, and final verification
 
-- [ ] T033 [P] Update `AGENTS.md` to document new `task image:build`, `task image:verify`, `task image:load-kind` targets in the named-operations table in `AGENTS.md`
-- [ ] T034 [P] Update `README.md` or design doc with GHCR image locations (`ghcr.io/jimmidyson/kcp-capi-*`), tag conventions, and link to `contracts/tag-schema.md` in `README.md`
-- [ ] T035 [P] Add `packages: write` permission to the publish workflow's job and ensure `GITHUB_TOKEN` is passed correctly for GHCR push in `.github/workflows/publish-images.yaml`
-- [ ] T036 Verify `task drift` still passes and `task verify` (or `task check`) is green with the new dual-package release-please config (requires that `v0.1.0` single-tag history remains compatible with the new manifest's two-key state) in `Taskfile.yaml` and `.github/workflows/pr.yaml`
-- [ ] T037 Edge case: validate `providers/nutanix-infrastructure/go.mod`'s `replace kcp-cluster-api => ../..` requires both Go tags at same commit — document in `contracts/tag-schema.md` or task that building from a commit with only one tag should fail loudly, not resolve a stale dependency
-- [ ] T038 Run `quickstart.md` validation end-to-end on a fresh checkout (all 5 quickstart sections) and record any gaps
+- [x] T033 [P] Update `AGENTS.md` to document new `task image:build`, `task image:verify`, `task image:load-kind` targets in the named-operations table in `AGENTS.md`
+- [x] T034 [P] Update `README.md` or design doc with GHCR image locations (`ghcr.io/jimmidyson/kcp-capi-*`), tag conventions, and link to `contracts/tag-schema.md` in `README.md`
+- [x] T035 [P] Add `packages: write` permission to the publish workflow's job and ensure `GITHUB_TOKEN` is passed correctly for GHCR push in `.github/workflows/publish-images.yaml`
+- [x] T036 Verify `task drift` still passes and `task verify` (or `task check`) is green with the new dual-package release-please config (requires that `v0.1.0` single-tag history remains compatible with the new manifest's two-key state) in `Taskfile.yaml` and `.github/workflows/pr.yaml`
+- [x] T037 Edge case: validate `providers/nutanix-infrastructure/go.mod`'s `replace kcp-cluster-api => ../..` requires both Go tags at same commit — document in `contracts/tag-schema.md` or task that building from a commit with only one tag should fail loudly, not resolve a stale dependency
+- [x] T038 Run `quickstart.md` validation end-to-end on a fresh checkout (all 5 quickstart sections) and record any gaps
 
 ---
 
