@@ -71,7 +71,7 @@ cycle.
 If push-time rejection on the fork is wanted, branch protection on `kcp/*`
 is the honest mechanism, not a workflow the fork has to carry.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.15`
+Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.16`
 
 > All three modules are at the same version. `api/` was left behind at
 > `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
