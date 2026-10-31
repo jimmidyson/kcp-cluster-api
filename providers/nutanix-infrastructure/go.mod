@@ -20,8 +20,8 @@ require (
 	k8s.io/client-go v0.37.1
 	k8s.io/component-base v0.37.1
 	k8s.io/klog/v2 v2.140.0
-	sigs.k8s.io/cluster-api v1.15.0-kcp.13
-	sigs.k8s.io/cluster-api/api v1.15.0-kcp.13
+	sigs.k8s.io/cluster-api v1.15.0-kcp.18
+	sigs.k8s.io/cluster-api/api v1.15.0-kcp.18
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/multicluster-runtime v0.25.2
 )
@@ -111,7 +111,7 @@ require (
 	github.com/kcp-dev/apimachinery/v2 v2.33.3 // indirect
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5 // indirect
 	github.com/kcp-dev/multicluster-provider v0.8.0 // indirect
-	github.com/kcp-dev/sdk v0.33.1 // indirect
+	github.com/kcp-dev/sdk v0.33.3 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
@@ -192,7 +192,7 @@ require (
 	k8s.io/streaming v0.37.1 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.36.0 // indirect
-	sigs.k8s.io/cluster-api/test v1.15.0-kcp.13 // indirect
+	sigs.k8s.io/cluster-api/test v1.15.0-kcp.18 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/kind v0.33.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -207,11 +207,11 @@ replace github.com/jimmidyson/kcp-cluster-api => ../..
 // them this resolves genuine upstream Cluster API alongside the fork. See
 // ADR-0004, which recorded the hazard before this module existed to prove it.
 
-replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.18
 
-replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.18
 
-replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.18
 
 replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.3
 

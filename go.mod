@@ -8,7 +8,7 @@ require (
 	github.com/kcp-dev/apimachinery/v2 v2.33.3
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5
 	github.com/kcp-dev/multicluster-provider v0.8.0
-	github.com/kcp-dev/sdk v0.33.1
+	github.com/kcp-dev/sdk v0.33.3
 	github.com/moby/moby/client v0.6.2
 	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v1.11.0-dev.1
 	github.com/onsi/gomega v1.44.0
@@ -20,9 +20,9 @@ require (
 	k8s.io/component-base v0.37.1
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	sigs.k8s.io/cluster-api v1.15.0-kcp.13
-	sigs.k8s.io/cluster-api/api v1.15.0-kcp.13
-	sigs.k8s.io/cluster-api/test v1.15.0-kcp.13
+	sigs.k8s.io/cluster-api v1.15.0-kcp.18
+	sigs.k8s.io/cluster-api/api v1.15.0-kcp.18
+	sigs.k8s.io/cluster-api/test v1.15.0-kcp.18
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/multicluster-runtime v0.25.2
 )
@@ -174,11 +174,11 @@ require (
 // All three modules must be pinned together: api/ and test/ are separate Go
 // modules inside the Cluster API repository, resolved by tag prefix, and a
 // partial pin fails at dependency resolution rather than at compile time.
-replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.18
 
-replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.18
 
-replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.18
 
 replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.3
 

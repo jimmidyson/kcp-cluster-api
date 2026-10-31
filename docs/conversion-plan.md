@@ -70,7 +70,7 @@ having to reconstruct the answer from the commit log.
   provider. And **a claim on a provider the workspace has not bound races the
   workspace becoming `Ready`**: kcp materialises a bound CRD so the claim can
   apply, but its label controller gives up after about thirteen seconds and
-  nothing re-enqueues the binding. Measured on kcp v0.32.3: `Ready` in about
+  nothing re-enqueues the binding. Measured on kcp v0.33.3: `Ready` in about
   ten seconds when the materialiser wins, and not `Ready` two minutes later
   when it does not, on roughly half of the runs.
   `capiworkspaces.NudgeUnappliedClaims` is the workaround and says so.

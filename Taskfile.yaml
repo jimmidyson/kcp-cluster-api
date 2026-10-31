@@ -26,7 +26,7 @@ vars:
   KO_DOCKER_REPO: '{{.KO_DOCKER_REPO | default "ko.local"}}'
   KO_PLATFORMS: '{{.KO_PLATFORMS | default "linux/amd64"}}'
   # Pinned. Tooling is installed at fixed versions via the Go toolchain only.
-  KCP_VERSION: v0.32.3
+  KCP_VERSION: v0.33.3
   # The release-please CLI, pinned to match CI's release-please action.
   RELEASE_PLEASE_VERSION: 17.11.1
   GOOS_:
