@@ -38,7 +38,7 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: jetify-com/devbox-install-action@v0.14.0
+      - uses: jetify-com/devbox-install-action@v0.15.0
         with:
           enable-cache: true
 
