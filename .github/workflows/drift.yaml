@@ -44,7 +44,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: jetify-com/devbox-install-action@v0.14.0
+      - uses: jetify-com/devbox-install-action@v0.16.0
         with:
           enable-cache: true
 
