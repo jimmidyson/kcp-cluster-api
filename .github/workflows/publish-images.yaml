@@ -35,7 +35,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jetify-com/devbox-install-action@v0.14.0
+      - uses: jetify-com/devbox-install-action@v0.16.0
         with:
           enable-cache: true
       - id: tags
@@ -101,7 +101,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jetify-com/devbox-install-action@v0.14.0
+      - uses: jetify-com/devbox-install-action@v0.16.0
         with:
           enable-cache: true
       - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
@@ -180,7 +180,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jetify-com/devbox-install-action@v0.14.0
+      - uses: jetify-com/devbox-install-action@v0.16.0
         with:
           enable-cache: true
       - uses: docker/setup-qemu-action@27d0a6431a0b2bb37ed7a38a61d5c53d03363239f # v3.8.0
