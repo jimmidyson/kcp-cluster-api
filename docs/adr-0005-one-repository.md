@@ -359,11 +359,13 @@ package.
   the fix, which is ported and recorded; it retires on the next adoption.
   A suite that runs when its tree changes would have caught both at the
   bump.
-- **ko could not be run here**: the environment's network policy refuses
-  the base image registry. Both Go builds ko would run pass with and
-  without the workspace, which is the part a relative replace could affect;
-  the first publish after this merges is the proof, and it is not a silent
-  one.
+- **ko builds both kinds of image under `go.work`.** The root module's
+  core manager and the nested Nutanix module's manager, the latter being
+  the case where a relative replace inside a workspace could have bitten,
+  both build with ko to an image tarball against the default base image,
+  and the binaries inside run. Built as the publish workflow builds them,
+  with `--bare` and a single platform; what remains for that workflow is
+  the push.
 - **One root package.** release-please has one package and the manifest one
   entry; the provider's `providers/<name>/vX.Y.Z` tag is no longer cut. The
   upstream component of an image tag is the first twelve characters of the
