@@ -294,9 +294,9 @@ layer, not a side effect:
 - Subtree merge against a tree with 38 modified paths has not been run here.
   The first adoption will show whether its conflicts are the modified paths
   and nothing else, as claimed above.
-- Whether ko resolves a build whose main module replaces `sigs.k8s.io/cluster-api`
-  with a relative path inside a `go.work` — the `.ko.yaml` already records
-  the fallback for nested modules, and this may need it.
+- ~~Whether ko resolves a build whose main module replaces `sigs.k8s.io/cluster-api`
+  with a relative path inside a `go.work`.~~ Established: it does, for the
+  root module and for the nested provider module. See below.
 - CI time with the vendored unit suites gated by path. The filters are
   decided; their cost when they do fire is not measured.
 - Whether release-please, reduced to one root package, is untroubled by Go
