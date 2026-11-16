@@ -62,11 +62,14 @@ nobody here made. There is no other repository now.
 upstream at the base commit — is fetched, and a day on which the fetch could
 not run should not pass unnoticed.
 
-**On what is on disk, not on what git tracks.** The vendored tree is a
-snapshot of upstream plus the recorded patches, and the record's question is
-"what differs from upstream". A file that is present differs if upstream does
-not have it, whatever an ignore rule in either tree says; the checker
-compares the directory, so an edit shows before it is staged.
+**On what is on disk, less what git ignores and does not track.** The
+vendored tree is a snapshot of upstream plus the recorded patches, and the
+record's question is "what differs from upstream". The checker compares the
+directory, so an edit shows before it is staged; it then drops the files
+upstream's own ignore rules exclude and nothing tracks, because a vendored
+tree's own test suite leaves those behind — a log beside each golden file —
+and nothing would ever commit them. A tracked file is measured whatever the
+rules say, so a file added by force is not hidden by them.
 
 Tree: `forks/cluster-api`, keeping the module path `sigs.k8s.io/cluster-api`
 with its `api/` and `test/` modules as they are upstream. Cut from the fork
@@ -146,6 +149,7 @@ cannot build without them. See the feature's research notes (R2).
 | `bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmConfig reconciler. One substantive difference from its single-cluster twin: `KubeadmInitLock` defaults to a mutex over the reconciler's own cluster-aware client rather than the manager's, because the lock is a ConfigMap in the cluster being reconciled and the manager's client addresses no cluster in particular. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmControlPlane reconciler. One behavioural difference: the Machine client that returns the deleted object is built from the reconciler's cluster-aware client rather than from the manager's config, which addresses no cluster in particular here. The cost is the cache-consistency optimisation it enabled; both call sites already handle a nil result. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller.go` | **Modified.** The `controller` field narrows to the three methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine reconciler carries, for the same reason. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/inmemory/pkg/server/api/handler.go` | **Modified.** A delete writes a response body — the deleted object, or a `Status` once it is gone. controller-runtime v0.25 decodes a `Delete` call's response into the object and fails on an empty body with "empty data", so with the dependency bump this tree carries, every delete against the in-memory workload cluster failed, and five of the server's own tests with it. Ported from upstream `main`, which made the same bump and the same fix. | **Upstream** — already on `main`; retires at the next adoption |
 | `test/infrastructure/inmemory/pkg/server/mux.go` | **Modified.** `getFreePortLocked` binds each candidate port to check it is free and skips what is taken, implementing the TODO that stood in its place. The port is recorded on the listener and never revisited, so an unchecked one that turns out to be taken is retried with the same port forever — a workload cluster whose endpoint nothing answers on, which presents as slowness rather than as failure. | **Pending** |
 | `test/infrastructure/inmemory/pkg/server/mux_test.go` | **Modified.** Covers both halves of the above: a port in use is skipped, and a range with nothing free still reports that rather than handing one out. | **Pending** |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/workspace_keys.go` | New file. Names the in-memory backend's per-cluster state by management cluster as well as namespace and name. | None — carried deliberately, ADR-0003 |

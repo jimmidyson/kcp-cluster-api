@@ -155,6 +155,13 @@ workflow. Every change ships tests at both tiers that apply to it:
 A change that adds or alters behaviour without tests at both applicable tiers
 is incomplete, however obviously correct it looks.
 
+A change **inside a vendored tree** also runs that tree's own suite, as
+upstream runs it: `task test:forks:cluster-api` or `task test:forks:nutanix`.
+CI runs it only for pull requests that touch the tree, since nothing else can
+change its result; `verify` does not include it. Both trees carried defects
+that only this suite catches before it existed, so a patch that skips it is
+the kind of patch that has already gone wrong here.
+
 ## Done is a command
 
 `task verify` is the done-condition. It reports **three** outcomes:
@@ -323,6 +330,14 @@ changes start bumping the major.
   history. Until `v0.1.0` is tagged, release-please would otherwise walk into
   upstream commits and release them as this project's. Delete the key once
   that tag exists.
+
+- There is **one package**, at the root. Every release is one version of
+  everything, and every image is published at every tag; a provider module
+  is not a package of its own, because a vendored tree beside it cannot be
+  released against any other commit, so a version per provider could only
+  name combinations nobody tested. Core at N beside a provider at N-1 is
+  tolerated for one minor of skew during a rolling upgrade, and that claim is
+  only as good as the upgrade test that backs it (ADR-0005).
 
 Open a release from `main` with `task release-please`. CI keeps that pull
 request current afterwards; it cannot create the first one.

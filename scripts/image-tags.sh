@@ -29,9 +29,10 @@ set -euo pipefail
 # more — `go list -m` reports a directory and a placeholder version. What
 # identifies the upstream each tree is cut from is the base commit its drift
 # record names, so that is the component: the first twelve characters of
-# `Base:` in DRIFT.md and providers/nutanix-infrastructure/DRIFT.md. This is
-# the interim scheme ADR-0005 leaves for a later layer to settle; it keeps
-# every tag unique and derivable, which is what the checks below assert.
+# `Base:` in DRIFT.md and providers/nutanix-infrastructure/DRIFT.md. It is
+# the one identifier of the upstream a tree is cut from that is derivable
+# offline from the record alone, it keeps every tag unique, and the checks
+# below assert both. See contracts/tag-schema.md, amended for ADR-0005.
 #
 # Unchanged bases reuse the same alias/labels; ko push is an upsert, so the
 #   new digest overwrites the old alias and `:<capi>` always points at the

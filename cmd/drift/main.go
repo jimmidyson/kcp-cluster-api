@@ -57,6 +57,10 @@ func main() {
 	if err != nil {
 		fail("measuring divergence: %v", err)
 	}
+	actual, err = drift.WithoutIgnored(*tree, actual)
+	if err != nil {
+		fail("measuring divergence: %v", err)
+	}
 
 	res := drift.Compare(rec, actual)
 	fmt.Printf("%s vs upstream %s@%s\n\n", *tree, *upstream, rec.Base[:12])

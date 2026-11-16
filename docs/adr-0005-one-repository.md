@@ -325,8 +325,11 @@ touched and stand as written.
   force once: the vendored `.gitignore` files are honoured by git here as
   they were upstream, and a tracked file stays tracked. A subtree merge
   carries tracked entries, so this is a one-time cost of the snapshot, not a
-  recurring one. The checker compares what is on disk, so the rule cannot
-  hide a difference from it.
+  recurring one. The checker compares what is on disk and then drops what
+  git ignores and does not track — which the second layer forced: a
+  vendored suite leaves logs beside its golden files, and upstream's ignore
+  rule for them is the right answer. A tracked file is never dropped, so a
+  rule cannot hide a forced file from the check.
 - **The image tag scheme needed an interim answer now**, not later: the
   publish workflow derives the upstream component from the module graph,
   which reports a directory and a placeholder version for a replaced tree.
@@ -334,3 +337,42 @@ touched and stand as written.
   commit. The final scheme is still the later layer's.
 - **Subtree merge, ko under `go.work`, CI time with the vendored suites, and
   release-please** remain untested, as listed above.
+
+### What the second and third layers settled
+
+Built after the first, in one change: the vendored trees' own suites as task
+targets with a path-filtered workflow, and the release collapsed to one
+package.
+
+- **The vendored suites cost what they cost, and found two defects.** Run
+  once here, as upstream runs them minus the race detector: the Cluster API
+  root module 394 s, its `api/` module 3 s, its `test/` module 27 s, and
+  CAPX 58 s including fetching envtest. Running them only on pull requests
+  that touch a tree is confirmed as the right call — nothing outside a tree
+  can change their result. Both trees had failures nobody had run into,
+  because the forks never ran their own suites after a dependency bump:
+  CAPX's root package did not compile its tests against Cluster API v1.15,
+  and the in-memory workload cluster failed every delete under
+  controller-runtime v0.25, which is the version the tree carries. The
+  second is not a test defect: it is the dev infrastructure provider's
+  in-memory backend refusing deletes in production. Upstream `main` carries
+  the fix, which is ported and recorded; it retires on the next adoption.
+  A suite that runs when its tree changes would have caught both at the
+  bump.
+- **ko could not be run here**: the environment's network policy refuses
+  the base image registry. Both Go builds ko would run pass with and
+  without the workspace, which is the part a relative replace could affect;
+  the first publish after this merges is the proof, and it is not a silent
+  one.
+- **One root package.** release-please has one package and the manifest one
+  entry; the provider's `providers/<name>/vX.Y.Z` tag is no longer cut. The
+  upstream component of an image tag is the first twelve characters of the
+  record's base commit, settled rather than interim: it is the one identifier
+  derivable offline from the record alone, and the tag schema contract is
+  amended to say so.
+- **The skew test is deferred, with its trigger.** It needs two versions of
+  this project's images to hold the providers back by, and there has been no
+  tagged release yet. The trigger is the first one: once `v0.x.0` exists,
+  the test upgrades core from it with the providers held at it, then the
+  providers, and the one-minor skew policy becomes a measured claim rather
+  than a stated one. Until then it is stated, and `AGENTS.md` says so.

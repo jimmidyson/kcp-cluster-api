@@ -104,3 +104,42 @@ func asExitError(err error, target **exec.ExitError) bool {
 	}
 	return ok
 }
+
+// WithoutIgnored drops from paths, which are relative to treeDir, the ones
+// git ignores there and does not track.
+//
+// DivergingPaths measures the disk, and a vendored tree's own test suite
+// leaves files on it — upstream's machinedeployment tests write a log beside
+// each golden file — which upstream's own ignore rules exclude and which
+// nothing would ever commit. They are not divergence. A tracked file is never
+// reported by git as ignored, whatever the rules say, so a file that was
+// added by force stays measured; what is dropped is exactly what would not
+// reach a commit.
+func WithoutIgnored(treeDir string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return paths, nil
+	}
+	cmd := exec.Command("git", "-C", treeDir, "check-ignore", "--stdin", "-z")
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\x00") + "\x00")
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit status 1 means no path is ignored, which is an answer.
+		var exitErr *exec.ExitError
+		if ok := asExitError(err, &exitErr); !ok || exitErr.ExitCode() != 1 {
+			return nil, fmt.Errorf("git check-ignore in %s: %w", treeDir, err)
+		}
+	}
+	ignored := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			ignored[p] = true
+		}
+	}
+	kept := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !ignored[p] {
+			kept = append(kept, p)
+		}
+	}
+	return kept, nil
+}

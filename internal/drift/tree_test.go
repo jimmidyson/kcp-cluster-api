@@ -18,6 +18,7 @@ package drift
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -110,5 +111,59 @@ func TestDivergingPathsAcceptsRelativeDirectories(t *testing.T) {
 func TestDivergingPathsFailsOnAMissingTree(t *testing.T) {
 	if _, err := DivergingPaths(t.TempDir(), filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("a tree that does not exist must be an error, not an empty divergence")
+	}
+}
+
+// TestWithoutIgnoredDropsOnlyUntrackedIgnoredFiles builds a repository with
+// an ignore rule and three files it could apply to: one tracked despite the
+// rule, one untracked and matching it, one untracked and not matching.
+func TestWithoutIgnoredDropsOnlyUntrackedIgnoredFiles(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git("init", "--quiet")
+	tree := filepath.Join(repo, "forks", "upstream")
+	writeTree(t, tree, map[string]string{
+		".gitignore":           "*.test.log\n",
+		"forced.test.log":      "tracked although the rule matches\n",
+		"left.test.log":        "what a suite leaves behind\n",
+		"patched.go":           "a real change\n",
+		"nested/also.test.log": "ignored deeper down\n",
+	})
+	git("add", "forks/upstream/.gitignore", "forks/upstream/patched.go")
+	git("add", "-f", "forks/upstream/forced.test.log")
+	git("commit", "--quiet", "-m", "tree")
+
+	in := []string{"forced.test.log", "left.test.log", "nested/also.test.log", "patched.go"}
+	got, err := WithoutIgnored(tree, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"forced.test.log", "patched.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestWithoutIgnoredKeepsEverythingWhenNothingIsIgnored(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	in := []string{"a.go", "b/c.go"}
+	got, err := WithoutIgnored(repo, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, in) {
+		t.Fatalf("got %v, want %v", got, in)
 	}
 }

@@ -27,11 +27,14 @@ having to reconstruct the answer from the commit log.
   question and the fork contract in `AGENTS.md`. **The first layer is built**
   in the change that accepted the ADR: both trees under `forks/`, nothing
   pinned, both records matching reality, and the governing documents
-  rewritten to the new arrangement. **Dispatchable now**, in this order:
-  per-provider CI path filters with the vendored trees' own test suites; one
-  root release-please package with every image published at every tag, and
-  the image tag scheme settled; and the skew test the ADR names. Nothing else
-  in this section depends on them.
+  rewritten to the new arrangement. **The second and third layers are built
+  too**: each tree's own suite runs as `task test:forks:<tree>` and in CI only
+  when a pull request touches that tree, which found and fixed two defects
+  the forks had been carrying unrun; release-please has one root package and
+  the image tag scheme is settled on the record's base commit. **Deferred
+  with a trigger:** the skew test, which needs a tagged release to hold the
+  providers back at; it is dispatchable the day `v0.x.0` exists. Nothing else
+  in this section depends on it.
 
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as

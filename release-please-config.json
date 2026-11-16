@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "_comment.extensibility": "T027 / FR-009: adding a provider is one packages key: \"providers/<name>\": {\"package-name\": \"<name>\"} — include-component-in-tag:false stays false so the produced Go tag is providers/<name>/vX.Y.Z (path/vX.Y.Z, not component-vX.Y.Z) and go get resolves it. Add the sibling .release-please-manifest.json key via the next release-please run (T027).",
+  "_comment.releases": "One package, at the root: every release is one version of everything, and every image is published at every tag (ADR-0005). A provider module is not a package of its own — a vendored tree beside it cannot be released against any other commit, so a version per provider could only name untested combinations. Adding a provider adds no key here.",
   "release-type": "go",
   "include-component-in-tag": false,
   "bootstrap-sha": "281e4e3ed2af1d6852651d69e1207a3073b478c2",
@@ -12,9 +12,6 @@
   "packages": {
     ".": {
       "package-name": "kcp-cluster-api"
-    },
-    "providers/nutanix-infrastructure": {
-      "package-name": "nutanix-infrastructure"
     }
   },
   "changelog-sections": [

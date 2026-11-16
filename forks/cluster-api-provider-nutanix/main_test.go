@@ -125,7 +125,6 @@ func TestInitializeFlags(t *testing.T) {
 			},
 			want: &options{
 				managerOptions: flags.ManagerOptions{
-					TLSCurvePreferences: []int32{},
 					DiagnosticsAddress:  ":9999",
 					InsecureDiagnostics: true,
 				},
