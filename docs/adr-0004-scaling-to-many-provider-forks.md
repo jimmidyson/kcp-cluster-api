@@ -1,5 +1,10 @@
 # ADR-0004: Scaling the fork model to many providers
 
+> **Superseded in part by [ADR-0005](adr-0005-one-repository.md)** (proposed):
+> the forks become vendored trees in this repository, which retires the
+> first question below and the L2 contract. L3 — one integration module per
+> provider, here — stands.
+
 Status: **accepted**, decided 2026-08-20. **Amended 2026-08-21: the module
 split is built** — see [What building the provider module
 settled](#what-building-the-provider-module-settled), which corrects the
