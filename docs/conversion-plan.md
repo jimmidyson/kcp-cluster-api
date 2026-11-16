@@ -20,16 +20,18 @@ having to reconstruct the answer from the commit log.
   own and released as one tested set, and the current split cannot do it: the forks carry
   patches and nothing kcp, and everything that knows kcp is `internal/` here,
   so a fork can neither run a manager under kcp nor test one.
-  [ADR-0005](adr-0005-one-repository.md) (proposed) brings both forks into
-  this repository as vendored trees, keeping their module paths, with relative
+  [ADR-0005](adr-0005-one-repository.md) brings both forks into this
+  repository as vendored trees, keeping their module paths, with relative
   `replace` directives, a committed `go.work`, and the drift check gating every
   pull request that touches a vendored path. It supersedes ADR-0004's first
-  question and the fork contract in `AGENTS.md`. **Dispatchable now:** the
-  first layer, which changes no behaviour — vendor the trees, replace the
-  pins, retarget the checker, show `task verify` and `task drift` green with
-  nothing pinned. The per-provider CI filters, the document rewrites and the
-  image tag scheme stack on it, in that order, and nothing else in this
-  section depends on it.
+  question and the fork contract in `AGENTS.md`. **The first layer is built**
+  in the change that accepted the ADR: both trees under `forks/`, nothing
+  pinned, both records matching reality, and the governing documents
+  rewritten to the new arrangement. **Dispatchable now**, in this order:
+  per-provider CI path filters with the vendored trees' own test suites; one
+  root release-please package with every image published at every tag, and
+  the image tag scheme settled; and the skew test the ADR names. Nothing else
+  in this section depends on them.
 
 - **The demo has a UI, and it changes with the workspace.** A run writes a
   kubeconfig per audience — `workspaces.kubeconfig` holding the whole tree as
@@ -509,7 +511,7 @@ early and expensive to unwind later.
 | D4 | Discovery + cache engine: adopt `kcp-dev/multicluster-provider`'s `Provider` + `multicluster-runtime`'s `mcmanager.Manager.GetManager()`, or hand-roll | done — adopted, confirmed empirically in Phase 1 ([ADR-0001](adr-0001-per-workspace-manager-pool.md)) | Default to adopting (see "Chosen model"/"Scalability" above). Confirm write-path routing, leader-election behavior, and library maturity in the Phase 1 spike before locking this in; hand-rolling a `WildcardCache`-alike layer is the documented fallback, not the default. |
 | D5 | Identity/RBAC model | done — [ADR-0001](adr-0001-per-workspace-manager-pool.md) | How each per-workspace manager authenticates (one system identity via the APIExport virtual workspace vs. per-workspace impersonation). **Decided:** single system identity via the virtual workspace — see [ADR-0001](adr-0001-provider-api-permissions.md). |
 | D6 | Partition topology for horizontal sharding: how many `Partition`/`APIExportEndpointSlice` pairs, how they map to replica-group deployments | deferred — one partition, one replica-group until an install runs multiple shards | Use kcp's own `PartitionSet`→`Partition`→`APIExportEndpointSlice` chain (see "Chosen model"/"Scalability" above) rather than app-level hashing. Only matters once a kcp install runs multiple shards — moot for single-shard dev/small deployments, so this can start as "one partition, one replica-group" and grow later. |
-| D7 | Repository shape: separate fork repositories, independently releasable forks, or one repository with the forks vendored | proposed — [ADR-0005](adr-0005-one-repository.md), option C (one repository) | Driven by the requirement that each provider be testable on its own and every release be a set tested together, which the split cannot meet; releases are one version of everything, in lockstep, superseding the per-package release and image tag work from #136. The reasons the mono-tree was abandoned in #22 were about upstream being the repository root; vendored under a subdirectory, inherited workflows are inert, Dependabot is scoped by directory, and the drift check runs per pull request. Supersedes ADR-0004's first question; its L3 stands. |
+| D7 | Repository shape: separate fork repositories, independently releasable forks, or one repository with the forks vendored | decided — [ADR-0005](adr-0005-one-repository.md), option C (one repository); first layer built: trees vendored under `forks/`, pins replaced, checker retargeted | Driven by the requirement that each provider be testable on its own and every release be a set tested together, which the split cannot meet; releases are one version of everything, in lockstep, superseding the per-package release and image tag work from #136. The reasons the mono-tree was abandoned in #22 were about upstream being the repository root; vendored under a subdirectory, inherited workflows are inert, Dependabot is scoped by directory, and the drift check runs per pull request. Supersedes ADR-0004's first question; its L3 stands. |
 
 **Output of Phase 0:** a short ADR (`kcp/docs/adr-0001-per-workspace-manager-pool.md`)
 that the rest of the plan links back to.

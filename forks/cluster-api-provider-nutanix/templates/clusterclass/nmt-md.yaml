@@ -1,0 +1,32 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: NutanixMachineTemplate
+metadata:
+  name: "nutanix-quick-start-md-nmt"
+spec:
+  template:
+    spec:
+      # bootType defaults to uefi. When vmProfile is used, bootType is removed via patches.
+      bootType: uefi
+      # vcpusPerSocket, vcpuSockets, and memorySize are required when vmProfile is not set.
+      # When vmProfile is used, these fields are removed via patches.
+      vcpusPerSocket: 1
+      vcpuSockets: 2
+      memorySize: 4Gi
+      systemDiskSize: 40Gi
+      image:
+        type: name
+        name: "placeholder-image"
+      # Adds additional categories to the virtual machines.
+      # Note: Categories must already be present in Prism Central
+      # additionalCategories:
+      #   - key: AppType
+      #     value: Kubernetes
+      # Adds the cluster virtual machines to a project defined in Prism Central.
+      # Replace NUTANIX_PROJECT_NAME with the correct project defined in Prism Central
+      # Note: Project must already be present in Prism Central.
+      # project:
+      #   type: name
+      #   name: "NUTANIX_PROJECT_NAME"
+      # gpus:
+      #  - type: name
+      #    name: "GPU NAME"

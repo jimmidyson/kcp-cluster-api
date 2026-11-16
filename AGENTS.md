@@ -3,9 +3,12 @@
 This repository makes Cluster API workspace-aware for
 [KCP](https://github.com/kcp-dev/kcp) (logical clusters / workspaces).
 
-It is **not** a fork of the Cluster API tree. Upstream is a version-pinned
-dependency, resolved to a small patched fork carrying the changes we cannot
-yet get upstream. Everything here is this project's own code.
+Upstream Cluster API and each infrastructure provider are **vendored trees
+under `forks/`**, each a snapshot of its upstream at a recorded base commit
+plus the patches this project carries, keeping its upstream module path.
+Everything outside `forks/` is this project's own code. See
+[ADR-0005](docs/adr-0005-one-repository.md) for why the trees are here
+rather than in forks of their own.
 
 Every rule below is binding on contributors and agents alike. The governing
 principles are in
@@ -20,14 +23,17 @@ makes the next adoption more expensive.
 - Change upstream code only when the change is exceptional and individually
   justified. A typo, a tidied import or a bugfix noticed in passing belongs
   upstream, not here.
-- Record every carried change in [`DRIFT.md`](DRIFT.md), with the base commit
-  it applies to and the upstream proposal that will retire it.
+- Record every carried change in the tree's drift record — [`DRIFT.md`](DRIFT.md)
+  for Cluster API, `providers/<name>/DRIFT.md` for a provider — with the
+  base commit it applies to and the upstream proposal that will retire it.
 - A change may be carried before its proposal is filed only if `DRIFT.md`
   records a filing date no more than 90 days out. Once that date passes the
   patch is a defect: file the proposal, remove the patch, or amend the
   constitution. Never extend the date quietly.
-- `task drift` checks the record against reality and fails on any diverging
-  path without an entry.
+- `task drift` measures each vendored tree against upstream at its base
+  commit and fails on any diverging path without an entry. It runs on every
+  pull request that touches a vendored tree, so an unrecorded edit under
+  `forks/` is red before review, not after.
 
 ### Integrate through public extension points only
 
@@ -38,29 +44,31 @@ manager options, sources, handlers, predicates, webhook chains.
 If something appears to need an upstream internal, or a hook upstream does
 not have, **stop and raise it** rather than working around it. The options
 are: find another integration point, propose the hook upstream, or accept the
-limitation. Adding the hook to the fork is the last resort and requires a
-`DRIFT.md` entry.
+limitation. Adding the hook to the vendored tree is the last resort and
+requires a drift record entry.
 
-## The patched fork
+## The vendored trees
 
-[`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api)
-carries this project's patches and nothing else — no specifications, no
-tooling, no process of its own. Its contract:
+`forks/cluster-api` and `forks/cluster-api-provider-nutanix` are upstream
+trees, vendored complete — docs, scripts and workflows included, inert where
+they are inert — at the base commit each record names, with the recorded
+patches applied in place. Their contract:
 
-- One branch per upstream release line (`kcp/v1.15`), cut from the exact
-  upstream commit this project builds against, not from the fork's own
-  default branch.
-- One commit per carried patch, each referencing its upstream proposal.
-- Immutable tags this project pins to, **three per release**:
-  `vX.Y.Z-kcp.N`, `api/vX.Y.Z-kcp.N` and `test/vX.Y.Z-kcp.N`. `api/` and
-  `test/` are separate Go modules resolved by tag prefix; a partial tag set
-  fails dependency resolution with a confusing "unknown revision" error.
-- Tags are **signed and annotated** (`git tag -s`), all three at the same
-  commit. Annotated because a tag this project pins to should carry what
-  changed and who made it, and signed because it is the artefact a build
-  resolves rather than a name anyone can move. A lightweight tag is not an
-  acceptable substitute, and this is written down because it is the kind of
-  convention that is invisible until somebody produces the wrong thing.
+- Each keeps its upstream module path (`sigs.k8s.io/cluster-api`, with its
+  `api/` and `test/` modules), so every module here imports upstream under
+  upstream's name. Consuming modules point that name at the tree with
+  **relative `replace` directives**, restated in every module because Go
+  honours `replace` only in the main module, and `go.work` lists every module
+  so the tree is one build. There is no version to pin and nothing to tag.
+- Nothing is deleted from a vendored tree. GitHub runs workflows only from
+  the root `.github/`, and Dependabot is pointed only at this project's own
+  modules, so upstream's are text. Deleting them would turn every upstream
+  adoption into conflicts on paths nobody cares about.
+- A tree differs from its upstream base only in the paths its record lists.
+  That is the whole of what makes `forks/` reviewable, and `task drift`
+  asserts it on every pull request that touches one.
+- The retired fork repositories keep their tags so that older releases still
+  resolve; nothing here depends on them.
 
 ## Repository layout
 
@@ -68,6 +76,8 @@ tooling, no process of its own. Its contract:
 docs/conversion-plan.md   the roadmap and current state — read this first
 Taskfile.yaml             the named operations; `task --list` to see them
 DRIFT.md                  what we carry against upstream, and why
+forks/                    the vendored upstream trees, each with a drift
+                          record beside the module that consumes it
 cmd/                      one manager per Cluster API provider (core,
                           kubeadm-bootstrap, kubeadm-control-plane,
                           dev-infrastructure), plus demo, verify, drift
@@ -117,11 +127,13 @@ cost this file exists to remove.
 
 ## Adopting a newer Cluster API release
 
-An upgrade is a dependency bump, not a merge:
+An upgrade is a subtree merge into the vendored tree, whose conflicts are the
+record's modified paths and nothing else:
 
-1. Cut a new branch in the fork from the new upstream ref, replay the carried
-   patches, and tag all three modules.
-2. Update the `replace` pins in `go.mod` and the base commit in `DRIFT.md`.
+1. Fetch the new upstream ref and merge it into `forks/cluster-api` as a
+   subtree (`git merge -X subtree=forks/cluster-api --allow-unrelated-histories
+   <ref>`, or `git subtree merge`), resolving conflicts on the recorded paths.
+2. Update the base commit in `DRIFT.md`.
 3. Run `task verify` and `task drift`.
 
 If a carried patch no longer applies, check whether its upstream proposal

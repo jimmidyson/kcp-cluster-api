@@ -16,30 +16,70 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
-// TestPseudoVersion is here because the obvious pattern is wrong for the
-// versions this project actually pins.
-//
-// A pseudo-version separates its timestamp with a hyphen only when the base
-// version has no pre-release part. Every version here does — `-kcp.N` — so the
-// separator is a dot, and a pattern written for the hyphen matches nothing and
-// reports every branch pin as a tag.
-func TestPseudoVersion(t *testing.T) {
-	for _, tc := range []struct {
-		version string
-		want    bool
-	}{
-		{"v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2", true},
-		{"v1.15.0-0.20260820160642-a0d8d117bab2", true},
-		{"v0.0.0-20260820160642-a0d8d117bab2", true},
-		{"v1.15.0-kcp.11", false},
-		{"v1.15.0", false},
-		// Not a pseudo-version: a tag that happens to end in digits and hex.
-		{"v1.15.0-kcp.20260820160642", false},
-	} {
-		if got := pseudoVersion.MatchString(tc.version); got != tc.want {
-			t.Errorf("pseudoVersion.MatchString(%q) = %v, want %v", tc.version, got, tc.want)
+// TestCheckoutUpstreamFetchesExactlyTheBase uses a local repository as the
+// upstream, which git fetches by URL exactly as it would a remote one, so the
+// test exercises the real fetch path without the network.
+func TestCheckoutUpstreamFetchesExactlyTheBase(t *testing.T) {
+	upstream := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", upstream}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "--quiet")
+	if err := os.WriteFile(filepath.Join(upstream, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "base.txt")
+	git("commit", "--quiet", "-m", "base")
+	base := git("rev-parse", "HEAD")
+
+	// A later commit the checkout must not include: the record names a base,
+	// and measuring against anything newer would hide drift that upstream
+	// happened to adopt since.
+	if err := os.WriteFile(filepath.Join(upstream, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "later.txt")
+	git("commit", "--quiet", "-m", "later")
+
+	dir := t.TempDir()
+	if err := checkoutUpstream(upstream, base, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "base.txt")); err != nil {
+		t.Errorf("base commit's file is missing from the checkout: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "later.txt")); err == nil {
+		t.Error("the checkout includes a commit after the base")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		t.Error("the checkout's .git directory was left in place and would be measured as divergence")
+	}
+}
+
+func TestCheckoutUpstreamFailsOnAnUnknownBase(t *testing.T) {
+	upstream := t.TempDir()
+	if out, err := exec.Command("git", "-C", upstream, "init", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := checkoutUpstream(upstream, "0123456789abcdef0123456789abcdef01234567", t.TempDir()); err == nil {
+		t.Fatal("a base commit upstream does not have must be an error, not an empty tree")
 	}
 }

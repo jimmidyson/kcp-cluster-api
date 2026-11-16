@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command drift reports how far this project's Cluster API fork diverges
-// from the upstream commit it is based on, and fails if that divergence is
-// not recorded in DRIFT.md.
+// Command drift reports how far a vendored upstream tree diverges from the
+// upstream commit it is based on, and fails if that divergence is not
+// recorded in the tree's drift record.
 package main
 
 import (
@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 
 	"github.com/jimmidyson/kcp-cluster-api/internal/drift"
@@ -32,19 +31,9 @@ import (
 
 func main() {
 	record := flag.String("record", "DRIFT.md", "path to the drift record")
-	fork := flag.String("fork", "https://github.com/jimmidyson/cluster-api", "fork repository to measure")
-	ref := flag.String("ref", "", "fork ref carrying the patches; empty reads the version this module pins")
+	tree := flag.String("tree", "forks/cluster-api", "vendored upstream tree to measure")
 	upstream := flag.String("upstream", "https://github.com/kubernetes-sigs/cluster-api", "upstream repository")
-	module := flag.String("module", "sigs.k8s.io/cluster-api", "module path whose pin names the fork ref to measure")
 	flag.Parse()
-
-	if *ref == "" {
-		v, err := pinnedForkVersion(*module)
-		if err != nil {
-			fail("%v", err)
-		}
-		*ref = v
-	}
 
 	md, err := os.ReadFile(*record)
 	if err != nil {
@@ -55,13 +44,22 @@ func main() {
 		fail("%v", err)
 	}
 
-	actual, err := divergingPaths(*upstream, rec.Base, *fork, *ref)
+	dir, err := os.MkdirTemp("", "drift-upstream-")
+	if err != nil {
+		fail("%v", err)
+	}
+	defer os.RemoveAll(dir)
+	if err := checkoutUpstream(*upstream, rec.Base, dir); err != nil {
+		fail("fetching upstream at the record's base: %v", err)
+	}
+
+	actual, err := drift.DivergingPaths(dir, *tree)
 	if err != nil {
 		fail("measuring divergence: %v", err)
 	}
 
 	res := drift.Compare(rec, actual)
-	fmt.Printf("fork %s@%s vs upstream %s\n\n", *fork, *ref, rec.Base[:12])
+	fmt.Printf("%s vs upstream %s@%s\n\n", *tree, *upstream, rec.Base[:12])
 	fmt.Print(res)
 
 	if !res.OK() {
@@ -69,100 +67,29 @@ func main() {
 	}
 }
 
-// pinnedForkVersion reports the fork version the named module is pinned at.
+// checkoutUpstream puts the upstream tree at the base commit into dir, as a
+// shallow checkout of exactly that commit. The base is the one thing the
+// record pins, so it is the one thing fetched; nothing on the local machine
+// is consulted, and a stale clone cannot change the answer.
 //
-// The module path is a parameter because there is more than one fork now: the
-// Cluster API one this repository pins, and the Nutanix provider's, pinned by
-// the provider module beside its own record. A checker that resolved one
-// module by name could only ever check one of them.
-//
-// # Why this is not a constant
-//
-// It was one, and it went stale the moment the pin moved: the check went on
-// measuring the previous tag and reported every path added since as one the
-// fork "no longer carries" — the exact opposite of the truth, in a tool whose
-// only job is to say whether the record matches reality.
-//
-// A default that has to be edited in step with go.mod is a second pin, and two
-// pins disagree eventually. Reading it from the module graph means the check
-// measures what the project builds against, which is the only version the
-// record is a record of.
-func pinnedForkVersion(module string) (string, error) {
-	// The replace directive rather than the require: the require names
-	// sigs.k8s.io/cluster-api at an upstream version, and what is actually
-	// fetched is the fork the replace points at.
-	out, err := exec.Command("go", "list", "-m", "-f", "{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}", module).Output()
-	if err != nil {
-		return "", fmt.Errorf("reading the pinned fork version of %s from the module graph: %w", module, err)
-	}
-	v := strings.TrimSpace(string(out))
-	if v == "" {
-		return "", fmt.Errorf("the module graph reports no version for %s", module)
-	}
-	if pseudoVersion.MatchString(v) {
-		// A pseudo-version names a commit, and it names it by a twelve
-		// character prefix — which git will not fetch by, so there is nothing
-		// this check can resolve. Say that, rather than letting it surface as
-		// "couldn't find remote ref" against a string that looks like a tag.
-		//
-		// This is a real state rather than a hypothetical one: a change that
-		// needs a fork patch is pinned to a branch until somebody cuts the
-		// signed tag, and the check has to be runnable in the meantime.
-		return "", fmt.Errorf("the pinned fork version %s is a pseudo-version, not a ref: "+
-			"pass -ref with the branch carrying the patches, and see DRIFT.md for the tag that has to be cut", v)
-	}
-	return v, nil
-}
-
-// pseudoVersion matches the form the go command synthesises for a module
-// resolved at a commit rather than at a tag: a base version, a UTC timestamp
-// and an abbreviated commit.
-//
-// The timestamp is separated by a dot rather than a hyphen when the base
-// version already has a pre-release part, which every version this project
-// pins does — `v1.15.0-kcp.11.0.20260820160642-a0d8d117bab2`.
-var pseudoVersion = regexp.MustCompile(`[-.][0-9]{14}-[0-9a-f]{12}$`)
-
-// divergingPaths returns the files that differ between the upstream base
-// commit and the fork ref, using a temporary bare repository so the check
-// needs no pre-existing clone and cannot be fooled by local state.
-func divergingPaths(upstream, base, fork, ref string) ([]string, error) {
-	dir, err := os.MkdirTemp("", "drift-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-
+// The vendored tree needs no fetch at all: it is the directory being measured,
+// as it is on disk. That is what retired the pinned-version lookup this
+// command used to start with - there is no pin, and a tree does not have a
+// version to be stale about.
+func checkoutUpstream(upstream, base, dir string) error {
 	steps := [][]string{
-		{"init", "--quiet", "--bare", dir},
-		{"--git-dir", dir, "fetch", "--quiet", "--depth", "1", upstream, base},
-		{"--git-dir", dir, "fetch", "--quiet", "--depth", "1", fork, ref},
+		{"init", "--quiet", dir},
+		{"-C", dir, "fetch", "--quiet", "--depth", "1", upstream, base},
+		{"-C", dir, "checkout", "--quiet", "FETCH_HEAD"},
 	}
 	for _, args := range steps {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
-
-	// Resolve the fork ref: a shallow tag fetch lands in FETCH_HEAD.
-	forkSHA, err := exec.Command("git", "--git-dir", dir, "rev-parse", "FETCH_HEAD").Output()
-	if err != nil {
-		return nil, fmt.Errorf("resolving fork ref %s: %w", ref, err)
-	}
-
-	out, err := exec.Command("git", "--git-dir", dir, "diff", "--name-only",
-		base, strings.TrimSpace(string(forkSHA))).Output()
-	if err != nil {
-		return nil, fmt.Errorf("diffing %s..%s: %w", base[:12], ref, err)
-	}
-
-	var paths []string
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			paths = append(paths, l)
-		}
-	}
-	return paths, nil
+	// The checkout's own metadata is not upstream content and must not be
+	// compared as if it were.
+	return os.RemoveAll(dir + "/.git")
 }
 
 func fail(format string, args ...any) {

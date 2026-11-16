@@ -1,0 +1,154 @@
+//go:build e2e
+
+/*
+Copyright 2022 Nutanix
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package e2e
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+
+	prismGoClient "github.com/nutanix-cloud-native/prism-go-client"
+	v4Converged "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
+	prismGoClientTypes "github.com/nutanix-cloud-native/prism-go-client/environment/types"
+	prismGoClientV3 "github.com/nutanix-cloud-native/prism-go-client/v3"
+
+	"github.com/onsi/gomega"
+	"sigs.k8s.io/cluster-api/test/framework/clusterctl"
+)
+
+const (
+	nutanixEndpointVarKey              = "NUTANIX_ENDPOINT"
+	nutanixPortVarKey                  = "NUTANIX_PORT"
+	nutanixInsecureVarKey              = "NUTANIX_INSECURE"
+	nutanixUsernameVarKey              = "NUTANIX_USER"
+	nutanixPasswordVarKey              = "NUTANIX_PASSWORD"
+	nutanixAPIKeyVarKey                = "NUTANIX_API_KEY"
+	nutanixAdditionalTrustBundleVarKey = "NUTANIX_ADDITIONAL_TRUST_BUNDLE"
+)
+
+var (
+	nutanixEndpoint              string
+	nutanixPort                  string
+	nutanixInsecure              string
+	nutanixAdditionalTrustBundle string
+)
+
+func init() {
+	flag.StringVar(&nutanixEndpoint, "e2e.nutanixEndpoint", os.Getenv(nutanixEndpointVarKey), "the Nutanix Prism Central used for e2e tests")
+	flag.StringVar(&nutanixPort, "e2e.nutanixPort", os.Getenv(nutanixPortVarKey), "the Nutanix Prism Central port used for e2e tests")
+	flag.StringVar(&nutanixInsecure, "e2e.nutanixInsecure", os.Getenv(nutanixInsecureVarKey), "Ignore certificate checks for e2e tests")
+	flag.StringVar(&nutanixAdditionalTrustBundle, "e2e.nutanixAdditionalTrustBundle", os.Getenv(nutanixAdditionalTrustBundleVarKey), "Additional trust bundle for e2e tests")
+}
+
+func fetchCredentialParameter(key string, config clusterctl.E2EConfig, allowEmpty bool) string {
+	value := os.Getenv(key)
+
+	if value == "" && config.HasVariable(key) {
+		value = config.MustGetVariable(key)
+	}
+
+	if allowEmpty && value == "" {
+		return value
+	}
+	gomega.Expect(value).ToNot(gomega.BeEmpty(), "expected parameter %s to be set", key)
+	return value
+}
+
+type baseAuthCredentials struct {
+	username string
+	password string
+}
+
+func getBaseAuthCredentials(e2eConfig clusterctl.E2EConfig) baseAuthCredentials {
+	return baseAuthCredentials{
+		username: fetchCredentialParameter(nutanixUsernameVarKey, e2eConfig, true),
+		password: fetchCredentialParameter(nutanixPasswordVarKey, e2eConfig, true),
+	}
+}
+
+func getNutanixCredentials(e2eConfig clusterctl.E2EConfig) (prismGoClient.Credentials, error) {
+	up := getBaseAuthCredentials(e2eConfig)
+	apiKey := fetchCredentialParameter(nutanixAPIKeyVarKey, e2eConfig, true)
+	if nutanixEndpoint == "" {
+		nutanixEndpoint = fetchCredentialParameter(nutanixEndpointVarKey, e2eConfig, false)
+	}
+	if nutanixPort == "" {
+		nutanixPort = fetchCredentialParameter(nutanixPortVarKey, e2eConfig, true)
+	}
+	if nutanixInsecure == "" {
+		nutanixInsecure = fetchCredentialParameter(nutanixInsecureVarKey, e2eConfig, true)
+	}
+	if nutanixAdditionalTrustBundle == "" {
+		nutanixAdditionalTrustBundle = fetchCredentialParameter(nutanixAdditionalTrustBundleVarKey, e2eConfig, true)
+	}
+
+	// Validate API credentials first to avoid creating invalid credentials object.
+	apiCreds := prismGoClientTypes.ApiCredentials{
+		APIKey:   apiKey,
+		Username: up.username,
+		Password: up.password,
+	}
+
+	if err := apiCreds.Validate(); err != nil {
+		return prismGoClient.Credentials{}, err
+	}
+
+	creds := prismGoClient.Credentials{
+		APIKey:   apiCreds.APIKey,
+		Username: apiCreds.Username,
+		Password: apiCreds.Password,
+		Port:     nutanixPort,
+		Endpoint: nutanixEndpoint,
+		URL:      fmt.Sprintf("https://%s:%s", nutanixEndpoint, nutanixPort),
+	}
+
+	if nutanixInsecure != "" {
+		insecureBool, err := strconv.ParseBool(nutanixInsecure)
+		if err != nil {
+			return prismGoClient.Credentials{}, fmt.Errorf("unable to convert value for environment variable %s to bool: %v", nutanixInsecureVarKey, err)
+		}
+		creds.Insecure = insecureBool
+	}
+	return creds, nil
+}
+
+func initNutanixClient(e2eConfig clusterctl.E2EConfig) (*prismGoClientV3.Client, *v4Converged.Client, error) {
+	creds, err := getNutanixCredentials(e2eConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	v3opts := make([]prismGoClientTypes.ClientOption[prismGoClientV3.Client], 0)
+	if nutanixAdditionalTrustBundle != "" {
+		v3opts = append(v3opts, prismGoClientV3.WithPEMEncodedCertBundle([]byte(nutanixAdditionalTrustBundle)))
+	}
+
+	v3Client, err := prismGoClientV3.NewV3Client(creds, v3opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	convergedClient, err := v4Converged.NewClient(creds)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return v3Client, convergedClient, nil
+}

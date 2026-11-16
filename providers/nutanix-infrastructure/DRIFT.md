@@ -7,25 +7,25 @@ API's, and the reasoning both are governed by.
 `task drift` checks this file against reality and fails on any path that
 diverges without an entry here.
 
-Fork: [`github.com/jimmidyson/cluster-api-provider-nutanix`](https://github.com/jimmidyson/cluster-api-provider-nutanix),
-branch `kcp/v1.11`, tag `v1.11.0-kcp.3`
+Tree: `forks/cluster-api-provider-nutanix`, keeping the module path
+`github.com/nutanix-cloud-native/cluster-api-provider-nutanix`. Cut from the
+fork repository's tag `v1.11.0-kcp.3`, the last pin this project held before
+the tree was vendored ([ADR-0005](../../docs/adr-0005-one-repository.md));
+the fork is retired and nothing resolves it.
 
-> **Dependencies are aligned with upstream CAPX.** This module is excluded
-> from Dependabot (`exclude-paths` in `.github/dependabot.yaml`). Its Go
-> dependencies track the CAPX fork's base and the pins the repository root
-> restates (`sigs.k8s.io/cluster-api`, `sigs.k8s.io/controller-runtime`,
-> `k8s.io/*`, …). They move only when the fork pin moves — not on
-> independent Dependabot bumps — because otherwise the provider desyncs
-> from both its upstream and the main module.
+> **Dependencies are aligned with upstream CAPX.** This module and the
+> vendored tree are both excluded from Dependabot (`exclude-paths` in
+> `.github/dependabot.yaml`). Their Go dependencies track the tree's base
+> (`sigs.k8s.io/cluster-api`, `sigs.k8s.io/controller-runtime`, `k8s.io/*`,
+> …) and move only when a new upstream release is adopted — not on
+> independent Dependabot bumps — because otherwise the provider desyncs from
+> both its upstream and the main module.
 
-> One tag, not three. CAPX is a single Go module, where Cluster API is three —
-> the "three tags per release" rule in the root record is a fact about
-> Cluster API's `api/` and `test/` submodules rather than about forks.
->
-> The pins do not propagate, and there are two of them: this module and the
-> repository root both pin the fork, because Go honours `replace` only in the
-> main module. They must move together — a pair that disagreed would build two
-> different CAPX into one repository.
+> There is no pin. This module and the repository root both replace the CAPX
+> module path with a relative path into the tree, because Go honours
+> `replace` only in the main module; two relative paths to one directory
+> cannot disagree, which is what retired the "they must move together" rule
+> that stood here while both pinned a tag.
 
 Base: `b3b16750a6f19e9e6de4fd5eedbcf09d328b462b`
 The base is `v1.11.0-dev.1`, the first tag on the `release-1.11` line.

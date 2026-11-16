@@ -1,6 +1,8 @@
 # ADR-0005: One repository — the forks become vendored trees
 
-Status: **proposed**, drafted 2026-11-16. Supersedes the first question of
+Status: **accepted**, decided 2026-11-16; the first layer — the trees
+vendored, the pins replaced, the checker retargeted — is built in the same
+change. Supersedes the first question of
 [ADR-0004](adr-0004-scaling-to-many-provider-forks.md) and the "patched fork"
 contract in `AGENTS.md`; leaves ADR-0004's L3 — one integration module per
 provider, in this repository — as it is.
@@ -309,3 +311,26 @@ Each is the first layer's job to settle, and the first layer is the one that
 changes no behaviour: vendor the two trees, replace the pins, retarget the
 checker, and show `task verify` and `task drift` passing with nothing pinned.
 Everything else in this ADR stacks on that.
+
+### What the first layer settled
+
+Built alongside this ADR. Two of the four were answered; two were not
+touched and stand as written.
+
+- **Both trees match their records exactly** against upstream at the
+  recorded base commits, measured on disk with nothing pinned. The checker
+  fetches upstream at the base, compares the directory, and runs on every
+  pull request that touches `forks/`.
+- **The seven files upstream's own ignore rules hide** had to be added by
+  force once: the vendored `.gitignore` files are honoured by git here as
+  they were upstream, and a tracked file stays tracked. A subtree merge
+  carries tracked entries, so this is a one-time cost of the snapshot, not a
+  recurring one. The checker compares what is on disk, so the rule cannot
+  hide a difference from it.
+- **The image tag scheme needed an interim answer now**, not later: the
+  publish workflow derives the upstream component from the module graph,
+  which reports a directory and a placeholder version for a replaced tree.
+  The component is now the first twelve characters of the record's base
+  commit. The final scheme is still the later layer's.
+- **Subtree merge, ko under `go.work`, CI time with the vendored suites, and
+  release-please** remain untested, as listed above.

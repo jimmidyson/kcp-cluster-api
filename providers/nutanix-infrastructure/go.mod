@@ -14,14 +14,14 @@ go 1.27.3
 
 require (
 	github.com/jimmidyson/kcp-cluster-api v0.0.0
-	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v1.11.0-dev.1
+	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v0.0.0-00010101000000-000000000000
 	github.com/spf13/pflag v1.0.10
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
 	k8s.io/component-base v0.37.1
 	k8s.io/klog/v2 v2.140.0
-	sigs.k8s.io/cluster-api v1.15.0-kcp.13
-	sigs.k8s.io/cluster-api/api v1.15.0-kcp.13
+	sigs.k8s.io/cluster-api v1.14.3
+	sigs.k8s.io/cluster-api/api v1.14.3
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/multicluster-runtime v0.25.2
 )
@@ -192,7 +192,7 @@ require (
 	k8s.io/streaming v0.37.1 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.36.0 // indirect
-	sigs.k8s.io/cluster-api/test v1.15.0-kcp.13 // indirect
+	sigs.k8s.io/cluster-api/test v1.14.3 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/kind v0.33.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -202,17 +202,17 @@ require (
 
 replace github.com/jimmidyson/kcp-cluster-api => ../..
 
-// These four restate the parent's pins, and they have to: Go honours replace
-// only in the main module, so a nested module inherits none of them. Without
-// them this resolves genuine upstream Cluster API alongside the fork. See
-// ADR-0004, which recorded the hazard before this module existed to prove it.
+// These four restate the root's replaces with this module's own relative
+// paths, and they have to: Go honours replace only in the main module, so a
+// nested module inherits none of them, and without them this resolves genuine
+// upstream Cluster API and CAPX instead of the vendored trees. See ADR-0005.
 
-replace sigs.k8s.io/cluster-api => github.com/jimmidyson/cluster-api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api => ../../forks/cluster-api
 
-replace sigs.k8s.io/cluster-api/api => github.com/jimmidyson/cluster-api/api v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/api => ../../forks/cluster-api/api
 
-replace sigs.k8s.io/cluster-api/test => github.com/jimmidyson/cluster-api/test v1.15.0-kcp.13
+replace sigs.k8s.io/cluster-api/test => ../../forks/cluster-api/test
 
-replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => github.com/jimmidyson/cluster-api-provider-nutanix v1.11.0-kcp.3
+replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => ../../forks/cluster-api-provider-nutanix
 
 replace github.com/kcp-dev/multicluster-provider => github.com/ifdotpy/multicluster-provider v0.0.0-20260920153842-16cf6b0bee59

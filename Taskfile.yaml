@@ -281,20 +281,16 @@ tasks:
         | tar -xzf - -C {{.BIN}} --strip-components=1 bin/kcp
 
   drift:
-    desc: Report each fork's divergence from its base and check it against its record
+    desc: Measure each vendored upstream tree against its base and check it against its record
     cmds:
-      # Cluster API's fork, recorded at the root.
+      # One record per vendored tree, each measured on disk against upstream
+      # at the base commit the record names (ADR-0005). A tree not listed
+      # here is one nothing checks. When adding a provider, add one more
+      # entry naming its record, its tree and its upstream.
       - go run ./cmd/drift
-      # One record per fork, and each is checked from the module that pins it:
-      # the ref comes from that module's own graph, so a checker run from the
-      # wrong directory would measure the wrong version. A fork whose record is
-      # not listed here is one nothing checks. When adding a provider, add one
-      # more `cd providers/<name> && go run .../cmd/drift --record DRIFT.md`
-      # entry here.
-      - cd providers/nutanix-infrastructure && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
-          --record DRIFT.md
-          --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
-          --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
+      - go run ./cmd/drift
+          --record providers/nutanix-infrastructure/DRIFT.md
+          --tree forks/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
   release-please:
     desc: Open the release pull request — run once from main to start a release

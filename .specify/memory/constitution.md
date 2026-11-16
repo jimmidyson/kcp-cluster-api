@@ -56,9 +56,11 @@ justified, and expected to disappear.
   review rather than by a check is a failure of the check.
 
 The mechanism enforcing this has changed over time — first a read-only rule
-over a co-located upstream tree, now a separate patched fork with the
-divergence recorded and checked. The principle has not: divergence is
-counted, justified, and trending to zero.
+over a co-located upstream tree, then a separate patched fork with the
+divergence recorded and checked, now upstream trees vendored under a
+subdirectory with the divergence recorded and checked on every pull request
+that touches one (ADR-0005). The principle has not: divergence is counted,
+justified, and trending to zero.
 
 ### II. Integrate Through Public Extension Points
 
@@ -294,4 +296,4 @@ wins and the other document MUST be revised.
   tooling conflicts with a principle here, the principle wins and the
   conflict MUST be surfaced rather than silently resolved.
 
-**Version**: 2.2.0 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-08-18
+**Version**: 2.2.1 | **Ratified**: 2026-08-15 | **Last Amended**: 2026-11-16

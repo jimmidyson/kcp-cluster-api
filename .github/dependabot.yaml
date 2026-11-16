@@ -28,6 +28,10 @@ updates:
   # See providers/nutanix-infrastructure/DRIFT.md.
   exclude-paths:
   - "providers/nutanix-infrastructure/**"
+  # The vendored upstream trees are upstream's dependency graphs, carried as
+  # they are and moved only by adopting a new upstream release. A bot edit to
+  # one is unrecorded drift, which the drift check would fail. ADR-0005.
+  - "forks/**"
   schedule:
     interval: "weekly"
     day: "monday"

@@ -1,0 +1,859 @@
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: nutanix-quick-start-kcfg-0
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+          - name: cloud-provider
+            value: external
+          - name: eviction-hard
+            value: nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%,memory.available<100Mi,imagefs.inodesFree<10%
+          - name: tls-cipher-suites
+            value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+      postKubeadmCommands:
+      - echo "after kubeadm call" > /var/log/postkubeadm.log
+      preKubeadmCommands:
+      - echo "before kubeadm call" > /var/log/prekubeadm.log
+      - hostnamectl set-hostname "{{ ds.meta_data.hostname }}"
+      verbosity: 10
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: ClusterClass
+metadata:
+  name: nutanix-quick-start
+spec:
+  controlPlane:
+    machineHealthCheck:
+      maxUnhealthy: 40%
+      nodeStartupTimeout: 10m
+      unhealthyConditions:
+      - status: "False"
+        timeout: 300s
+        type: Ready
+      - status: Unknown
+        timeout: 300s
+        type: Ready
+      - status: "True"
+        timeout: 300s
+        type: MemoryPressure
+      - status: "True"
+        timeout: 300s
+        type: DiskPressure
+      - status: "True"
+        timeout: 300s
+        type: PIDPressure
+      - status: "True"
+        timeout: 300s
+        type: NetworkUnavailable
+    machineInfrastructure:
+      ref:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        name: nutanix-quick-start-cp-nmt
+    ref:
+      apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+      kind: KubeadmControlPlaneTemplate
+      name: nutanix-quick-start-kcpt
+  infrastructure:
+    ref:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: NutanixClusterTemplate
+      name: nutanix-quick-start-nct
+  patches:
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/kubeadmConfigSpec/users
+        valueFrom:
+          template: |
+            - name: capxuser
+              lockPassword: false
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              sshAuthorizedKeys:
+                - '{{ .sshKey }}'
+      selector:
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+        kind: KubeadmControlPlaneTemplate
+        matchResources:
+          controlPlane: true
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/users
+        valueFrom:
+          template: |
+            - name: capxuser
+              lockPassword: false
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              sshAuthorizedKeys:
+                - '{{ .sshKey }}'
+      selector:
+        apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+        kind: KubeadmConfigTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    name: add-ssh-user
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/controlPlaneEndpoint
+        valueFrom:
+          template: |
+            host: '{{ .controlPlaneEndpoint.IP }}'
+            port: {{ .controlPlaneEndpoint.port }}
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/kubeadmConfigSpec/preKubeadmCommands/-
+        valueFrom:
+          template: |
+            sed -i 's/control_plane_endpoint_ip/{{ .controlPlaneEndpoint.IP }}/g' /etc/kubernetes/manifests/kube-vip.yaml
+      - op: add
+        path: /spec/template/spec/kubeadmConfigSpec/preKubeadmCommands/-
+        valueFrom:
+          template: |
+            sed -i 's/control_plane_endpoint_port/{{ .controlPlaneEndpoint.port }}/g' /etc/kubernetes/manifests/kube-vip.yaml
+      selector:
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+        kind: KubeadmControlPlaneTemplate
+        matchResources:
+          controlPlane: true
+    name: update-control-plane-endpoint
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/prismCentral
+        valueFrom:
+          template: |
+            address: '{{ .prismCentralEndpoint.address }}'
+            port: {{ .prismCentralEndpoint.port }}
+            insecure: {{ .prismCentralEndpoint.insecure }}
+            credentialRef:
+              name: '{{ .prismCentralEndpoint.credentialSecret }}'
+              kind: Secret
+            additionalTrustBundle:
+              name: '{{ .prismCentralEndpoint.additionalTrustBundle }}'
+              kind: ConfigMap
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+    name: add-pc-endpoint-and-creds
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/systemDiskSize
+        valueFrom:
+          variable: controlPlaneMachineDetails.systemDiskSize
+      - op: add
+        path: /spec/template/spec/image/name
+        valueFrom:
+          variable: controlPlaneMachineDetails.imageName
+      - op: add
+        path: /spec/template/spec/cluster
+        valueFrom:
+          template: |
+            type: name
+            name: {{ .controlPlaneMachineDetails.clusterName }}
+      - op: add
+        path: /spec/template/spec/subnet
+        valueFrom:
+          variable: controlPlaneMachineDetails.subnets
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    name: update-control-plane-machine-template-common
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/bootType
+        valueFrom:
+          template: '{{ .controlPlaneMachineDetails.bootType | default "uefi" }}'
+      - op: add
+        path: /spec/template/spec/vcpusPerSocket
+        valueFrom:
+          template: '{{ .controlPlaneMachineDetails.vcpusPerSocket | default 1 }}'
+      - op: add
+        path: /spec/template/spec/vcpuSockets
+        valueFrom:
+          template: '{{ .controlPlaneMachineDetails.vcpuSockets | default 2 }}'
+      - op: add
+        path: /spec/template/spec/memorySize
+        valueFrom:
+          template: '{{ .controlPlaneMachineDetails.memorySize | default "4Gi" }}'
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{if .controlPlaneMachineDetails.vmProfile}}false{{else}}true{{end}}'
+    name: update-control-plane-machine-template-cpu-memory
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/gpus
+        valueFrom:
+          variable: controlPlaneMachineDetails.gpus
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{if .controlPlaneMachineDetails.gpus}}true{{end}}'
+    name: update-control-plane-machine-template-gpus
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/additionalCategories
+        valueFrom:
+          variable: controlPlaneMachineDetails.additionalCategories
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{if .controlPlaneMachineDetails.additionalCategories}}true{{end}}'
+    name: update-control-plane-machine-template-additional-categories
+  - definitions:
+    - jsonPatches:
+      - op: remove
+        path: /spec/template/spec/bootType
+      - op: remove
+        path: /spec/template/spec/vcpusPerSocket
+      - op: remove
+        path: /spec/template/spec/vcpuSockets
+      - op: remove
+        path: /spec/template/spec/memorySize
+      - op: add
+        path: /spec/template/spec/vmProfile
+        valueFrom:
+          variable: controlPlaneMachineDetails.vmProfile
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{if .controlPlaneMachineDetails.vmProfile}}true{{else}}false{{end}}'
+    name: update-control-plane-machine-template-vmprofile
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/systemDiskSize
+        valueFrom:
+          variable: workerMachineDetails.systemDiskSize
+      - op: add
+        path: /spec/template/spec/image/name
+        valueFrom:
+          variable: workerMachineDetails.imageName
+      - op: add
+        path: /spec/template/spec/cluster
+        valueFrom:
+          template: |
+            type: name
+            name: {{ .workerMachineDetails.clusterName }}
+      - op: add
+        path: /spec/template/spec/subnet
+        valueFrom:
+          variable: workerMachineDetails.subnets
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    name: update-worker-machine-template-common
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/bootType
+        valueFrom:
+          template: '{{ .workerMachineDetails.bootType | default "uefi" }}'
+      - op: add
+        path: /spec/template/spec/vcpusPerSocket
+        valueFrom:
+          template: '{{ .workerMachineDetails.vcpusPerSocket | default 1 }}'
+      - op: add
+        path: /spec/template/spec/vcpuSockets
+        valueFrom:
+          template: '{{ .workerMachineDetails.vcpuSockets | default 2 }}'
+      - op: add
+        path: /spec/template/spec/memorySize
+        valueFrom:
+          template: '{{ .workerMachineDetails.memorySize | default "4Gi" }}'
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    enabledIf: '{{if .workerMachineDetails.vmProfile}}false{{else}}true{{end}}'
+    name: update-worker-machine-template-cpu-memory
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/gpus
+        valueFrom:
+          variable: workerMachineDetails.gpus
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    enabledIf: '{{if .workerMachineDetails.gpus}}true{{end}}'
+    name: update-worker-machine-template-gpus
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/additionalCategories
+        valueFrom:
+          variable: workerMachineDetails.additionalCategories
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    enabledIf: '{{if .workerMachineDetails.additionalCategories}}true{{end}}'
+    name: update-worker-machine-template-additional-categories
+  - definitions:
+    - jsonPatches:
+      - op: remove
+        path: /spec/template/spec/bootType
+      - op: remove
+        path: /spec/template/spec/vcpusPerSocket
+      - op: remove
+        path: /spec/template/spec/vcpuSockets
+      - op: remove
+        path: /spec/template/spec/memorySize
+      - op: add
+        path: /spec/template/spec/vmProfile
+        valueFrom:
+          variable: workerMachineDetails.vmProfile
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    enabledIf: '{{if .workerMachineDetails.vmProfile}}true{{else}}false{{end}}'
+    name: update-worker-machine-template-vmprofile
+  - definitions:
+    - jsonPatches:
+      - op: replace
+        path: /spec/template/spec/failureDomains
+        valueFrom:
+          variable: failureDomains
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+    - jsonPatches:
+      - op: remove
+        path: /spec/template/spec/cluster
+      - op: remove
+        path: /spec/template/spec/subnet
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{if .failureDomains}}true{{end}}'
+    name: add-failure-domains
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/project
+        valueFrom:
+          variable: project
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          controlPlane: true
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/project
+        valueFrom:
+          variable: project
+      selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: NutanixMachineTemplate
+        matchResources:
+          machineDeploymentClass:
+            names:
+            - nutanix-quick-start-worker
+    enabledIf: '{{if .project}}true{{end}}'
+    name: add-project
+  - definitions:
+    - jsonPatches:
+      - op: add
+        path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/apiServer/extraArgs/-
+        value:
+          name: cloud-provider
+          value: external
+      selector:
+        apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+        kind: KubeadmControlPlaneTemplate
+        matchResources:
+          controlPlane: true
+    enabledIf: '{{semverCompare "< 1.33.0-0" .builtin.controlPlane.version}}'
+    name: add-apiserver-cloud-provider-external-for-pre-k8s-1.33
+  variables:
+  - name: sshKey
+    required: true
+    schema:
+      openAPIV3Schema:
+        description: Public key to SSH onto the cluster nodes.
+        type: string
+  - name: controlPlaneEndpoint
+    required: true
+    schema:
+      openAPIV3Schema:
+        description: IP and port of the control plane endpoint.
+        properties:
+          IP:
+            type: string
+          port:
+            type: integer
+        type: object
+  - name: prismCentralEndpoint
+    required: true
+    schema:
+      openAPIV3Schema:
+        description: Endpoint and credentials of the Prism Central.
+        properties:
+          additionalTrustBundle:
+            type: string
+          address:
+            type: string
+          credentialSecret:
+            type: string
+          insecure:
+            type: boolean
+          port:
+            type: integer
+        type: object
+  - name: controlPlaneMachineDetails
+    required: true
+    schema:
+      openAPIV3Schema:
+        description: Details of the control plane machine deployment.
+        properties:
+          additionalCategories:
+            items:
+              properties:
+                key:
+                  type: string
+                value:
+                  type: string
+              type: object
+            type: array
+          bootType:
+            type: string
+          clusterName:
+            type: string
+          gpus:
+            items:
+              properties:
+                deviceID:
+                  type: integer
+                name:
+                  type: string
+                type:
+                  type: string
+              type: object
+            type: array
+          imageName:
+            type: string
+          memorySize:
+            type: string
+          subnets:
+            items:
+              properties:
+                name:
+                  type: string
+                type:
+                  enum:
+                  - name
+                  - uuid
+                  type: string
+                uuid:
+                  type: string
+              type: object
+            type: array
+          systemDiskSize:
+            type: string
+          vcpuSockets:
+            type: integer
+          vcpusPerSocket:
+            type: integer
+          vmProfile:
+            properties:
+              name:
+                type: string
+              type:
+                enum:
+                - name
+                - uuid
+                type: string
+              uuid:
+                type: string
+            type: object
+        type: object
+  - name: workerMachineDetails
+    required: true
+    schema:
+      openAPIV3Schema:
+        description: Details of the worker machine deployment.
+        properties:
+          additionalCategories:
+            items:
+              properties:
+                key:
+                  type: string
+                value:
+                  type: string
+              type: object
+            type: array
+          bootType:
+            type: string
+          clusterName:
+            type: string
+          gpus:
+            items:
+              properties:
+                deviceID:
+                  type: integer
+                name:
+                  type: string
+                type:
+                  type: string
+              type: object
+            type: array
+          imageName:
+            type: string
+          memorySize:
+            type: string
+          subnets:
+            items:
+              properties:
+                name:
+                  type: string
+                type:
+                  enum:
+                  - name
+                  - uuid
+                  type: string
+                uuid:
+                  type: string
+              type: object
+            type: array
+          systemDiskSize:
+            type: string
+          vcpuSockets:
+            type: integer
+          vcpusPerSocket:
+            type: integer
+          vmProfile:
+            properties:
+              name:
+                type: string
+              type:
+                enum:
+                - name
+                - uuid
+                type: string
+              uuid:
+                type: string
+            type: object
+        type: object
+  - name: failureDomains
+    required: false
+    schema:
+      openAPIV3Schema:
+        description: List of failure domains to be used in the cluster.
+        items:
+          properties:
+            cluster:
+              properties:
+                name:
+                  type: string
+                type:
+                  enum:
+                  - name
+                  - uuid
+                  type: string
+                uuid:
+                  type: string
+              type: object
+            controlPlane:
+              type: boolean
+            name:
+              type: string
+            subnets:
+              items:
+                properties:
+                  name:
+                    type: string
+                  type:
+                    enum:
+                    - name
+                    - uuid
+                    type: string
+                  uuid:
+                    type: string
+                type: object
+              type: array
+          type: object
+        type: array
+  - name: project
+    required: false
+    schema:
+      openAPIV3Schema:
+        description: Prism Central project to deploy the cluster resources into.
+        properties:
+          name:
+            type: string
+          type:
+            enum:
+            - name
+            - uuid
+            type: string
+          uuid:
+            type: string
+        type: object
+  workers:
+    machineDeployments:
+    - class: nutanix-quick-start-worker
+      machineHealthCheck:
+        maxUnhealthy: 40%
+        nodeStartupTimeout: 10m
+        unhealthyConditions:
+        - status: "False"
+          timeout: 300s
+          type: Ready
+        - status: Unknown
+          timeout: 300s
+          type: Ready
+        - status: "True"
+          timeout: 300s
+          type: MemoryPressure
+        - status: "True"
+          timeout: 300s
+          type: DiskPressure
+        - status: "True"
+          timeout: 300s
+          type: PIDPressure
+        - status: "True"
+          timeout: 300s
+          type: NetworkUnavailable
+      template:
+        bootstrap:
+          ref:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+            kind: KubeadmConfigTemplate
+            name: nutanix-quick-start-kcfg-0
+        infrastructure:
+          ref:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+            kind: NutanixMachineTemplate
+            name: nutanix-quick-start-md-nmt
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlaneTemplate
+metadata:
+  name: nutanix-quick-start-kcpt
+spec:
+  template:
+    spec:
+      kubeadmConfigSpec:
+        clusterConfiguration:
+          apiServer:
+            certSANs:
+            - localhost
+            - 127.0.0.1
+            - 0.0.0.0
+            extraArgs:
+            - name: tls-cipher-suites
+              value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+          controllerManager:
+            extraArgs:
+            - name: cloud-provider
+              value: external
+            - name: tls-cipher-suites
+              value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+          scheduler:
+            extraArgs:
+            - name: tls-cipher-suites
+              value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+        files:
+        - content: |
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: kube-vip
+              namespace: kube-system
+            spec:
+              containers:
+                - name: kube-vip
+                  image: ghcr.io/kube-vip/kube-vip:v0.9.2
+                  imagePullPolicy: IfNotPresent
+                  args:
+                    - manager
+                  env:
+                    - name: vip_arp
+                      value: "true"
+                    - name: address
+                      value: "control_plane_endpoint_ip"
+                    - name: port
+                      value: "control_plane_endpoint_port"
+                    - name: vip_subnet
+                      value: "32"
+                    - name: cp_enable
+                      value: "true"
+                    - name: cp_namespace
+                      value: kube-system
+                    - name: vip_ddns
+                      value: "false"
+                    - name: vip_leaderelection
+                      value: "true"
+                    - name: vip_leaseduration
+                      value: "15"
+                    - name: vip_renewdeadline
+                      value: "10"
+                    - name: vip_retryperiod
+                      value: "2"
+                    - name: svc_enable
+                      value: "false"
+                    - name: lb_enable
+                      value: "false"
+                    - name: enableServicesElection
+                      value: "false"
+                  securityContext:
+                    capabilities:
+                      add:
+                        - NET_ADMIN
+                        - SYS_TIME
+                        - NET_RAW
+                  volumeMounts:
+                    - mountPath: /etc/kubernetes/admin.conf
+                      name: kubeconfig
+                  resources: {}
+              hostNetwork: true
+              hostAliases:
+                - hostnames:
+                    - kubernetes
+                  ip: 127.0.0.1
+              volumes:
+                - name: kubeconfig
+                  hostPath:
+                    type: FileOrCreate
+                    path: /etc/kubernetes/admin.conf
+            status: {}
+          owner: root:root
+          path: /etc/kubernetes/manifests/kube-vip.yaml
+        initConfiguration:
+          nodeRegistration:
+            kubeletExtraArgs:
+            - name: cloud-provider
+              value: external
+            - name: eviction-hard
+              value: nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%,memory.available<100Mi,imagefs.inodesFree<10%
+            - name: tls-cipher-suites
+              value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+        joinConfiguration:
+          nodeRegistration:
+            kubeletExtraArgs:
+            - name: cloud-provider
+              value: external
+            - name: eviction-hard
+              value: nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%,memory.available<100Mi,imagefs.inodesFree<10%
+            - name: tls-cipher-suites
+              value: TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+        postKubeadmCommands:
+        - echo export KUBECONFIG=/etc/kubernetes/admin.conf >> /root/.bashrc
+        - |
+          KUBERNETES_VERSION_NO_V=${KUBERNETES_VERSION#v}
+          VERSION_TO_COMPARE=1.29.0
+          if [ "$(printf '%s\n' "$KUBERNETES_VERSION_NO_V" "$VERSION_TO_COMPARE" | sort -V | head -n1)" != "$KUBERNETES_VERSION_NO_V" ]; then
+            if [ -f /run/kubeadm/kubeadm.yaml ]; then
+              sed -i 's#path: /etc/kubernetes/super-admin.conf#path: /etc/kubernetes/admin.conf#' /etc/kubernetes/manifests/kube-vip.yaml;
+            fi
+          fi
+        - echo "after kubeadm call" > /var/log/postkubeadm.log
+        preKubeadmCommands:
+        - echo "before kubeadm call" > /var/log/prekubeadm.log
+        - hostnamectl set-hostname "{{ ds.meta_data.hostname }}"
+        - echo "::1         ipv6-localhost ipv6-loopback" >/etc/hosts
+        - echo "127.0.0.1   localhost" >>/etc/hosts
+        - echo "127.0.0.1   kubernetes" >>/etc/hosts
+        - echo "127.0.0.1   {{ ds.meta_data.hostname }}" >> /etc/hosts
+        - |
+          KUBERNETES_VERSION_NO_V=${KUBERNETES_VERSION#v}
+          VERSION_TO_COMPARE=1.29.0
+          if [ "$(printf '%s\n' "$KUBERNETES_VERSION_NO_V" "$VERSION_TO_COMPARE" | sort -V | head -n1)" != "$KUBERNETES_VERSION_NO_V" ]; then
+            if [ -f /run/kubeadm/kubeadm.yaml ]; then
+              sed -i 's#path: /etc/kubernetes/admin.conf#path: /etc/kubernetes/super-admin.conf#' /etc/kubernetes/manifests/kube-vip.yaml;
+            fi
+          fi
+        verbosity: 10
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: NutanixClusterTemplate
+metadata:
+  name: nutanix-quick-start-nct
+spec:
+  template:
+    spec:
+      failureDomains: []
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: NutanixMachineTemplate
+metadata:
+  name: nutanix-quick-start-cp-nmt
+spec:
+  template:
+    spec:
+      bootType: uefi
+      image:
+        name: placeholder-image
+        type: name
+      memorySize: 4Gi
+      systemDiskSize: 40Gi
+      vcpuSockets: 2
+      vcpusPerSocket: 1
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: NutanixMachineTemplate
+metadata:
+  name: nutanix-quick-start-md-nmt
+spec:
+  template:
+    spec:
+      bootType: uefi
+      image:
+        name: placeholder-image
+        type: name
+      memorySize: 4Gi
+      systemDiskSize: 40Gi
+      vcpuSockets: 2
+      vcpusPerSocket: 1

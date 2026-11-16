@@ -44,50 +44,44 @@ touches. A new file rebases cleanly; a modified one does not. Of the
 forty-nine deliberate entries below, twenty-five are new files and twenty-four
 modify existing ones — and the twenty-four are the number that matters.
 
-## Where the check runs, and why not on every pull request
+## Where the check runs
 
-The check runs on a daily schedule, on demand, and on pull requests that
-touch the pin, this record, or the checker itself — not on every pull
-request, and not in the fork.
+The check runs on every pull request that touches a vendored tree, a record,
+or the checker; on a daily schedule; and on demand.
 
-**Not on every pull request here**, because the thing being measured lives
-in another repository. Gating every change on it means an unrelated pull
-request goes red because somebody pushed to the fork: a failure its author
-can neither fix nor merge past. The scheduled run surfaces the same problem
-within a day, without holding anyone's work hostage. The path filter keeps
-it blocking exactly where a pull request in this repository *is* the right
-place to fix it — when the pinned version or this record changes.
+**On every such pull request**, because the thing being measured is in it.
+The upstream trees are vendored under `forks/`
+([ADR-0005](docs/adr-0005-one-repository.md)), so a change to one arrives
+as a diff here, where its author can add the entry or drop the change. This
+inverts the reasoning the record carried while the trees lived in forks of
+their own: then the measurement depended on another repository's state, and
+gating every pull request on it meant unrelated work going red for a push
+nobody here made. There is no other repository now.
 
-**Not in the fork**, though that is where drift is introduced, because the
-checker would become drift. The fork's contract is "upstream at base commit
-plus recorded patches, nothing else", which is what makes
-`git diff upstream..kcp/v1.15` mean something without mental subtraction.
-Adding a workflow and a copy of this record there would add two more
-differing paths and require the check to exempt its own infrastructure. It
-would also need a second implementation: the checker is Go in this module,
-and the fork is the Cluster API module, which cannot import it without a
-cycle.
+**On a schedule as well**, because the other side of the measurement —
+upstream at the base commit — is fetched, and a day on which the fetch could
+not run should not pass unnoticed.
 
-If push-time rejection on the fork is wanted, branch protection on `kcp/*`
-is the honest mechanism, not a workflow the fork has to carry.
+**On what is on disk, not on what git tracks.** The vendored tree is a
+snapshot of upstream plus the recorded patches, and the record's question is
+"what differs from upstream". A file that is present differs if upstream does
+not have it, whatever an ignore rule in either tree says; the checker
+compares the directory, so an edit shows before it is staged.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.13`
-
-> All three modules are at the same version. `api/` was left behind at
-> `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
-> have pointed a new version at an unchanged tree; it is tagged along with the
-> others again now, which costs nothing and removes a version skew that had to
-> be explained every time it was read.
+Tree: `forks/cluster-api`, keeping the module path `sigs.k8s.io/cluster-api`
+with its `api/` and `test/` modules as they are upstream. Cut from the fork
+repository's tag `v1.15.0-kcp.13`, which is the last pin this project held
+before the tree was vendored; the fork is retired and nothing resolves it.
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
-> **The pins do not propagate.** The fork keeps the module path
-> `sigs.k8s.io/cluster-api`, and Go honours `replace` only in the main module.
-> Anything consuming this module must restate all three `replace` directives
-> at matching versions; without them it resolves genuine upstream Cluster API,
-> which fails as a confusing "unknown revision" at best and as duplicate types
-> at worst. There is one consumer today, so nothing checks this. See
-> [ADR-0004](docs/adr-0004-scaling-to-many-provider-forks.md).
+> **There is no pin.** Every module that consumes Cluster API replaces the
+> module path with a relative path into this tree, and `go.work` lists every
+> module so the tree is one build. Go honours `replace` only in the main
+> module, so each consumer restates the three directives; a relative path
+> cannot disagree with another on a version, which is what retired the
+> pin-propagation hazard [ADR-0004](docs/adr-0004-scaling-to-many-provider-forks.md)
+> recorded.
 
 The base is an upstream `main` commit, not a release tag, and that is
 forced rather than chosen: at `v1.14.0` the docker provider's reconcilers

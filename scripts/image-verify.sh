@@ -11,10 +11,11 @@ KIND_CLUSTER="${KIND_CLUSTER:-kcp-capi-smoke}"
 
 scripts/image-tags.sh --check
 
-capi_ver="$(go list -m -json sigs.k8s.io/cluster-api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+# The upstream components come from the drift records' base commits, via the
+# one script that derives every tag (see scripts/image-tags.sh).
+capi_ver="$(scripts/image-tags.sh --capi-version)"
 capi_oci="${capi_ver//+/-}"
-capx_json="$(go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
-capx_ver="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version','') or d.get('Version',''))" 2>/dev/null || go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+capx_ver="$(scripts/image-tags.sh --capx-version)"
 capx_ver="${capx_ver:-unknown}"
 capx_oci="${capx_ver//+/-}"
 repo_ver="$(./scripts/image-tags.sh --repo-version 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0-dev)"

@@ -1,17 +1,13 @@
 name: drift
 
-# Divergence from upstream is measured rather than trusted (Constitution I),
-# but not on every pull request.
+# Divergence from upstream is measured rather than trusted (Constitution I).
 #
-# The thing being measured lives in another repository. Gating every PR here
-# on it means an unrelated change goes red because someone pushed to the
-# fork — a failure its author can neither fix nor merge past. And it detects
-# late: drift is introduced by a push to the fork's branch, not by a PR here.
-#
-# So: scheduled, so fork-side drift surfaces within a day with nobody
-# opening anything; on demand, for when you want to know now; and blocking
-# only on pull requests that change the pin or the record, which is exactly
-# when a PR here is the right place to fix it.
+# The upstream trees are vendored under forks/ (ADR-0005), so the thing being
+# measured is in the pull request: a change under a vendored tree either has
+# an entry in that tree's record or it fails here, and the author can fix it.
+# The schedule stays because the other side of the measurement — upstream at
+# the base commit — is fetched, and a run that could not fetch yesterday
+# should not go unnoticed.
 on:
   schedule:
     - cron: '17 6 * * *'
@@ -19,21 +15,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'go.mod'
+      - 'forks/**'
       - 'DRIFT.md'
       - 'cmd/drift/**'
       - 'internal/drift/**'
-      # One record per fork, and each is pinned by its own module. A record or
-      # a pin outside this list is one the check stops gating.
-      #
-      # Extensibility (T024): this already handles additional providers — the
-      # `providers/*` globs gate on any per-provider DRIFT.md/go.mod change. No
-      # workflow edit is needed when extending PROVIDER_MODULES. What does need
-      # a new entry is Taskfile:drift (one `cd providers/<name> && …` line),
-      # which `task drift` runs; this workflow gates on that task, so it
-      # inherits coverage automatically.
+      # One record per vendored tree. A record outside this list is one the
+      # check stops gating; the trees themselves are covered by forks/** above.
+      # What does need a new entry per provider is Taskfile:drift, which this
+      # workflow runs, so it inherits coverage from there.
       - 'providers/*/DRIFT.md'
-      - 'providers/*/go.mod'
 
 jobs:
   drift:

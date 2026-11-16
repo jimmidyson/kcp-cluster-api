@@ -1,0 +1,145 @@
+/*
+Copyright 2022 Nutanix
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package context
+
+import (
+	"context"
+	"fmt"
+
+	infrav1 "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/api/v1beta1"
+
+	v4Converged "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
+	prismclientv3 "github.com/nutanix-cloud-native/prism-go-client/v3"
+	"k8s.io/utils/ptr"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	ctlclient "sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	// MetroPreferredFailureDomainName is the Datastore key used to pass the preferred
+	// NutanixFailureDomain name selected for a Metro/MetroSite machine within a reconcile cycle.
+	MetroPreferredFailureDomainName = "metro-preferred-failuredomain"
+
+	// MetroPreferredPE is the Datastore key used to pass the preferred Prism Element identifier
+	// selected for a Metro/MetroSite machine within a reconcile cycle.
+	MetroPreferredPE = "metro-preferred-pe"
+
+	// MetroNodeGroupNameLabel is the Datastore key used to pass the MetroSite's groupNameLabel
+	// value within a reconcile cycle.
+	MetroNodeGroupNameLabel = "metro-node-group-name-label"
+)
+
+// ClusterContext is a context used with a NutanixCluster reconciler
+type ClusterContext struct {
+	Context         context.Context
+	NutanixClient   *prismclientv3.Client
+	ConvergedClient *v4Converged.Client
+
+	Cluster        *capiv1beta2.Cluster
+	NutanixCluster *infrav1.NutanixCluster
+}
+
+// ProjectInfo holds the resolved project identifier and optional name for
+// user-friendly error messages. Name is set to the user-provided name when
+// the project was specified by name, "_internal" when using the default project,
+// or nil when the project was specified only by UUID.
+type ProjectInfo struct {
+	ExtID *string
+	Name  *string
+}
+
+// InternalProjectName is used as the Name in ProjectInfo when the default
+// project is resolved automatically (i.e., user did not specify a project).
+const InternalProjectName = "_internal"
+
+// MachineContext is a context used with a NutanixMachine reconciler
+type MachineContext struct {
+	Context         context.Context
+	NutanixClient   *prismclientv3.Client
+	ConvergedClient *v4Converged.Client
+
+	Cluster        *capiv1beta2.Cluster
+	Machine        *capiv1beta2.Machine
+	NutanixCluster *infrav1.NutanixCluster
+	NutanixMachine *infrav1.NutanixMachine
+
+	PCVersion     string
+	ProjectPolicy string
+
+	// The VM ip address
+	IP string
+
+	// Datastore is used to pass data among functions in the same reconciling cycle.
+	Datastore map[string]*string
+}
+
+// VHADomainContext is a context used with a NutanixVirtualHADomain reconciler
+type VHADomainContext struct {
+	Context         context.Context
+	NutanixClient   *prismclientv3.Client
+	ConvergedClient *v4Converged.Client
+
+	Cluster        *capiv1beta2.Cluster
+	NutanixCluster *infrav1.NutanixCluster
+	VHADomain      *infrav1.NutanixVirtualHADomain
+}
+
+// IsControlPlaneMachine returns true if the provided resource is
+// a member of the control plane.
+func IsControlPlaneMachine(nma *infrav1.NutanixMachine) bool {
+	if nma == nil {
+		return false
+	}
+	_, ok := nma.GetLabels()[capiv1beta2.MachineControlPlaneNameLabel]
+	return ok
+}
+
+// GetNutanixMachinesInCluster gets a cluster's NutanixMachine resources.
+func (clctx *ClusterContext) GetNutanixMachinesInCluster(client ctlclient.Client) ([]*infrav1.NutanixMachine, error) {
+	clusterName := clctx.NutanixCluster.Name
+	clusterNamespace := clctx.NutanixCluster.Namespace
+	labels := map[string]string{capiv1beta2.ClusterNameLabel: clusterName}
+	machineList := &infrav1.NutanixMachineList{}
+
+	err := client.List(clctx.Context, machineList,
+		ctlclient.InNamespace(clusterNamespace), ctlclient.MatchingLabels(labels))
+	if err != nil {
+		return nil, err
+	}
+
+	ntxMachines := make([]*infrav1.NutanixMachine, len(machineList.Items))
+	for i := range machineList.Items {
+		ntxMachines[i] = &machineList.Items[i]
+	}
+
+	return ntxMachines, nil
+}
+
+func (clctx *ClusterContext) SetFailureStatus(failureReason string, failureMessage error) {
+	log := ctrl.LoggerFrom(clctx.Context)
+	log.Error(failureMessage, fmt.Sprintf("cluster failed: %s", failureReason))
+	clctx.NutanixCluster.Status.FailureMessage = ptr.To(fmt.Sprintf("%v", failureMessage))
+	clctx.NutanixCluster.Status.FailureReason = &failureReason
+}
+
+func (clctx *MachineContext) SetFailureStatus(failureReason string, failureMessage error) {
+	log := ctrl.LoggerFrom(clctx.Context)
+	log.Error(failureMessage, fmt.Sprintf("machine failed: %s", failureReason))
+	clctx.NutanixMachine.Status.FailureMessage = ptr.To(fmt.Sprintf("%v", failureMessage))
+	clctx.NutanixMachine.Status.FailureReason = &failureReason
+}

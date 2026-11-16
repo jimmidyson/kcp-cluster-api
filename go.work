@@ -1,0 +1,16 @@
+// One build for the whole tree. Every module here is in the workspace, so a
+// change to a vendored upstream tree is seen by the modules that consume it
+// without a tag or a pin in between - which is the point of vendoring them
+// (ADR-0005). Each module also carries its own relative replace directives,
+// so it still resolves alone with GOWORK=off; the workspace is a convenience
+// for building them together, not the only way they resolve.
+go 1.27.3
+
+use (
+	.
+	./forks/cluster-api
+	./forks/cluster-api/api
+	./forks/cluster-api/test
+	./forks/cluster-api-provider-nutanix
+	./providers/nutanix-infrastructure
+)
