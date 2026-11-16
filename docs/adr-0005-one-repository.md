@@ -17,10 +17,19 @@ it was not designed against, and decides that it does not.
 
 ## The requirement
 
-**Each provider must be releasable and testable on its own.** A change to the
-Nutanix provider's workspace-aware wiring should produce a Nutanix release,
-proven against a real kcp, without waiting on or being blocked by the core
-providers — and the same the other way round.
+**Each provider must be testable on its own, and every release must be a set
+that was tested together.** A change to the Nutanix provider's workspace-aware
+wiring should be proven against a real kcp without running, or being blocked
+by, the core providers' suites — and the same the other way round. What ships
+is then one version of everything, because a version is a claim that its
+parts work together, and the only such claim this project can make honestly
+is about a set it actually ran.
+
+The requirement was first stated as "releasable and testable on its own", and
+the release half was dropped during this ADR's drafting, for the reason given
+under [The decision](#the-decision): once the forks are in one tree, the
+strong form of independent release is impossible, and the weak form that
+remains buys only untested combinations.
 
 The current layout cannot meet this at all, and the reason is structural
 rather than a gap to be filled. The forks carry patches to upstream code and
@@ -108,9 +117,9 @@ path with a relative one instead of a version, a committed `go.work` makes
 the whole thing one build, and each provider's kcp wiring, tests and release
 sit beside the code they wire.
 
-This meets the requirement through per-component releases and path-filtered
-CI, and it is the only shape that removes the cross-repository cost instead
-of managing it. The two things it costs are a flat diff in place of a
+This meets the requirement through path-filtered CI and one release of the
+whole tree, and it is the only shape that removes the cross-repository cost
+instead of managing it. The two things it costs are a flat diff in place of a
 per-patch commit series, and about 40 MB of vendored source that grows with
 each provider.
 
@@ -189,11 +198,29 @@ describes the modules it lands beside:
   `Fork:` line becomes the tree's path; the base commit stays. The checker
   measures a local directory against an upstream commit instead of cloning a
   fork, and runs on every pull request that touches that directory.
-- **Releases stay per component.** release-please already treats this
-  repository as a set of packages, one per module; a vendored tree is not a
-  package, it is source a package builds from. Image tags carry the upstream
-  base version where they carry a fork tag today, and the fork's `-kcp.N`
-  suffix goes away because the component version already says what it said.
+- **One release of everything, in lockstep.** A tag names one commit, every
+  commit is a set the demo, the sweep and the integration suites ran
+  together, and every image is published at every tag. This is the
+  arrangement upstream Cluster API uses for the providers in its own tree,
+  and every provider this project carries is now in its own tree. The
+  alternative — a version per component — was the first draft of this ADR,
+  and was dropped because the monorepo has already removed the independence
+  it would express: a provider cannot ship against a Cluster API tree other
+  than the one beside it, so what a per-component version could still vary
+  is a number and a push, and varying those only produces combinations
+  nobody has tested. release-please collapses to one package at the root;
+  the per-package configuration and the per-provider image tag derivation
+  from #136 are superseded. Image tags carry the upstream base version where
+  they carry a fork tag today, and the fork's `-kcp.N` suffix goes away
+  because the release version already says what it said.
+- **A stated skew policy, and a test for it.** Lockstep says what was tested
+  at a version; it says nothing about core at N running beside a provider
+  still at N-1 during a rolling upgrade. That depends on the kcp-facing
+  contract — the APIExport conventions, the permission claims, the
+  provider-contract label — staying stable across releases, which no version
+  number can make true. The policy is one minor of skew, and the claim is
+  only as good as a test that upgrades core first with the providers held
+  back, then the providers. That test does not exist yet and is named below.
 - **Independently testable means path-filtered.** A change under a vendored
   tree runs that tree's own tests and the kcp integration tests of the
   managers built from it, and nothing else. Running upstream's unit suite on
@@ -238,8 +265,10 @@ layer, not a side effect:
   upstream proposal is a known operation, and ADR-0003 means few are headed
   there.
 - A provider can never ship against a Cluster API tree other than the one it
-  sits beside. The requirement asked for independent releases, not
-  independent upstream versions, and this is the point at which the two part.
+  sits beside, and never at a version other than core's. A fix to one
+  provider is a patch release of everything, with the unchanged images
+  rebuilt — cheap with ko, and cosmetic in the changelog. What a user installs
+  is one version with one set of manifests, not a matrix to reconcile.
 
 ## What would change this decision
 
@@ -268,8 +297,13 @@ layer, not a side effect:
   the fallback for nested modules, and this may need it.
 - CI time with the vendored unit suites gated by path. The filters are
   decided; their cost when they do fire is not measured.
-- Whether release-please is untroubled by Go modules in the tree that are not
-  packages. It should ignore them; "should" is not a measurement.
+- Whether release-please, reduced to one root package, is untroubled by Go
+  modules in the tree that are not packages. It should ignore them; "should"
+  is not a measurement.
+- The skew test. Lockstep is decided; that core at N tolerates a provider at
+  N-1 is a claim about the kcp-facing contract and is unmeasured until an
+  upgrade test holds the providers back and shows the fleet still
+  reconciling.
 
 Each is the first layer's job to settle, and the first layer is the one that
 changes no behaviour: vendor the two trees, replace the pins, retarget the
