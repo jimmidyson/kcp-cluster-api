@@ -25,7 +25,7 @@ set -euo pipefail
 #   component itself — a floating alias that ko overwrites on every release.
 #
 # Where <capi> and <capx> come from: the upstream trees are vendored under
-# forks/ (ADR-0005), so there is no fork tag to read from the module graph any
+# third_party/forked/ (ADR-0005), so there is no fork tag to read from the module graph any
 # more — `go list -m` reports a directory and a placeholder version. What
 # identifies the upstream each tree is cut from is the base commit its drift
 # record names, so that is the component: the first twelve characters of

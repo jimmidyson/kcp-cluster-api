@@ -50,7 +50,7 @@ The check runs on every pull request that touches a vendored tree, a record,
 or the checker; on a daily schedule; and on demand.
 
 **On every such pull request**, because the thing being measured is in it.
-The upstream trees are vendored under `forks/`
+The upstream trees are vendored under `third_party/forked/`
 ([ADR-0005](docs/adr-0005-one-repository.md)), so a change to one arrives
 as a diff here, where its author can add the entry or drop the change. This
 inverts the reasoning the record carried while the trees lived in forks of
@@ -71,7 +71,7 @@ tree's own test suite leaves those behind — a log beside each golden file —
 and nothing would ever commit them. A tracked file is measured whatever the
 rules say, so a file added by force is not hidden by them.
 
-Tree: `forks/cluster-api`, keeping the module path `sigs.k8s.io/cluster-api`
+Tree: `third_party/forked/cluster-api`, keeping the module path `sigs.k8s.io/cluster-api`
 with its `api/` and `test/` modules as they are upstream. Cut from the fork
 repository's tag `v1.15.0-kcp.13`, which is the last pin this project held
 before the tree was vendored; the fork is retired and nothing resolves it.

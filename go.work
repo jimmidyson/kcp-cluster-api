@@ -8,9 +8,9 @@ go 1.27.3
 
 use (
 	.
-	./forks/cluster-api
-	./forks/cluster-api/api
-	./forks/cluster-api/test
-	./forks/cluster-api-provider-nutanix
+	./third_party/forked/cluster-api
+	./third_party/forked/cluster-api/api
+	./third_party/forked/cluster-api/test
+	./third_party/forked/cluster-api-provider-nutanix
 	./providers/nutanix-infrastructure
 )

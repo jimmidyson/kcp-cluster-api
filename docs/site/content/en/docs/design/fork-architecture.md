@@ -11,8 +11,8 @@ upstream releases. The normative rules live in `AGENTS.md` and
 
 ## Upstream is a vendored tree, not a dependency and not the root
 
-Upstream Cluster API lives under `forks/cluster-api`, and each infrastructure
-provider under its own `forks/` directory: a complete snapshot of upstream at
+Upstream Cluster API lives under `third_party/forked/cluster-api`, and each infrastructure
+provider under its own `third_party/forked/` directory: a complete snapshot of upstream at
 a recorded base commit, with this project's patches applied in place. Each
 tree keeps its upstream module path, so every module here imports upstream
 under upstream's name; consuming modules point that name at the tree with

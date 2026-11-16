@@ -207,12 +207,12 @@ replace github.com/jimmidyson/kcp-cluster-api => ../..
 // nested module inherits none of them, and without them this resolves genuine
 // upstream Cluster API and CAPX instead of the vendored trees. See ADR-0005.
 
-replace sigs.k8s.io/cluster-api => ../../forks/cluster-api
+replace sigs.k8s.io/cluster-api => ../../third_party/forked/cluster-api
 
-replace sigs.k8s.io/cluster-api/api => ../../forks/cluster-api/api
+replace sigs.k8s.io/cluster-api/api => ../../third_party/forked/cluster-api/api
 
-replace sigs.k8s.io/cluster-api/test => ../../forks/cluster-api/test
+replace sigs.k8s.io/cluster-api/test => ../../third_party/forked/cluster-api/test
 
-replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => ../../forks/cluster-api-provider-nutanix
+replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => ../../third_party/forked/cluster-api-provider-nutanix
 
 replace github.com/kcp-dev/multicluster-provider => github.com/ifdotpy/multicluster-provider v0.0.0-20260920153842-16cf6b0bee59

@@ -113,7 +113,7 @@ other than this project, and nothing today suggests one will be.
 
 Bring each upstream tree into this repository as a snapshot under its own
 directory, keeping its module path and its own `go.mod`, so that
-`forks/cluster-api` is still `sigs.k8s.io/cluster-api` and the Nutanix
+`third_party/forked/cluster-api` is still `sigs.k8s.io/cluster-api` and the Nutanix
 provider imports it unchanged. Every consuming module replaces the upstream
 path with a relative one instead of a version, a committed `go.work` makes
 the whole thing one build, and each provider's kcp wiring, tests and release
@@ -132,7 +132,7 @@ arguments were about a layout in which upstream was the repository root, and
 neither survives upstream being a subdirectory.
 
 **"Seven inherited CI workflow files accumulated local edits."** GitHub runs
-workflows from the root `.github/` only. A `.github/` under `forks/cluster-api`
+workflows from the root `.github/` only. A `.github/` under `third_party/forked/cluster-api`
 is inert — nothing reads it, so nothing has to be edited to keep it working,
 and it can be vendored verbatim with no entry in the record. The Cluster API
 fork carries nine such files today; in a subdirectory they are text.
@@ -172,17 +172,28 @@ that implements this chooses the mechanisms, and ADR-0004's L3 section still
 describes the modules it lands beside:
 
 - **Snapshot, not patch series.** The checked-in tree is the built tree.
-  Carried changes are the diff between `forks/<name>` and the upstream base
+  Carried changes are the diff between `third_party/forked/<name>` and the upstream base
   commit the record names, which is the same definition of drift the checker
   uses today. A patches directory applied onto a pristine upstream at build
   time was considered and rejected: source that is not what is built makes
   review and tooling worse, and the project already reasons about drift per
   path rather than per patch.
+- **Under `third_party/forked/`**, the directory Kubernetes itself uses for
+  upstream copies carrying local modifications. `third_party` is the name
+  licence scanners, linters' default excludes and reviewers' habits already
+  read as "not ours, carried in-tree under its own licence", which is how
+  this repository treats the trees; `forked` says they are not pristine.
+  `forks/` was the first draft and was renamed before merge, while the
+  record paths, docs and links were still cheap to move. `vendor/` is the
+  Go toolchain's, `upstream/` would imply pristine, and a `kcp-` prefix on
+  the module paths was rejected outright: it would rewrite the 4,020 import
+  lines in 901 files of the Cluster API tree alone, making most of the tree
+  a modified path and every adoption a conflict on every import block.
 - **Complete trees, nothing deleted.** Upstream's docs, hack scripts and
   workflows are vendored as they are, inert where they are inert. Deleting
   them would make every upstream adoption a modify/delete conflict on paths
   the project does not care about, to save disk the project does not need.
-- **Module paths and nested modules are preserved.** `forks/cluster-api` is
+- **Module paths and nested modules are preserved.** `third_party/forked/cluster-api` is
   `sigs.k8s.io/cluster-api`, with its `api/` and `test/` modules unchanged,
   so the vendored Nutanix provider and every module here import upstream
   under upstream's name. The three `replace` directives in every consuming
@@ -320,7 +331,7 @@ touched and stand as written.
 - **Both trees match their records exactly** against upstream at the
   recorded base commits, measured on disk with nothing pinned. The checker
   fetches upstream at the base, compares the directory, and runs on every
-  pull request that touches `forks/`.
+  pull request that touches `third_party/forked/`.
 - **The seven files upstream's own ignore rules hide** had to be added by
   force once: the vendored `.gitignore` files are honoured by git here as
   they were upstream, and a tracked file stays tracked. A subtree merge

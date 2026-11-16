@@ -89,7 +89,7 @@ func TestDivergingPathsIsEmptyForIdenticalTrees(t *testing.T) {
 
 func TestDivergingPathsAcceptsRelativeDirectories(t *testing.T) {
 	// The checker is run from the repository root with a path like
-	// forks/cluster-api; the prefix it strips must be the resolved one.
+	// third_party/forked/cluster-api; the prefix it strips must be the resolved one.
 	parent := t.TempDir()
 	writeTree(t, filepath.Join(parent, "up"), map[string]string{"f": "1\n"})
 	writeTree(t, filepath.Join(parent, "tree"), map[string]string{"f": "2\n", "g": "3\n"})
@@ -131,7 +131,7 @@ func TestWithoutIgnoredDropsOnlyUntrackedIgnoredFiles(t *testing.T) {
 		}
 	}
 	git("init", "--quiet")
-	tree := filepath.Join(repo, "forks", "upstream")
+	tree := filepath.Join(repo, "third_party", "forked", "upstream")
 	writeTree(t, tree, map[string]string{
 		".gitignore":           "*.test.log\n",
 		"forced.test.log":      "tracked although the rule matches\n",
@@ -139,8 +139,8 @@ func TestWithoutIgnoredDropsOnlyUntrackedIgnoredFiles(t *testing.T) {
 		"patched.go":           "a real change\n",
 		"nested/also.test.log": "ignored deeper down\n",
 	})
-	git("add", "forks/upstream/.gitignore", "forks/upstream/patched.go")
-	git("add", "-f", "forks/upstream/forced.test.log")
+	git("add", "third_party/forked/upstream/.gitignore", "third_party/forked/upstream/patched.go")
+	git("add", "-f", "third_party/forked/upstream/forced.test.log")
 	git("commit", "--quiet", "-m", "tree")
 
 	in := []string{"forced.test.log", "left.test.log", "nested/also.test.log", "patched.go"}

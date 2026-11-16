@@ -4,9 +4,9 @@ This repository makes Cluster API workspace-aware for
 [KCP](https://github.com/kcp-dev/kcp) (logical clusters / workspaces).
 
 Upstream Cluster API and each infrastructure provider are **vendored trees
-under `forks/`**, each a snapshot of its upstream at a recorded base commit
+under `third_party/forked/`**, each a snapshot of its upstream at a recorded base commit
 plus the patches this project carries, keeping its upstream module path.
-Everything outside `forks/` is this project's own code. See
+Everything outside `third_party/forked/` is this project's own code. See
 [ADR-0005](docs/adr-0005-one-repository.md) for why the trees are here
 rather than in forks of their own.
 
@@ -33,7 +33,7 @@ makes the next adoption more expensive.
 - `task drift` measures each vendored tree against upstream at its base
   commit and fails on any diverging path without an entry. It runs on every
   pull request that touches a vendored tree, so an unrecorded edit under
-  `forks/` is red before review, not after.
+  `third_party/forked/` is red before review, not after.
 
 ### Integrate through public extension points only
 
@@ -49,7 +49,7 @@ requires a drift record entry.
 
 ## The vendored trees
 
-`forks/cluster-api` and `forks/cluster-api-provider-nutanix` are upstream
+`third_party/forked/cluster-api` and `third_party/forked/cluster-api-provider-nutanix` are upstream
 trees, vendored complete — docs, scripts and workflows included, inert where
 they are inert — at the base commit each record names, with the recorded
 patches applied in place. Their contract:
@@ -65,7 +65,7 @@ patches applied in place. Their contract:
   modules, so upstream's are text. Deleting them would turn every upstream
   adoption into conflicts on paths nobody cares about.
 - A tree differs from its upstream base only in the paths its record lists.
-  That is the whole of what makes `forks/` reviewable, and `task drift`
+  That is the whole of what makes `third_party/forked/` reviewable, and `task drift`
   asserts it on every pull request that touches one.
 - The retired fork repositories keep their tags so that older releases still
   resolve; nothing here depends on them.
@@ -76,7 +76,7 @@ patches applied in place. Their contract:
 docs/conversion-plan.md   the roadmap and current state — read this first
 Taskfile.yaml             the named operations; `task --list` to see them
 DRIFT.md                  what we carry against upstream, and why
-forks/                    the vendored upstream trees, each with a drift
+third_party/forked/       the vendored upstream trees, each with a drift
                           record beside the module that consumes it
 cmd/                      one manager per Cluster API provider (core,
                           kubeadm-bootstrap, kubeadm-control-plane,
@@ -130,8 +130,8 @@ cost this file exists to remove.
 An upgrade is a subtree merge into the vendored tree, whose conflicts are the
 record's modified paths and nothing else:
 
-1. Fetch the new upstream ref and merge it into `forks/cluster-api` as a
-   subtree (`git merge -X subtree=forks/cluster-api --allow-unrelated-histories
+1. Fetch the new upstream ref and merge it into `third_party/forked/cluster-api` as a
+   subtree (`git merge -X subtree=third_party/forked/cluster-api --allow-unrelated-histories
    <ref>`, or `git subtree merge`), resolving conflicts on the recorded paths.
 2. Update the base commit in `DRIFT.md`.
 3. Run `task verify` and `task drift`.
@@ -156,7 +156,7 @@ A change that adds or alters behaviour without tests at both applicable tiers
 is incomplete, however obviously correct it looks.
 
 A change **inside a vendored tree** also runs that tree's own suite, as
-upstream runs it: `task test:forks:cluster-api` or `task test:forks:nutanix`.
+upstream runs it: `task test:forked:cluster-api` or `task test:forked:nutanix`.
 CI runs it only for pull requests that touch the tree, since nothing else can
 change its result; `verify` does not include it. Both trees carried defects
 that only this suite catches before it existed, so a patch that skips it is

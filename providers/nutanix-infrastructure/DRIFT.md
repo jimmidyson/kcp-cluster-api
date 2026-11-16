@@ -7,7 +7,7 @@ API's, and the reasoning both are governed by.
 `task drift` checks this file against reality and fails on any path that
 diverges without an entry here.
 
-Tree: `forks/cluster-api-provider-nutanix`, keeping the module path
+Tree: `third_party/forked/cluster-api-provider-nutanix`, keeping the module path
 `github.com/nutanix-cloud-native/cluster-api-provider-nutanix`. Cut from the
 fork repository's tag `v1.11.0-kcp.3`, the last pin this project held before
 the tree was vendored ([ADR-0005](../../docs/adr-0005-one-repository.md));

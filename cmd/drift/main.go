@@ -31,7 +31,7 @@ import (
 
 func main() {
 	record := flag.String("record", "DRIFT.md", "path to the drift record")
-	tree := flag.String("tree", "forks/cluster-api", "vendored upstream tree to measure")
+	tree := flag.String("tree", "third_party/forked/cluster-api", "vendored upstream tree to measure")
 	upstream := flag.String("upstream", "https://github.com/kubernetes-sigs/cluster-api", "upstream repository")
 	flag.Parse()
 

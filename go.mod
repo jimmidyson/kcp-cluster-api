@@ -161,7 +161,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// Cluster API is a vendored tree under forks/, carrying the patches recorded
+// Cluster API is a vendored tree under third_party/forked/, carrying the patches recorded
 // in DRIFT.md and otherwise upstream at the base commit that record names.
 // The tree keeps the module path sigs.k8s.io/cluster-api so that every
 // provider imports upstream under upstream's name; these directives point
@@ -181,12 +181,12 @@ require (
 // nothing: a directory replacement ignores them, and `go mod tidy` sets them
 // to the highest version any module in the graph asks for. The base commit
 // each tree is cut from is in its drift record.
-replace sigs.k8s.io/cluster-api => ./forks/cluster-api
+replace sigs.k8s.io/cluster-api => ./third_party/forked/cluster-api
 
-replace sigs.k8s.io/cluster-api/api => ./forks/cluster-api/api
+replace sigs.k8s.io/cluster-api/api => ./third_party/forked/cluster-api/api
 
-replace sigs.k8s.io/cluster-api/test => ./forks/cluster-api/test
+replace sigs.k8s.io/cluster-api/test => ./third_party/forked/cluster-api/test
 
-replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => ./forks/cluster-api-provider-nutanix
+replace github.com/nutanix-cloud-native/cluster-api-provider-nutanix => ./third_party/forked/cluster-api-provider-nutanix
 
 replace github.com/kcp-dev/multicluster-provider => github.com/ifdotpy/multicluster-provider v0.0.0-20260920153842-16cf6b0bee59

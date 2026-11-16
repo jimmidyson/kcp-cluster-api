@@ -59,7 +59,7 @@ Source is [`docs/site/`](docs/site/). `task docs:build` builds the site.
 Working rules are in [`AGENTS.md`](AGENTS.md). Principles are in
 [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
 
-Upstream Cluster API and each provider are vendored trees under `forks/`,
+Upstream Cluster API and each provider are vendored trees under `third_party/forked/`,
 and what each carries against its upstream is its drift record, starting with
 [`DRIFT.md`](DRIFT.md). New behaviour is
 test-first, against a real kcp server. Pull requests are squash merged, and

@@ -3,7 +3,7 @@
 **Feature**: `001-kcp-capi-image-publishing`
 
 > **Amended 2026-11-16 by [ADR-0005](../../../docs/adr-0005-one-repository.md).**
-> The upstream trees are vendored under `forks/` and nothing is pinned, so
+> The upstream trees are vendored under `third_party/forked/` and nothing is pinned, so
 > two things below changed and the rest stands:
 >
 > - **The upstream component of a tag is the base commit** the tree's drift

@@ -4,14 +4,14 @@ description: Moving onto a newer Cluster API release is a dependency bump, not a
 weight: 30
 ---
 
-Upstream Cluster API is a vendored tree under `forks/cluster-api`, a snapshot
+Upstream Cluster API is a vendored tree under `third_party/forked/cluster-api`, a snapshot
 of upstream at a recorded base commit with this project's patches applied in
 place. Adopting a newer release is a subtree merge into that directory, and
 the merge's conflicts are the modified paths in `DRIFT.md` and nothing else:
 
 1. **Fetch the new upstream ref** and merge it into the tree as a subtree:
-   `git merge -X subtree=forks/cluster-api --allow-unrelated-histories <ref>`,
-   or `git subtree merge --prefix=forks/cluster-api <ref>`. Resolve the
+   `git merge -X subtree=third_party/forked/cluster-api --allow-unrelated-histories <ref>`,
+   or `git subtree merge --prefix=third_party/forked/cluster-api <ref>`. Resolve the
    conflicts, which fall on the recorded paths; a conflict anywhere else is a
    path the record is missing.
 

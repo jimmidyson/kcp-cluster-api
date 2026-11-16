@@ -2,7 +2,7 @@ name: drift
 
 # Divergence from upstream is measured rather than trusted (Constitution I).
 #
-# The upstream trees are vendored under forks/ (ADR-0005), so the thing being
+# The upstream trees are vendored under third_party/forked/ (ADR-0005), so the thing being
 # measured is in the pull request: a change under a vendored tree either has
 # an entry in that tree's record or it fails here, and the author can fix it.
 # The schedule stays because the other side of the measurement — upstream at
@@ -15,12 +15,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'forks/**'
+      - 'third_party/forked/**'
       - 'DRIFT.md'
       - 'cmd/drift/**'
       - 'internal/drift/**'
       # One record per vendored tree. A record outside this list is one the
-      # check stops gating; the trees themselves are covered by forks/** above.
+      # check stops gating; the trees themselves are covered by third_party/forked/** above.
       # What does need a new entry per provider is Taskfile:drift, which this
       # workflow runs, so it inherits coverage from there.
       - 'providers/*/DRIFT.md'

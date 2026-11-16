@@ -1,4 +1,4 @@
-name: forks
+name: forked
 
 # Each vendored upstream tree's own test suite, run only when a pull request
 # touches that tree. A change to this project's code cannot alter a vendored
@@ -13,8 +13,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'forks/**'
-      - '.github/workflows/forks.yaml'
+      - 'third_party/forked/**'
+      - '.github/workflows/forked.yaml'
   workflow_dispatch:
 
 permissions:
@@ -43,14 +43,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            changed="forks/cluster-api forks/cluster-api-provider-nutanix"
+            changed="third_party/forked/cluster-api third_party/forked/cluster-api-provider-nutanix"
           else
-            changed="$(git diff --name-only "$BASE...HEAD" -- forks .github/workflows/forks.yaml | cut -d/ -f1-2 | sort -u)"
+            changed="$(git diff --name-only "$BASE...HEAD" -- third_party/forked .github/workflows/forked.yaml | cut -d/ -f1-3 | sort -u)"
           fi
           echo "changed: $changed"
-          case "$changed" in *forks/cluster-api\ *|*forks/cluster-api) echo "cluster-api=true" >> "$GITHUB_OUTPUT" ;; esac
-          case "$changed" in *forks/cluster-api-provider-nutanix*) echo "nutanix=true" >> "$GITHUB_OUTPUT" ;; esac
-          case "$changed" in *.github/workflows/forks.yaml*) echo "cluster-api=true" >> "$GITHUB_OUTPUT"; echo "nutanix=true" >> "$GITHUB_OUTPUT" ;; esac
+          case "$changed" in *third_party/forked/cluster-api\ *|*third_party/forked/cluster-api) echo "cluster-api=true" >> "$GITHUB_OUTPUT" ;; esac
+          case "$changed" in *third_party/forked/cluster-api-provider-nutanix*) echo "nutanix=true" >> "$GITHUB_OUTPUT" ;; esac
+          case "$changed" in *.github/workflows/forked.yaml*) echo "cluster-api=true" >> "$GITHUB_OUTPUT"; echo "nutanix=true" >> "$GITHUB_OUTPUT" ;; esac
 
   cluster-api:
     name: cluster-api's own tests
@@ -64,7 +64,7 @@ jobs:
       - uses: jetify-com/devbox-install-action@v0.14.0
         with:
           enable-cache: true
-      - run: devbox run -- task test:forks:cluster-api
+      - run: devbox run -- task test:forked:cluster-api
 
   nutanix:
     name: cluster-api-provider-nutanix's own tests
@@ -78,4 +78,4 @@ jobs:
       - uses: jetify-com/devbox-install-action@v0.14.0
         with:
           enable-cache: true
-      - run: devbox run -- task test:forks:nutanix
+      - run: devbox run -- task test:forked:nutanix
