@@ -1,0 +1,547 @@
+/*
+Copyright 2026 Nutanix
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controllers
+
+import (
+	"context"
+	"testing"
+
+	clustermgmtconfig "github.com/nutanix/ntnx-api-golang-clients/clustermgmt-go-client/v4/models/clustermgmt/v4/config"
+	subnetModels "github.com/nutanix/ntnx-api-golang-clients/networking-go-client/v4/models/networking/v4/config"
+	prismModels "github.com/nutanix/ntnx-api-golang-clients/prism-go-client/v4/models/prism/v4/config"
+	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	infrav1 "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/api/v1beta1"
+	nctx "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/pkg/context"
+)
+
+const (
+	vhaNamespace   = "default"
+	vhaClusterName = "test-cluster"
+	vhaNtnxCluster = "test-ntnxcluster"
+)
+
+func newVHAScheme(g *WithT) *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	g.Expect(infrav1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(capiv1beta2.AddToScheme(scheme)).To(Succeed())
+	return scheme
+}
+
+func newVHAReconciler(g *WithT, objs ...client.Object) *NutanixVirtualHADomainReconciler {
+	scheme := newVHAScheme(g)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+	return &NutanixVirtualHADomainReconciler{
+		Client: fakeClient,
+		Scheme: scheme,
+	}
+}
+
+// vhaDomainObj builds a NutanixVirtualHADomain carrying the cluster-name label and the finalizer.
+func vhaDomainObj(name, clusterName string) *infrav1.NutanixVirtualHADomain {
+	return &infrav1.NutanixVirtualHADomain{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  vhaNamespace,
+			Labels:     map[string]string{capiv1beta2.ClusterNameLabel: clusterName},
+			Finalizers: []string{infrav1.NutanixVirtualHADomainFinalizer},
+		},
+		Spec: infrav1.NutanixVirtualHADomainSpec{
+			MetroRef: corev1.LocalObjectReference{Name: "metro-test"},
+		},
+	}
+}
+
+func TestVHADomainNameHelpers(t *testing.T) {
+	g := NewWithT(t)
+
+	cat0, err := vhaCategoryValue("d1", "default", 0)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(cat0).To(Equal("k8s-vha-capx-d1-default-0"))
+	cat1, err := vhaCategoryValue("d1", "default", 1)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(cat1).To(Equal("k8s-vha-capx-d1-default-1"))
+	g.Expect(vhaRecoveryPlanName("d1", "default", 0)).To(Equal("k8s-vha-capx-d1-default-0"))
+	g.Expect(vhaProtectionPolicyName("d1")).To(Equal("k8s-vha-capx-d1"))
+
+	longDomain := vHADomainName("nkp-management-cluster-rocky", "production-metro")
+	_, err = vhaCategoryValue(longDomain, vhaDefaultMovementGroup, 0)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("Prism Central limits category values to 64"))
+}
+
+// TestVHADomainDefaultCategoryKey_Contract guards the implicit contract shared with CSI and NKP for
+// k8s-HA: the vHADomain category key MUST be exactly "k8s-vha-native-site". CSI/NKP rely on this
+// literal, so changing the constant silently would break k8s-HA in the field. This test fails loudly
+// so whoever changes the constant is alerted to the downstream contract.
+func TestVHADomainDefaultCategoryKey_Contract(t *testing.T) {
+	assert.Equal(t, "k8s-vha-native-site", VHADomainDefaultCategoryKey,
+		"the vHADomain category key is an implicit contract with CSI/NKP for k8s-HA and must not change")
+}
+
+// TestGetOrCreateVHADomainGroupCategories_UsesContractKey ensures every category generated for a
+// vHADomain is created with the contract key "k8s-vha-native-site". This upholds the CSI/NKP k8s-HA
+// contract at category-creation time (part of the "category is always created with the key
+// k8s-vha-native-site" requirement).
+func TestGetOrCreateVHADomainGroupCategories_UsesContractKey(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	mockClient := NewMockConvergedClient(ctrl)
+
+	// Two failure domains -> two categories are generated, each with a distinct value but the same
+	// contract key. Every category is looked up (List) and, when missing, created (Create).
+	mockClient.MockCategories.EXPECT().List(ctx, gomock.Any()).Return([]prismModels.Category{}, nil).Times(2)
+	mockClient.MockCategories.EXPECT().Create(ctx, gomock.Any()).DoAndReturn(
+		func(_ context.Context, in *prismModels.Category) (*prismModels.Category, error) {
+			// The core contract assertion: the key is always "k8s-vha-native-site".
+			assert.Equal(t, "k8s-vha-native-site", *in.Key)
+			in.ExtId = ptr.To("ext-" + *in.Value)
+			return in, nil
+		},
+	).Times(2)
+
+	r := &NutanixVirtualHADomainReconciler{}
+	rctx := &nctx.VHADomainContext{
+		Context:         ctx,
+		ConvergedClient: mockClient.Client,
+		VHADomain:       vhaDomainObj("d1", vhaClusterName),
+	}
+
+	failureDomains := []*infrav1.NutanixFailureDomain{
+		{ObjectMeta: metav1.ObjectMeta{Name: "fd-0", Namespace: vhaNamespace}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "fd-1", Namespace: vhaNamespace}},
+	}
+
+	categories, err := r.getOrCreateVHADomainGroupCategories(rctx, vhaDefaultMovementGroup, failureDomains)
+	require.NoError(t, err)
+	require.Len(t, categories, len(failureDomains))
+
+	// One and only one value is generated per failure domain, and the key is the contract key for all.
+	seenValues := map[string]struct{}{}
+	for _, c := range categories {
+		assert.Equal(t, VHADomainDefaultCategoryKey, c.Key)
+		_, dup := seenValues[c.Value]
+		assert.False(t, dup, "each failure domain must map to a distinct category value")
+		seenValues[c.Value] = struct{}{}
+	}
+	assert.Len(t, seenValues, len(failureDomains))
+}
+
+func TestVHADomainReconcileDelete_BlockedWhenOwnerNotInDeletion(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	cluster := &capiv1beta2.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: vhaClusterName, Namespace: vhaNamespace},
+		Spec: capiv1beta2.ClusterSpec{
+			InfrastructureRef: capiv1beta2.ContractVersionedObjectReference{Name: vhaNtnxCluster},
+		},
+	}
+	ntnxCluster := &infrav1.NutanixCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: vhaNtnxCluster, Namespace: vhaNamespace},
+	}
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{
+		Context:        ctx,
+		Cluster:        cluster,
+		NutanixCluster: ntnxCluster,
+		VHADomain:      vHADomain,
+	}
+
+	err := r.reconcileDelete(rctx)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("is not in deletion"))
+
+	cond := conditions.Get(vHADomain, infrav1.VHADomainSafeForDeletionCondition)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal(infrav1.VHADomainOwnerNotInDeletion))
+
+	// The finalizer must be retained so deletion stays blocked.
+	g.Expect(ctrlutil.ContainsFinalizer(vHADomain, infrav1.NutanixVirtualHADomainFinalizer)).To(BeTrue())
+}
+
+func TestVHADomainReconcileDelete_AllowedWhenOwnersInDeletion(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// Both the owning Cluster and NutanixCluster are themselves in deletion, so the
+	// vHADomain is safe to clean up. With an empty spec there are no Prism Central
+	// resources to remove, so the finalizer must be dropped.
+	now := metav1.Now()
+	cluster := &capiv1beta2.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              vhaClusterName,
+			Namespace:         vhaNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"test/keep"},
+		},
+		Spec: capiv1beta2.ClusterSpec{
+			InfrastructureRef: capiv1beta2.ContractVersionedObjectReference{Name: vhaNtnxCluster},
+		},
+	}
+	ntnxCluster := &infrav1.NutanixCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              vhaNtnxCluster,
+			Namespace:         vhaNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"test/keep"},
+		},
+	}
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{
+		Context:        ctx,
+		Cluster:        cluster,
+		NutanixCluster: ntnxCluster,
+		VHADomain:      vHADomain,
+	}
+
+	err := r.reconcileDelete(rctx)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	cond := conditions.Get(vHADomain, infrav1.VHADomainSafeForDeletionCondition)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(infrav1.VHADomainCleanupSucceeded))
+
+	g.Expect(ctrlutil.ContainsFinalizer(vHADomain, infrav1.NutanixVirtualHADomainFinalizer)).To(BeFalse())
+}
+
+func TestVHADomainReconcileDelete_BlockedWhenOnlyNutanixClusterLive(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// The owning Cluster is already in deletion but the NutanixCluster is not, so the
+	// vHADomain deletion must still be blocked and the blocking message must call out
+	// the NutanixCluster.
+	now := metav1.Now()
+	cluster := &capiv1beta2.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              vhaClusterName,
+			Namespace:         vhaNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"test/keep"},
+		},
+	}
+	ntnxCluster := &infrav1.NutanixCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: vhaNtnxCluster, Namespace: vhaNamespace},
+	}
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{
+		Context:        ctx,
+		Cluster:        cluster,
+		NutanixCluster: ntnxCluster,
+		VHADomain:      vHADomain,
+	}
+
+	err := r.reconcileDelete(rctx)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(vhaNtnxCluster))
+	g.Expect(err.Error()).To(ContainSubstring("is not in deletion"))
+	g.Expect(ctrlutil.ContainsFinalizer(vHADomain, infrav1.NutanixVirtualHADomainFinalizer)).To(BeTrue())
+}
+
+func TestVHADomainReconcile_NotFound(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	r := newVHAReconciler(g)
+	res, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: "does-not-exist", Namespace: vhaNamespace},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(reconcile.Result{}))
+}
+
+func TestVHADomainReconcile_MissingCluster(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// The vHADomain references a Cluster via its label, but that Cluster does not
+	// exist, so Reconcile must surface the lookup error instead of proceeding.
+	vHADomain := vhaDomainObj("d1", "missing-cluster")
+
+	r := newVHAReconciler(g, vHADomain)
+	_, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: vHADomain.Name, Namespace: vHADomain.Namespace},
+	})
+	g.Expect(err).To(HaveOccurred())
+}
+
+func TestVHADomainReconcile_PausedVHADomain(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// Reconcile should short-circuit when the vHADomain itself is paused, without requiring the
+	// NutanixCluster to exist.
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+	vHADomain.Annotations = map[string]string{capiv1beta2.PausedAnnotation: "true"}
+	cluster := &capiv1beta2.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Name: vhaClusterName, Namespace: vhaNamespace},
+		Spec: capiv1beta2.ClusterSpec{
+			InfrastructureRef: capiv1beta2.ContractVersionedObjectReference{Name: vhaNtnxCluster},
+		},
+	}
+
+	r := newVHAReconciler(g, vHADomain, cluster)
+	res, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: vHADomain.Name, Namespace: vHADomain.Namespace},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(reconcile.Result{}))
+}
+
+func TestVHADomainReconcileNormal_AddsFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// A vHADomain without the finalizer must get it added and reconcileNormal must
+	// return early (before any Prism Central work) so the finalizer is persisted first.
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+	vHADomain.Finalizers = nil
+
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{Context: ctx, VHADomain: vHADomain}
+
+	err := r.reconcileNormal(rctx)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ctrlutil.ContainsFinalizer(vHADomain, infrav1.NutanixVirtualHADomainFinalizer)).To(BeTrue())
+}
+
+func TestVHADomainReconcileNormal_MetroNotFound(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// With the finalizer already present, reconcileNormal proceeds to resolve the
+	// referenced NutanixMetro. When it is absent the reconcile fails and readiness
+	// must be cleared.
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+	vHADomain.Status.Ready = true
+
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{Context: ctx, VHADomain: vHADomain}
+
+	err := r.reconcileNormal(rctx)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(vHADomain.Status.Ready).To(BeFalse())
+}
+
+func TestVHADomainEnsurePCResources_RequiresTwoFailureDomains(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	vHADomain := vhaDomainObj("d1", vhaClusterName)
+	r := newVHAReconciler(g)
+	rctx := &nctx.VHADomainContext{Context: ctx, VHADomain: vHADomain}
+
+	fds := []*infrav1.NutanixFailureDomain{
+		{ObjectMeta: metav1.ObjectMeta{Name: "fd-1", Namespace: vhaNamespace}},
+	}
+	err := r.ensureVHADomainPCResources(rctx, fds)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("exactly 2 failure domains"))
+}
+
+func TestVHARecoveryPlanNetworkMappings_AllSubnetsInOnePlan(t *testing.T) {
+	peUUIDs := []string{"pe-uuid-0", "pe-uuid-1"}
+	peNames := []string{"pe-0", "pe-1"}
+	azURL := "az://local"
+
+	t.Run("single subnet per PE keeps one mapping", func(t *testing.T) {
+		g := NewWithT(t)
+		mappings := vhaRecoveryPlanNetworkMappings(peUUIDs, peNames, [][]string{
+			{"site-a-net"},
+			{"site-b-net"},
+		}, azURL)
+		g.Expect(mappings).To(HaveLen(1))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList).To(HaveLen(2))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[0].RecoveryNetwork.Name).To(Equal("site-a-net"))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[1].RecoveryNetwork.Name).To(Equal("site-b-net"))
+	})
+
+	t.Run("two subnets per PE stay in one plan as two mappings", func(t *testing.T) {
+		g := NewWithT(t)
+		mappings := vhaRecoveryPlanNetworkMappings(peUUIDs, peNames, [][]string{
+			{"fd0-net0", "fd0-net1"},
+			{"fd1-net0", "fd1-net1"},
+		}, azURL)
+		g.Expect(mappings).To(HaveLen(2), "one NetworkMappingList entry per subnet index, same recovery plan")
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[0].RecoveryNetwork.Name).To(Equal("fd0-net0"))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[1].RecoveryNetwork.Name).To(Equal("fd1-net0"))
+		g.Expect(mappings[1].AvailabilityZoneNetworkMappingList[0].RecoveryNetwork.Name).To(Equal("fd0-net1"))
+		g.Expect(mappings[1].AvailabilityZoneNetworkMappingList[1].RecoveryNetwork.Name).To(Equal("fd1-net1"))
+
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[0].ClusterReferenceList[0].UUID).To(Equal(ptr.To("pe-uuid-0")))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[1].ClusterReferenceList[0].UUID).To(Equal(ptr.To("pe-uuid-1")))
+	})
+
+	t.Run("empty subnet lists still emit one mapping with empty names", func(t *testing.T) {
+		g := NewWithT(t)
+		mappings := vhaRecoveryPlanNetworkMappings(peUUIDs, peNames, [][]string{nil, nil}, azURL)
+		g.Expect(mappings).To(HaveLen(1))
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[0].RecoveryNetwork.Name).To(BeEmpty())
+		g.Expect(mappings[0].AvailabilityZoneNetworkMappingList[1].RecoveryNetwork.Name).To(BeEmpty())
+	})
+
+	t.Run("uneven subnet counts pad the shorter PE", func(t *testing.T) {
+		g := NewWithT(t)
+		mappings := vhaRecoveryPlanNetworkMappings(peUUIDs, peNames, [][]string{
+			{"fd0-net0", "fd0-net1"},
+			{"fd1-net0"},
+		}, azURL)
+		g.Expect(mappings).To(HaveLen(2))
+		g.Expect(mappings[1].AvailabilityZoneNetworkMappingList[0].RecoveryNetwork.Name).To(Equal("fd0-net1"))
+		g.Expect(mappings[1].AvailabilityZoneNetworkMappingList[1].RecoveryNetwork.Name).To(BeEmpty())
+	})
+}
+
+func TestPairVHADomainSubnetsByL2(t *testing.T) {
+	ctx := context.Background()
+	pe0 := "00000000-0000-0000-0000-000000000010"
+	pe1 := "00000000-0000-0000-0000-000000000011"
+	subnet0a := "00000000-0000-0000-0000-0000000000a1"
+	subnet0b := "00000000-0000-0000-0000-0000000000a2"
+	subnet0c := "00000000-0000-0000-0000-0000000000a3"
+	subnet1a := "00000000-0000-0000-0000-0000000000b1"
+	subnet1b := "00000000-0000-0000-0000-0000000000b2"
+	vlan := subnetModels.SUBNETTYPE_VLAN
+
+	fd := func(name, peUUID string, subnetUUIDs ...string) *infrav1.NutanixFailureDomain {
+		subnets := make([]infrav1.NutanixResourceIdentifier, len(subnetUUIDs))
+		for i, u := range subnetUUIDs {
+			subnets[i] = infrav1.NutanixResourceIdentifier{Type: infrav1.NutanixIdentifierUUID, UUID: ptr.To(u)}
+		}
+		return &infrav1.NutanixFailureDomain{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: vhaNamespace},
+			Spec: infrav1.NutanixFailureDomainSpec{
+				PrismElementCluster: infrav1.NutanixResourceIdentifier{
+					Type: infrav1.NutanixIdentifierUUID, UUID: ptr.To(peUUID),
+				},
+				Subnets: subnets,
+			},
+		}
+	}
+
+	// subnet describes a single Get expectation for one subnet UUID.
+	type subnet struct {
+		uuid string
+		name string
+		vlan int
+		cidr string
+	}
+	setup := func(t *testing.T, subnets ...subnet) *MockConvergedClientWrapper {
+		ctrl := gomock.NewController(t)
+		client := NewMockConvergedClient(ctrl)
+		client.MockClusters.EXPECT().Get(gomock.Any(), pe0).Return(&clustermgmtconfig.Cluster{ExtId: ptr.To(pe0)}, nil).AnyTimes()
+		client.MockClusters.EXPECT().Get(gomock.Any(), pe1).Return(&clustermgmtconfig.Cluster{ExtId: ptr.To(pe1)}, nil).AnyTimes()
+		for _, s := range subnets {
+			s := s
+			client.MockSubnets.EXPECT().Get(gomock.Any(), s.uuid).Return(&subnetModels.Subnet{
+				ExtId: ptr.To(s.uuid), Name: ptr.To(s.name), SubnetType: &vlan, NetworkId: ptr.To(s.vlan), IpPrefix: ptr.To(s.cidr),
+			}, nil)
+		}
+		return client
+	}
+
+	t.Run("pairs index-aligned L2 networks with different Prism names", func(t *testing.T) {
+		client := setup(t,
+			subnet{subnet0a, "vlan-100-site-a", 100, "10.0.0.0/24"},
+			subnet{subnet0b, "vlan-200-site-a", 200, "10.0.1.0/24"},
+			subnet{subnet1a, "vlan-100-site-b", 100, "10.0.0.0/24"},
+			subnet{subnet1b, "vlan-200-site-b", 200, "10.0.1.0/24"},
+		)
+
+		names, err := pairVHADomainSubnetsByL2(ctx, client.Client, []*infrav1.NutanixFailureDomain{
+			fd("fd-a", pe0, subnet0a, subnet0b),
+			fd("fd-b", pe1, subnet1a, subnet1b),
+		})
+		require.NoError(t, err)
+		require.Equal(t, [][]string{{subnet0a, subnet0b}, {subnet1a, subnet1b}}, names)
+	})
+
+	t.Run("pairs by L2 regardless of list order", func(t *testing.T) {
+		// fd-b lists the two subnets in the opposite order; they must still pair by L2.
+		client := setup(t,
+			subnet{subnet0a, "vlan-100-site-a", 100, "10.0.0.0/24"},
+			subnet{subnet0b, "vlan-200-site-a", 200, "10.0.1.0/24"},
+			subnet{subnet1a, "vlan-200-site-b", 200, "10.0.1.0/24"},
+			subnet{subnet1b, "vlan-100-site-b", 100, "10.0.0.0/24"},
+		)
+
+		names, err := pairVHADomainSubnetsByL2(ctx, client.Client, []*infrav1.NutanixFailureDomain{
+			fd("fd-a", pe0, subnet0a, subnet0b),
+			fd("fd-b", pe1, subnet1a, subnet1b),
+		})
+		require.NoError(t, err)
+		// fd0 order drives the pairing: subnet0a(vlan100)->subnet1b, subnet0b(vlan200)->subnet1a.
+		require.Equal(t, [][]string{{subnet0a, subnet0b}, {subnet1b, subnet1a}}, names)
+	})
+
+	t.Run("ignores the extra unpaired subnet when counts differ", func(t *testing.T) {
+		// fd-a has 2 subnets, fd-b has 3; only the 2 shared L2 networks are paired and
+		// the third fd-b subnet is dropped.
+		client := setup(t,
+			subnet{subnet0a, "vlan-100-site-a", 100, "10.0.0.0/24"},
+			subnet{subnet0b, "vlan-200-site-a", 200, "10.0.1.0/24"},
+			subnet{subnet1a, "vlan-100-site-b", 100, "10.0.0.0/24"},
+			subnet{subnet1b, "vlan-200-site-b", 200, "10.0.1.0/24"},
+			subnet{subnet0c, "vlan-300-site-b", 300, "10.0.2.0/24"},
+		)
+
+		names, err := pairVHADomainSubnetsByL2(ctx, client.Client, []*infrav1.NutanixFailureDomain{
+			fd("fd-a", pe0, subnet0a, subnet0b),
+			fd("fd-b", pe1, subnet1a, subnet1b, subnet0c),
+		})
+		require.NoError(t, err)
+		require.Equal(t, [][]string{{subnet0a, subnet0b}, {subnet1a, subnet1b}}, names)
+	})
+
+	t.Run("errors when the failure domains share no L2 network", func(t *testing.T) {
+		client := setup(t,
+			subnet{subnet0a, "vlan-100-site-a", 100, "10.0.0.0/24"},
+			subnet{subnet1a, "vlan-999-site-b", 999, "10.9.9.0/24"},
+		)
+
+		_, err := pairVHADomainSubnetsByL2(ctx, client.Client, []*infrav1.NutanixFailureDomain{
+			fd("fd-a", pe0, subnet0a),
+			fd("fd-b", pe1, subnet1a),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "share at least one L2 network")
+	})
+}

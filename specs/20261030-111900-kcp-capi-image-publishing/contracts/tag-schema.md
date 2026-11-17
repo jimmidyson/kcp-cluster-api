@@ -2,6 +2,26 @@
 
 **Feature**: `001-kcp-capi-image-publishing`
 
+> **Amended 2026-11-16 by [ADR-0005](../../../docs/adr-0005-one-repository.md).**
+> The upstream trees are vendored under `third_party/forked/` and nothing is pinned, so
+> two things below changed and the rest stands:
+>
+> - **The upstream component of a tag is the base commit** the tree's drift
+>   record names, as its first twelve characters: `281e4e3ed2af` where the
+>   examples below say `v1.15.0-kcp.13`, and `b3b16750a6f1` where they say
+>   `v1.11.0-kcp.3`. There is no fork tag to read from the module graph any
+>   more — `go list -m` reports a directory and a placeholder version — and
+>   the base commit is the one identifier of the upstream a tree is cut from
+>   that is derivable offline from the record alone. The "fork alias"
+>   becomes the upstream alias, and the no-fork-bump contract reads
+>   "unchanged base" for "unchanged pin". `scripts/image-tags.sh` is the
+>   implementation; `--capi-version` and `--capx-version` print the components.
+> - **One release package, at the root.** release-please has one package
+>   and the manifest one entry; the `providers/<name>/vX.Y.Z` tag is no
+>   longer produced. Every release is one version of everything and every
+>   image is published at every tag, which the "Lockstep" row below already
+>   required and the per-package configuration could not guarantee.
+
 ## OCI Tag Grammar
 
 All tags match `^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$` and contain no `+`. Go semver `+build` metadata (from `+incompatible` or `-kcp.N` pseudo-versions) has `+` replaced with `-` for OCI.

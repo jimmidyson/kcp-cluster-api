@@ -11,11 +11,13 @@ vars:
   # module nobody added is a module nothing builds.
   #
   # Extensibility contract — PROVIDER_MODULES is the single source of truth.
-  # Adding a provider is 4 edits: providers/<name>/ layout, one entry here,
-  # one packages key in release-please-config.json, and a DRIFT.md record.
-  # All of build, lint, test:unit, drift, image:build, image:verify, and
-  # image:check-modules iterate this var. Per-provider versioning needs only
-  # one new row in scripts/image-tags.sh and one new builds entry in .ko.yaml.
+  # Adding a provider is: the vendored tree under third_party/forked/<name> with its
+  # record, the providers/<name>/ module, one entry here, one entry in
+  # `drift` and one in `test:forked`. All of build, lint, test:unit,
+  # image:build, image:verify and image:check-modules iterate this var. There
+  # is no release package per provider: every release is one version of
+  # everything (ADR-0005). Its image needs one row in scripts/image-tags.sh
+  # and one builds entry in .ko.yaml.
   PROVIDER_MODULES: providers/nutanix-infrastructure
   # Image defaults: KO_DOCKER_REPO is ko.local locally (no GHCR creds); set to
   # ghcr.io/jimmidyson to publish. KO_PLATFORMS is linux/amd64 locally for
@@ -29,6 +31,12 @@ vars:
   KCP_VERSION: v0.32.3
   # The release-please CLI, pinned to match CI's release-please action.
   RELEASE_PLEASE_VERSION: 17.11.1
+  # setup-envtest, which fetches the kube-apiserver and etcd the vendored
+  # trees' own tests run against. Pinned to the controller-runtime release
+  # the trees build with. The Kubernetes version of the assets is not pinned
+  # here: each tree's Makefile says which one its tests expect, and the
+  # targets below read it from there so it moves with the tree.
+  SETUP_ENVTEST_VERSION: v0.24.1
   GOOS_:
     sh: go env GOOS
   GOARCH_:
@@ -179,6 +187,61 @@ tasks:
       # an installation pays and must not be quoted as though it were.
       - go run ./cmd/sweeptotals -reports {{.BIN}}
 
+  # The vendored upstream trees' own test suites, run as upstream runs them,
+  # from inside each tree. They are not part of `verify`: a change to this
+  # project's code cannot alter a vendored tree, so running upstream's suite
+  # on every pull request would spend minutes proving nothing. CI runs each
+  # one only when a pull request touches that tree (.github/workflows/forked.yaml),
+  # which is what ADR-0005 means by "independently testable".
+  #
+  # Each target reads the Kubernetes version its tree's tests expect from the
+  # tree's own Makefile, so adopting a new upstream release moves it with no
+  # edit here. The race detector is left off: upstream runs its suite with it,
+  # and the cost roughly doubles; the carried patches are exercised with it
+  # by this project's own integration tests, under kcp, which is the property
+  # that matters here.
+  test:forked:
+    desc: Every vendored tree's own tests
+    cmds:
+      - task: test:forked:cluster-api
+      - task: test:forked:nutanix
+
+  test:forked:cluster-api:
+    desc: Upstream Cluster API's own tests in third_party/forked/cluster-api — the root, api/ and test/ modules
+    deps: [tools:envtest]
+    cmds:
+      - |
+        set -euo pipefail
+        k8s="$(sed -n 's/^export KUBEBUILDER_ENVTEST_KUBERNETES_VERSION ?= //p' third_party/forked/cluster-api/Makefile)"
+        test -n "$k8s" || { echo "third_party/forked/cluster-api/Makefile no longer states KUBEBUILDER_ENVTEST_KUBERNETES_VERSION" >&2; exit 1; }
+        assets="$({{.BIN}}/setup-envtest use "$k8s" -p path --bin-dir {{.BIN}}/envtest)"
+        (cd third_party/forked/cluster-api/api && KUBEBUILDER_ASSETS="$assets" go test ./...)
+        (cd third_party/forked/cluster-api && KUBEBUILDER_ASSETS="$assets" go test ./...)
+        (cd third_party/forked/cluster-api/test && KUBEBUILDER_ASSETS="$assets" go test ./...)
+
+  test:forked:nutanix:
+    desc: Upstream CAPX's own unit tests in third_party/forked/cluster-api-provider-nutanix
+    deps: [tools:envtest]
+    cmds:
+      - |
+        set -euo pipefail
+        k8s="$(sed -n 's/^ENVTEST_K8S_VERSION = //p' third_party/forked/cluster-api-provider-nutanix/Makefile)"
+        test -n "$k8s" || { echo "third_party/forked/cluster-api-provider-nutanix/Makefile no longer states ENVTEST_K8S_VERSION" >&2; exit 1; }
+        assets="$({{.BIN}}/setup-envtest use "$k8s" -p path --bin-dir {{.BIN}}/envtest)"
+        # As upstream's unit-test target: no cgo, no VCS stamping, and the
+        # generated mocks and templates packages left out.
+        cd third_party/forked/cluster-api-provider-nutanix
+        pkgs="$(GOFLAGS=-buildvcs=false go list ./... | grep -v /mocks | grep -v /templates)"
+        CGO_ENABLED=0 GOFLAGS=-buildvcs=false KUBEBUILDER_ASSETS="$assets" go test $pkgs
+
+  tools:envtest:
+    desc: Install the pinned setup-envtest into bin/
+    status:
+      - test -x {{.BIN}}/setup-envtest
+    cmds:
+      - mkdir -p {{.BIN}}
+      - GOBIN={{.BIN}} GOWORK=off go install sigs.k8s.io/controller-runtime/tools/setup-envtest@{{.SETUP_ENVTEST_VERSION}}
+
   test:integration:container-runtime:
     desc: Integration tests needing a real kcp server and a container runtime
     deps: [tools]
@@ -281,20 +344,16 @@ tasks:
         | tar -xzf - -C {{.BIN}} --strip-components=1 bin/kcp
 
   drift:
-    desc: Report each fork's divergence from its base and check it against its record
+    desc: Measure each vendored upstream tree against its base and check it against its record
     cmds:
-      # Cluster API's fork, recorded at the root.
+      # One record per vendored tree, each measured on disk against upstream
+      # at the base commit the record names (ADR-0005). A tree not listed
+      # here is one nothing checks. When adding a provider, add one more
+      # entry naming its record, its tree and its upstream.
       - go run ./cmd/drift
-      # One record per fork, and each is checked from the module that pins it:
-      # the ref comes from that module's own graph, so a checker run from the
-      # wrong directory would measure the wrong version. A fork whose record is
-      # not listed here is one nothing checks. When adding a provider, add one
-      # more `cd providers/<name> && go run .../cmd/drift --record DRIFT.md`
-      # entry here.
-      - cd providers/nutanix-infrastructure && go run github.com/jimmidyson/kcp-cluster-api/cmd/drift
-          --record DRIFT.md
-          --module github.com/nutanix-cloud-native/cluster-api-provider-nutanix
-          --fork https://github.com/jimmidyson/cluster-api-provider-nutanix
+      - go run ./cmd/drift
+          --record providers/nutanix-infrastructure/DRIFT.md
+          --tree third_party/forked/cluster-api-provider-nutanix
           --upstream https://github.com/nutanix-cloud-native/cluster-api-provider-nutanix
   release-please:
     desc: Open the release pull request — run once from main to start a release

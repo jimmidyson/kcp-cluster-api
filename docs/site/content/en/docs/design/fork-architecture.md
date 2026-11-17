@@ -9,57 +9,68 @@ kcp-cluster-api makes Cluster API workspace-aware for
 upstream releases. The normative rules live in `AGENTS.md` and
 `.specify/memory/constitution.md`; this page explains the reasoning.
 
-## Upstream is a dependency, not a tree
+## Upstream is a vendored tree, not a dependency and not the root
 
-Upstream Cluster API is consumed the way any other Go dependency is: pinned
-by version in `go.mod`. This repository contains none of it.
+Upstream Cluster API lives under `third_party/forked/cluster-api`, and each infrastructure
+provider under its own `third_party/forked/` directory: a complete snapshot of upstream at
+a recorded base commit, with this project's patches applied in place. Each
+tree keeps its upstream module path, so every module here imports upstream
+under upstream's name; consuming modules point that name at the tree with
+relative `replace` directives, and a committed `go.work` makes the whole
+repository one build. There is no version to pin and nothing to tag.
 
-That arrangement is deliberate, and it replaced an earlier one. The project
-began as a full fork of the Cluster API tree, with its own work confined to a
-`kcp/` subdirectory and a rule that nothing outside it could be edited. The
-rule was sound — a single unnecessary edit to an upstream file turns every
-future upgrade into a manual conflict, and that cost compounds release after
-release — but it was enforced by asking people to remember it, over a tree
-that was almost entirely off-limits.
+This is the project's third arrangement, and the reasoning for it is in
+[ADR-0005](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0005-one-repository.md).
 
-It did not hold. Seven inherited CI workflow files accumulated local edits to
-keep them working, and dependency bots rewrote upstream `go.mod` and `go.sum`
-in four separate modules. None of that was anyone's decision; it was the
-ordinary background activity of maintaining a repository.
+The project began as a full fork of the Cluster API tree, with its own work
+confined to a `kcp/` subdirectory and a rule that nothing outside it could be
+edited. The rule did not hold: seven inherited CI workflow files accumulated
+local edits to keep them working, and dependency bots rewrote upstream
+`go.mod` and `go.sum` in four separate modules. None of that was anyone's
+decision; it was the ordinary background activity of maintaining a
+repository in which upstream was the root.
 
-Deleting the upstream tree converts the invariant from a rule people must
-remember into a property of the repository: the files it forbade editing are
-not here to edit. An upgrade becomes a change to a version string, reviewed
-as a diff of pins.
+The second arrangement deleted the upstream tree and consumed it as a
+version-pinned dependency, resolved to a patched fork in a repository of its
+own. That made the invariant a property of this repository — the files it
+forbade editing were not here to edit — and it worked while the fork was a
+small, shrinking set of patches with upstream proposals attached. It stopped
+fitting once [ADR-0003](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0003-workspace-aware-cluster-api.md)
+made the fork a permanent derivative: every reconciler became two halves in
+two repositories, with a signed three-tag ceremony and a pin bump between
+them, and no test could see a change until it had been tagged.
 
-## The patched fork
+The third arrangement puts the trees back, but under a subdirectory rather
+than at the root, and that difference is the whole point. The forces that
+broke the first arrangement have nowhere to land: GitHub runs workflows only
+from the root `.github/`, so upstream's are inert text; Dependabot is pointed
+only at this project's own modules; and the rule people had to remember is
+now a check that runs on every pull request touching a vendored tree.
+
+## What a vendored tree carries
 
 Some changes cannot be avoided. Cluster API does not expose every hook this
-project needs, and until it does, those changes live in a patched fork:
-[`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api).
+project needs, and
+[ADR-0003](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0003-workspace-aware-cluster-api.md)
+decided to carry the workspace-aware wiring rather than propose it upstream.
+Those changes live in the tree, in place, and the tree's contract is:
 
-The fork is deliberately minimal — patches and tags, nothing else. No
-specifications, no tooling, no process of its own. That keeps
-`git diff upstream..kcp/v1.15` meaningful without anything to mentally
-subtract.
-
-Its contract:
-
-- One branch per upstream release line, cut from the exact upstream commit
-  this project builds against.
-- One commit per carried patch, each referencing the upstream proposal that
-  will retire it.
-- Three immutable tags per release — the root module plus `api/` and `test/`,
-  which are separate Go modules resolved by tag prefix.
+- It is complete. Upstream's docs, scripts and workflows are vendored as they
+  are; deleting them would turn every upstream adoption into conflicts on
+  paths nobody cares about.
+- It differs from upstream at its base commit only in the paths its drift
+  record lists.
+- Adopting a new upstream release is a subtree merge into the directory, and
+  the merge's conflicts are the record's modified paths and nothing else.
 
 ### The base is chosen, but not freely
 
-The fork branch is cut from an upstream `main` commit rather than a release
-tag, and that is forced rather than preferred. At `v1.14.0` the docker
-provider's reconcilers and admission webhooks lived under `internal/`, which
-an external module cannot import. They became public on `main` afterwards.
-This project cannot build without them, so the base has to be a commit that
-contains that change.
+The Cluster API tree is cut from an upstream `main` commit rather than a
+release tag, and that is forced rather than preferred. At `v1.14.0` the
+docker provider's reconcilers and admission webhooks lived under `internal/`,
+which an external module cannot import. They became public on `main`
+afterwards. This project cannot build without them, so the base has to be a
+commit that contains that change.
 
 ## Divergence is counted
 
@@ -73,9 +84,11 @@ date, no more than 90 days out. After that it is a defect by the project's
 own rules: file it, remove it, or amend the constitution — never quietly
 extend the date.
 
-The check runs on a schedule and on changes to the pin or the record, rather
-than on every pull request. Gating unrelated work on the state of another
-repository produces failures their authors cannot fix.
+The check runs on every pull request that touches a vendored tree, a record
+or the checker, and on a schedule besides. While the trees lived in forks of
+their own it could not run per pull request, because gating unrelated work on
+another repository's state produced failures their authors could not fix; the
+thing it measures is in the pull request now.
 
 ## Integrate through public extension points
 
@@ -85,8 +98,8 @@ manager options, sources, handlers, predicates and webhook chains.
 
 When something appears to need an upstream internal, or a hook that does not
 exist, the response is to stop and raise it — find another integration point,
-propose the hook upstream, or accept the limitation. Adding it to the fork is
-the last resort, and costs a `DRIFT.md` entry and a deadline.
+propose the hook upstream, or accept the limitation. Adding it to the vendored
+tree is the last resort, and costs a `DRIFT.md` entry and a deadline.
 
 The contract-metadata patch is exactly that case, and its shape reflects it:
 rather than copying upstream logic or re-exporting an internal package
@@ -94,29 +107,21 @@ wholesale, it exposes two symbols through a public seam that mirrors an
 escape hatch upstream already provides elsewhere — the shape most likely to
 be accepted when proposed. It is also the only patch carried on those terms.
 
-## What the fork actually carries now
+## What the tree actually carries now
 
-The paragraphs above describe the arrangement as it was designed, and it is
-no longer the whole picture. [ADR-0003](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0003-workspace-aware-cluster-api.md)
-decided to carry the workspace-aware wiring in the fork and **not** to propose
-it upstream. Most of the record is therefore permanent rather than pending,
-and most of it modifies upstream files in place rather than adding new ones.
+The paragraphs above describe the arrangement; the record describes the
+contents. [ADR-0003](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0003-workspace-aware-cluster-api.md)
+decided to carry the workspace-aware wiring and **not** to propose it
+upstream, so most of the record is permanent rather than pending, and most
+of it modifies upstream files in place rather than adding new ones.
 
 `DRIFT.md` is the count, and is deliberately not reproduced here: a figure
-copied into prose is how the paragraph above came to describe a single-patch
-fork long after that stopped being true.
+copied into prose is how an earlier version of this page came to describe a
+single-patch fork long after that stopped being true.
 
-Two consequences follow, and neither is visible from the sections above.
-
-**The upgrade cost moved rather than disappeared.** "An upgrade is a diff of
-pins" is true of this repository. The in-place modifications are still
-replayed onto each new upstream release — in the fork, which deliberately
-carries no drift check, no specification process and no verification
-contract.
-
-**The fork's own composition matters now.** Some of what it carries is not
-Cluster API code at all: `util/multicluster/` imports controller-runtime and
-multicluster-runtime and nothing from Cluster API. It is in the fork because
-that is where it was written.
-[ADR-0004](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0004-scaling-to-many-provider-forks.md) takes up
-what that means once a second provider has to be forked.
+[ADR-0004](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0004-scaling-to-many-provider-forks.md)
+settled how this scales to several providers — one integration module per
+provider, under `providers/`, each with its own dependency graph — and
+[ADR-0005](https://github.com/jimmidyson/kcp-cluster-api/blob/main/docs/adr-0005-one-repository.md)
+superseded its assumption that each provider's upstream would be a fork in a
+repository of its own.

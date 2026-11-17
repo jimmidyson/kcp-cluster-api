@@ -1,0 +1,9 @@
+CLUSTERCTL_LOG_LEVEL: 10
+EXP_CLUSTER_RESOURCE_SET: "true"
+CLUSTER_TOPOLOGY: "true"
+
+providers:
+  # add a custom provider
+  - name: "nutanix"
+    url: "file://${HOME}/.cluster-api/overrides/infrastructure-nutanix/${LOCAL_PROVIDER_VERSION}/infrastructure-components.yaml"
+    type: "InfrastructureProvider"

@@ -1,0 +1,1004 @@
+/*
+Copyright 2022 Nutanix
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controllers
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	kapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	kutilerrors "k8s.io/apimachinery/pkg/util/errors"
+	coreinformers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/utils/ptr"
+	capiv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1" //nolint:staticcheck // suppress complaining on Deprecated package
+	capiv1beta2 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capiutil "sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/annotations"
+	v1beta1conditions "sigs.k8s.io/cluster-api/util/deprecated/v1beta1/conditions"         //nolint:staticcheck // suppress complaining on Deprecated package
+	v1beta2conditions "sigs.k8s.io/cluster-api/util/deprecated/v1beta1/conditions/v1beta2" //nolint:staticcheck // suppress complaining on Deprecated package
+	v1beta1patch "sigs.k8s.io/cluster-api/util/deprecated/v1beta1/patch"                   //nolint:staticcheck // suppress complaining on Deprecated package
+	"sigs.k8s.io/cluster-api/util/predicates"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	infrav1 "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/api/v1beta1"
+	nutanixclient "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/pkg/client"
+	nctx "github.com/nutanix-cloud-native/cluster-api-provider-nutanix/pkg/context"
+	credentialTypes "github.com/nutanix-cloud-native/prism-go-client/environment/credentials"
+	multidomainModels "github.com/nutanix/ntnx-api-golang-clients/multidomain-go-client/v4/models/multidomain/v4/config"
+)
+
+// NutanixClusterReconciler reconciles a NutanixCluster object
+type NutanixClusterReconciler struct {
+	Client            client.Client
+	SecretInformer    coreinformers.SecretInformer
+	ConfigMapInformer coreinformers.ConfigMapInformer
+	// CredentialReader, when set, reads Prism Central credentials through a
+	// cluster-aware client instead of the informers above. A fleet-wide setup
+	// must set it; see credentialSource.
+	CredentialReader ctlclient.Reader
+	Scheme           *runtime.Scheme
+	controllerConfig *ControllerConfig
+}
+
+func NewNutanixClusterReconciler(client client.Client, secretInformer coreinformers.SecretInformer, configMapInformer coreinformers.ConfigMapInformer, scheme *runtime.Scheme, copts ...ControllerConfigOpts) (*NutanixClusterReconciler, error) {
+	controllerConf := &ControllerConfig{}
+	for _, opt := range copts {
+		if err := opt(controllerConf); err != nil {
+			return nil, err
+		}
+	}
+	return &NutanixClusterReconciler{
+		Client:            client,
+		SecretInformer:    secretInformer,
+		ConfigMapInformer: configMapInformer,
+		Scheme:            scheme,
+		controllerConfig:  controllerConf,
+	}, nil
+}
+
+// SetupWithManager sets up the NutanixCluster controller with the Manager.
+func (r *NutanixClusterReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+	copts := controller.Options{
+		MaxConcurrentReconciles: r.controllerConfig.MaxConcurrentReconciles,
+		RateLimiter:             r.controllerConfig.RateLimiter,
+		SkipNameValidation:      ptr.To(r.controllerConfig.SkipNameValidation),
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("nutanixcluster-controller").
+		For(&infrav1.NutanixCluster{}). // Watch the controlled, infrastructure resource.
+		Watches(
+			&capiv1beta2.Cluster{},
+			handler.EnqueueRequestsFromMapFunc(
+				capiutil.ClusterToInfrastructureMapFunc(
+					ctx,
+					infrav1.GroupVersion.WithKind(infrav1.NutanixClusterKind),
+					mgr.GetClient(),
+					&infrav1.NutanixCluster{},
+				),
+			),
+			builder.WithPredicates(predicates.ClusterPausedTransitionsOrInfrastructureProvisioned(r.Scheme, ctrl.LoggerFrom(ctx))),
+		).
+		Watches(
+			&infrav1.NutanixFailureDomain{},
+			handler.EnqueueRequestsFromMapFunc(
+				r.mapNutanixFailureDomainToNutanixCluster(),
+			),
+		).
+		WithOptions(copts).
+		Complete(r)
+}
+
+func (r *NutanixClusterReconciler) mapNutanixFailureDomainToNutanixCluster() handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []ctrl.Request {
+		log := ctrl.LoggerFrom(ctx)
+		nfd, ok := o.(*infrav1.NutanixFailureDomain)
+		if !ok {
+			log.Error(fmt.Errorf("expected a NutanixFailureDomain object but was %T", o), "unexpected type")
+			return nil
+		}
+
+		// Get all the NutanixClusters in the local namespace
+		nclList := &infrav1.NutanixClusterList{}
+		if err := r.Client.List(ctx, nclList, client.InNamespace(nfd.Namespace)); err != nil {
+			log.Error(err, "Failed to list nutanix clusters for failure domain")
+			return nil
+		}
+
+		// Return those NutanixCluster instances having reference to the failure domain
+		reqs := make([]ctrl.Request, 0)
+		for _, ncl := range nclList.Items {
+			for _, fdRef := range ncl.Spec.ControlPlaneFailureDomains {
+				if fdRef.Name == nfd.Name {
+					objKey := client.ObjectKey{Name: ncl.Name, Namespace: ncl.Namespace}
+					reqs = append(reqs, ctrl.Request{NamespacedName: objKey})
+					continue
+				}
+			}
+		}
+
+		return reqs
+	}
+}
+
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters;clusters/status,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixclusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixfailuredomains,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixmetros,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixmetrosites,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=nutanixvirtualhadomains,verbs=get;list;watch;create
+
+// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// move the current state of the cluster closer to the desired state.
+// TODO(user): Modify the Reconcile function to compare the state specified by
+// the NutanixCluster object against the actual cluster state, and then
+// perform operations to make the cluster state reflect the state specified by
+// the user.
+//
+// For more details, check Reconcile and its Result here:
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.8.3/pkg/reconcile
+func (r *NutanixClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, reterr error) {
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("Reconciling the NutanixCluster")
+
+	var err error
+
+	// Fetch the NutanixCluster instance
+	cluster := &infrav1.NutanixCluster{}
+	err = r.Client.Get(ctx, req.NamespacedName, cluster)
+	if err != nil {
+		if kapierrors.IsNotFound(err) {
+			// Request object not found, could have been deleted after reconcile request.
+			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
+			// Return and don't requeue
+			log.V(1).Info("NutanixCluster not found. Ignoring since object must be deleted.")
+			return reconcile.Result{}, nil
+		}
+
+		// Error reading the object - requeue the request.
+		log.Error(err, "failed to fetch the NutanixCluster object")
+		return reconcile.Result{}, err
+	}
+
+	// Fetch the CAPI Cluster.
+	capiCluster, err := capiutil.GetOwnerCluster(ctx, r.Client, cluster.ObjectMeta)
+	if err != nil {
+		log.Error(err, "failed to fetch the owner CAPI Cluster object")
+		return reconcile.Result{}, err
+	}
+	if capiCluster == nil {
+		log.Info("Waiting for Cluster Controller to set OwnerRef for the NutanixCluster object")
+		return reconcile.Result{}, nil
+	}
+	if annotations.IsPaused(capiCluster, cluster) {
+		log.Info("The NutanixCluster object linked to a cluster that is paused")
+		return reconcile.Result{}, nil
+	}
+	log.Info(fmt.Sprintf("Fetched the owner Cluster: %s", capiCluster.Name))
+
+	// Initialize the patch helper.
+	patchHelper, err := v1beta1patch.NewHelper(cluster, r.Client)
+	if err != nil {
+		log.Error(err, "Failed to configure the patch helper")
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	defer func() {
+		// Always attempt to Patch the NutanixCluster object and its status after each reconciliation.
+		if err := patchHelper.Patch(ctx, cluster); err != nil {
+			reterr = kutilerrors.NewAggregate([]error{reterr, err})
+		}
+		log.V(1).Info(fmt.Sprintf("Patched NutanixCluster. Status: %+v", cluster.Status))
+	}()
+
+	if err := r.reconcileCredentialRef(ctx, cluster); err != nil {
+		log.Error(err, fmt.Sprintf("error occurred while reconciling credential ref for cluster %s", capiCluster.Name))
+		v1beta1conditions.MarkFalse(cluster, infrav1.CredentialRefSecretOwnerSetCondition, infrav1.CredentialRefSecretOwnerSetFailed, capiv1beta1.ConditionSeverityError, "%s", err.Error())
+		v1beta2conditions.Set(cluster, metav1.Condition{
+			Type:    string(infrav1.CredentialRefSecretOwnerSetCondition),
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.CredentialRefSecretOwnerSetFailed,
+			Message: err.Error(),
+		})
+		return reconcile.Result{}, err
+	}
+	v1beta1conditions.MarkTrue(cluster, infrav1.CredentialRefSecretOwnerSetCondition)
+	v1beta2conditions.Set(cluster, metav1.Condition{
+		Type:   string(infrav1.CredentialRefSecretOwnerSetCondition),
+		Status: metav1.ConditionTrue,
+		Reason: infrav1.Succeeded,
+	})
+
+	if err := r.reconcileTrustBundleRef(ctx, cluster); err != nil {
+		log.Error(err, fmt.Sprintf("error occurred while reconciling trust bundle ref for cluster %s", capiCluster.Name))
+		return reconcile.Result{}, err
+	}
+
+	v3Client, err := getPrismCentralClientForCluster(ctx, cluster, r.credentials())
+	if err != nil {
+		log.Error(err, "error occurred while fetching prism central client")
+		return reconcile.Result{}, err
+	}
+	convergedClient, err := getPrismCentralConvergedV4ClientForCluster(ctx, cluster, r.credentials())
+	if err != nil {
+		log.Error(err, "error occurred while fetching prism central converged client")
+		return reconcile.Result{}, err
+	}
+
+	rctx := &nctx.ClusterContext{
+		Context:         ctx,
+		Cluster:         capiCluster,
+		NutanixCluster:  cluster,
+		NutanixClient:   v3Client,
+		ConvergedClient: convergedClient,
+	}
+	// Check for request action
+	if !cluster.DeletionTimestamp.IsZero() {
+		// NutanixCluster is being deleted
+		return r.reconcileDelete(rctx)
+	}
+
+	return r.reconcileNormal(rctx)
+}
+
+func (r *NutanixClusterReconciler) reconcileDelete(rctx *nctx.ClusterContext) (reconcile.Result, error) {
+	log := ctrl.LoggerFrom(rctx.Context)
+	log.Info("Handling NutanixCluster deletion")
+	// Check if there are nutanixmachine resources left. Only continue if all of them have been cleaned
+	nutanixMachines, err := rctx.GetNutanixMachinesInCluster(r.Client)
+	if err != nil {
+		log.Error(err, "error occurred while checking nutanixmachines during cluster deletion")
+		return reconcile.Result{}, err
+	}
+
+	if len(nutanixMachines) > 0 {
+		log.Info(fmt.Sprintf("waiting for %d nutanixmachines to be deleted", len(nutanixMachines)))
+		return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	log.V(1).Info("no existing nutanixMachine resources found. Continuing with deleting cluster")
+
+	// Delete the NutanixVirtualHADomain CRs owned by this cluster and wait for them to be removed
+	// before continuing. A vHADomain's own deletion cleans up its Prism Central resources (protection
+	// policy, recovery plans, categories), which requires the owning NutanixCluster (and its PC
+	// credentials) to still exist. If the NutanixCluster finalizer were removed first, the vHADomains
+	// would be garbage-collected after their owner is gone and would skip PC cleanup, leaking those
+	// resources.
+	ownedVHADomains, err := getOwnedVHADomains(rctx.Context, r.Client, rctx.NutanixCluster)
+	if err != nil {
+		log.Error(err, "error occurred while listing owned NutanixVirtualHADomains during cluster deletion")
+		return reconcile.Result{}, err
+	}
+	if len(ownedVHADomains) > 0 {
+		for _, vHADomain := range ownedVHADomains {
+			if !vHADomain.DeletionTimestamp.IsZero() {
+				continue
+			}
+			if err := r.Client.Delete(rctx.Context, vHADomain); err != nil && !kapierrors.IsNotFound(err) {
+				log.Error(err, "failed to delete owned NutanixVirtualHADomain", "vHADomain", vHADomain.Name)
+				return reconcile.Result{}, err
+			}
+		}
+		log.Info(fmt.Sprintf("waiting for %d NutanixVirtualHADomains to be deleted before removing the NutanixCluster finalizer", len(ownedVHADomains)))
+		return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	err = r.reconcileCategoriesDelete(rctx)
+	if err != nil {
+		log.Error(err, "error occurred while running deletion of categories")
+		return reconcile.Result{}, err
+	}
+
+	// delete the client from the cache
+	log.Info(fmt.Sprintf("deleting nutanix prism client for cluster %s from cache", rctx.NutanixCluster.GetNamespacedName()))
+	nutanixclient.NutanixClientCache.Delete(&nutanixclient.CacheParams{NutanixCluster: rctx.NutanixCluster})
+	nutanixclient.NutanixClientCacheV4.Delete(&nutanixclient.CacheParams{NutanixCluster: rctx.NutanixCluster})
+	nutanixclient.NutanixConvergedClientV4Cache.Delete(&nutanixclient.CacheParams{NutanixCluster: rctx.NutanixCluster})
+
+	if err := r.reconcileCredentialRefDelete(rctx.Context, rctx.NutanixCluster); err != nil {
+		log.Error(err, fmt.Sprintf("error occurred while reconciling credential ref deletion for cluster %s", rctx.Cluster.Name))
+		return reconcile.Result{}, err
+	}
+
+	if err := r.reconcileTrustBundleRefDelete(rctx.Context, rctx.NutanixCluster); err != nil {
+		log.Error(err, fmt.Sprintf("error occurred while reconciling trust bundle ref deletion for cluster %s", rctx.Cluster.Name))
+		return reconcile.Result{}, err
+	}
+
+	// Remove the finalizer from the NutanixCluster object
+	ctrlutil.RemoveFinalizer(rctx.NutanixCluster, infrav1.NutanixClusterFinalizer)
+	ctrlutil.RemoveFinalizer(rctx.NutanixCluster, infrav1.DeprecatedNutanixClusterFinalizer)
+
+	return reconcile.Result{}, nil
+}
+
+func (r *NutanixClusterReconciler) reconcileNormal(rctx *nctx.ClusterContext) (reconcile.Result, error) {
+	log := ctrl.LoggerFrom(rctx.Context)
+	if rctx.NutanixCluster.Status.FailureReason != nil || rctx.NutanixCluster.Status.FailureMessage != nil {
+		log.Error(fmt.Errorf("nutanix cluster has failed. Will not reconcile %s", rctx.NutanixCluster.Name), "Nutanix Cluster failed")
+		return reconcile.Result{}, nil
+	}
+	log.Info("Handling NutanixCluster reconciling")
+
+	// Add finalizer first if not exist to avoid the race condition between init and delete
+	if !ctrlutil.ContainsFinalizer(rctx.NutanixCluster, infrav1.NutanixClusterFinalizer) {
+		ctrlutil.AddFinalizer(rctx.NutanixCluster, infrav1.NutanixClusterFinalizer)
+	}
+	ctrlutil.RemoveFinalizer(rctx.NutanixCluster, infrav1.DeprecatedNutanixClusterFinalizer)
+
+	// Reconciling failure domains before Ready check to allow failure domains to be modified
+	if err := r.reconcileFailureDomains(rctx); err != nil {
+		log.Error(err, "failed to reconcile failure domains for cluster")
+		return reconcile.Result{}, err
+	}
+
+	// Reconcile the NutanixVirtualHADomain CRs for any NutanixMetro/NutanixMetroSite failure domains
+	// referenced by the cluster, before the Ready check.
+	if err := r.reconcileVHADomains(rctx); err != nil {
+		log.Error(err, "failed to reconcile virtual HA domains for cluster")
+		return reconcile.Result{}, err
+	}
+
+	if rctx.NutanixCluster.Status.Ready {
+		log.Info("NutanixCluster is already in ready status.")
+		return reconcile.Result{}, nil
+	}
+
+	rctx.NutanixCluster.Status.Ready = true
+	return reconcile.Result{}, nil
+}
+
+// reconcileVHADomains ensures a NutanixVirtualHADomain CR exists for every NutanixMetro referenced
+// (directly or via a NutanixMetroSite) by the cluster's control-plane failure domains and worker
+// MachineDeployments.
+func (r *NutanixClusterReconciler) reconcileVHADomains(rctx *nctx.ClusterContext) error {
+	log := ctrl.LoggerFrom(rctx.Context)
+
+	namespace := rctx.NutanixCluster.Namespace
+
+	// Collect the unique NutanixMetro names referenced by the cluster.
+	metroNames, err := r.collectClusterMetroNames(rctx)
+	if err != nil {
+		return err
+	}
+	if len(metroNames) == 0 {
+		return nil
+	}
+	log.Info("Reconciling virtual HA domains for cluster", "metros", metroNames)
+
+	// Fetch the NutanixCluster owned NutanixVirtualHADomain objects.
+	vHADomains, err := getOwnedVHADomains(rctx.Context, r.Client, rctx.NutanixCluster)
+	if err != nil {
+		return err
+	}
+
+	for _, metroName := range metroNames {
+		// verify that the referent NutanixMetro CR exists
+		metroObj, err := getNutanixMetroObject(rctx.Context, r.Client, metroName, namespace)
+		if err != nil {
+			return err
+		}
+
+		// verify that the referent NutanixFailureDomain CRs exist
+		for _, fdRef := range metroObj.Spec.FailureDomains {
+			if _, err := getNutanixFailureDomainObject(rctx.Context, r.Client, fdRef.Name, namespace); err != nil {
+				return err
+			}
+		}
+
+		// Create the NutanixVirtualHADomain CR corresponding to this NutanixMetro CR if not found.
+		found := false
+		for _, vHADomain := range vHADomains {
+			if vHADomain.Spec.MetroRef.Name == metroObj.Name {
+				log.Info("Found the NutanixVirtualHADomain CR", "vHADomain.name", vHADomain.Name, "metro.name", metroName)
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+
+		vHADomain := &infrav1.NutanixVirtualHADomain{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: infrav1.GroupVersion.String(),
+				Kind:       infrav1.NutanixVirtualHADomainKind,
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      vHADomainName(rctx.NutanixCluster.Name, metroName),
+				Namespace: namespace,
+				OwnerReferences: []metav1.OwnerReference{
+					*metav1.NewControllerRef(rctx.NutanixCluster, infrav1.GroupVersion.WithKind(infrav1.NutanixClusterKind)),
+				},
+				Labels: map[string]string{
+					capiv1beta2.ClusterNameLabel: r.clusterName(rctx),
+				},
+			},
+			Spec: infrav1.NutanixVirtualHADomainSpec{
+				MetroRef: corev1.LocalObjectReference{Name: metroName},
+			},
+		}
+
+		if err = r.Client.Create(rctx.Context, vHADomain); err != nil {
+			return fmt.Errorf("failed to create the NutanixVirtualHADomain CR corresponding to metro %q: %w", metroName, err)
+		}
+		log.Info(fmt.Sprintf("Created the NutanixVirtualHADomain CR %q corresponding to metro %q", vHADomain.Name, metroName))
+	}
+
+	return nil
+}
+
+// clusterName returns the owning CAPI Cluster name, falling back to the cluster-name label on the
+// NutanixCluster when the owner Cluster is not populated on the context.
+func (r *NutanixClusterReconciler) clusterName(rctx *nctx.ClusterContext) string {
+	if rctx.Cluster != nil && rctx.Cluster.Name != "" {
+		return rctx.Cluster.Name
+	}
+	return rctx.NutanixCluster.Labels[capiv1beta2.ClusterNameLabel]
+}
+
+// collectClusterMetroNames returns the unique NutanixMetro names referenced by the cluster's
+// control-plane failure domains and worker MachineDeployments (resolving NutanixMetroSite refs to
+// their underlying NutanixMetro).
+func (r *NutanixClusterReconciler) collectClusterMetroNames(rctx *nctx.ClusterContext) ([]string, error) {
+	namespace := rctx.NutanixCluster.Namespace
+	seen := map[string]struct{}{}
+
+	addFromFD := func(fdName string) error {
+		switch {
+		case isNutanixMetroFailureDomain(fdName):
+			seen[fdName[len(metroFailureDomainPrefix):]] = struct{}{}
+		case isNutanixMetroSiteFailureDomain(fdName):
+			metrositeObj, err := getNutanixMetroSiteObject(rctx.Context, r.Client, fdName[len(metroSiteFailureDomainPrefix):], namespace)
+			if err != nil {
+				return err
+			}
+			seen[metrositeObj.Spec.MetroRef.Name] = struct{}{}
+		}
+		return nil
+	}
+
+	for _, fdRef := range rctx.NutanixCluster.Spec.ControlPlaneFailureDomains {
+		if err := addFromFD(fdRef.Name); err != nil {
+			return nil, err
+		}
+	}
+
+	// Also include the failureDomains declared by the cluster's worker MachineDeployments. Scope
+	// the listing by the cluster name; skip it if the cluster name cannot be determined.
+	if clusterName := r.clusterName(rctx); clusterName != "" {
+		mdList := &capiv1beta2.MachineDeploymentList{}
+		if err := r.Client.List(rctx.Context, mdList,
+			client.InNamespace(namespace),
+			client.MatchingLabels{capiv1beta2.ClusterNameLabel: clusterName},
+		); err != nil {
+			return nil, err
+		}
+		for _, md := range mdList.Items {
+			if err := addFromFD(md.Spec.Template.Spec.FailureDomain); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	metroNames := make([]string, 0, len(seen))
+	for name := range seen {
+		metroNames = append(metroNames, name)
+	}
+	return metroNames, nil
+}
+
+func (r *NutanixClusterReconciler) reconcileFailureDomains(rctx *nctx.ClusterContext) error { //nolint:gocognit // suppress function complexity check
+	log := ctrl.LoggerFrom(rctx.Context)
+	log.Info("Reconciling failure domains for cluster")
+
+	failureDomains := capiv1beta1.FailureDomains{}
+	if len(rctx.NutanixCluster.Spec.ControlPlaneFailureDomains) == 0 && len(rctx.NutanixCluster.Spec.FailureDomains) == 0 { //nolint:staticcheck // suppress complaining on Deprecated field
+		log.Info("No failure domains configured for cluster.")
+		v1beta1conditions.MarkTrue(rctx.NutanixCluster, infrav1.NoFailureDomainsConfiguredCondition)
+		v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+			Type:   string(infrav1.NoFailureDomainsConfiguredCondition),
+			Status: metav1.ConditionTrue,
+			Reason: string(infrav1.NoFailureDomainsConfiguredCondition),
+		})
+		v1beta1conditions.Delete(rctx.NutanixCluster, infrav1.FailureDomainsValidatedCondition)
+		v1beta2conditions.Delete(rctx.NutanixCluster, string(infrav1.FailureDomainsValidatedCondition))
+
+		// Reset the failure domains for nutanixcluster status
+		rctx.NutanixCluster.Status.FailureDomains = failureDomains
+		return nil
+	}
+
+	// Clear NoFailureDomainsConfiguredCondition condition
+	v1beta1conditions.Delete(rctx.NutanixCluster, infrav1.NoFailureDomainsConfiguredCondition)
+	v1beta2conditions.Delete(rctx.NutanixCluster, string(infrav1.NoFailureDomainsConfiguredCondition))
+
+	// The project scope (resource group, effective project, PC version) implied by the
+	// cluster's project policy is resolved lazily (and only once) on the first failure
+	// domain that actually needs validation, so that clusters without resolvable failure
+	// domains don't perform project/resource-group lookups. When resolved, it is reused
+	// for all FDs so that failure domain validation uses the same project-scoped Prism
+	// Element and subnet lookups as machine reconciliation.
+	var resourceGroup *multidomainModels.ResourceGroup
+	var effectiveProject *nctx.ProjectInfo
+	var pcVersion string
+	projectScopeResolved := false
+
+	validationErrs := []error{}
+	for _, fdRef := range rctx.NutanixCluster.Spec.ControlPlaneFailureDomains {
+		switch {
+		case isNutanixMetroFailureDomain(fdRef.Name):
+			// Metro failure domains always use the default project (nil resource group)
+			metroObj, err := getNutanixMetroObject(rctx.Context, r.Client, fdRef.Name[len(metroFailureDomainPrefix):], rctx.NutanixCluster.Namespace)
+			if err != nil {
+				validationErrs = append(validationErrs, err)
+				continue
+			}
+
+			for _, fd := range metroObj.Spec.FailureDomains {
+				fdObj, err := getNutanixFailureDomainObject(rctx.Context, r.Client, fd.Name, metroObj.Namespace)
+				if err != nil {
+					validationErrs = append(validationErrs, fmt.Errorf("failed to fetch the NutanixMetro %s referenced failureDomain object %s: %w", metroObj.Name, fd.Name, err))
+					continue
+				}
+
+				// Validate the failure domain configuration (metro uses default project)
+				if err := r.validateFailureDomainSpec(rctx, fdObj, nil, nil, ""); err != nil {
+					validationErrs = append(validationErrs, fmt.Errorf("failed to validate the failure domain %s configuration: %w", fdObj.Name, err))
+				}
+			}
+		case isNutanixMetroSiteFailureDomain(fdRef.Name):
+			// MetroSite failure domains always use the default project (nil resource group)
+			metrositeObj, err := getNutanixMetroSiteObject(rctx.Context, r.Client, fdRef.Name[len(metroSiteFailureDomainPrefix):], rctx.NutanixCluster.Namespace)
+			if err != nil {
+				validationErrs = append(validationErrs, err)
+				continue
+			}
+
+			fdObj, err := getNutanixFailureDomainObject(rctx.Context, r.Client, metrositeObj.Spec.PreferredFailureDomain.Name, metrositeObj.Namespace)
+			if err != nil {
+				validationErrs = append(validationErrs, fmt.Errorf("failed to fetch the NutanixMetroSite %s referenced failureDomain object %s: %w", metrositeObj.Name, metrositeObj.Spec.PreferredFailureDomain.Name, err))
+				continue
+			}
+
+			// Validate the failure domain configuration (metro uses default project)
+			if err := r.validateFailureDomainSpec(rctx, fdObj, nil, nil, ""); err != nil {
+				validationErrs = append(validationErrs, fmt.Errorf("failed to validate the failure domain %s configuration: %w", fdObj.Name, err))
+			}
+		default:
+			// Fetch the referent failure domain object
+			fdObj := &infrav1.NutanixFailureDomain{}
+			fdKey := client.ObjectKey{Name: fdRef.Name, Namespace: rctx.NutanixCluster.Namespace}
+			if err := r.Client.Get(rctx.Context, fdKey, fdObj); err != nil {
+				if kapierrors.IsNotFound(err) {
+					validationErrs = append(validationErrs, fmt.Errorf("not found the failure domain object with name %q", fdRef.Name))
+					continue
+				}
+				validationErrs = append(validationErrs, fmt.Errorf("failed to fetch the failure domain object with name %q: %w", fdRef.Name, err))
+				continue
+			}
+
+			if !projectScopeResolved {
+				rg, project, pcVer, err := r.resolveProjectScopeForCluster(rctx)
+				if err != nil {
+					return fmt.Errorf("failed to resolve project scope for cluster %s: %w", rctx.NutanixCluster.Name, err)
+				}
+				resourceGroup = rg
+				effectiveProject = project
+				pcVersion = pcVer
+				projectScopeResolved = true
+			}
+
+			// Validate the failure domain configuration
+			if err := r.validateFailureDomainSpec(rctx, fdObj, effectiveProject, resourceGroup, pcVersion); err != nil {
+				validationErrs = append(validationErrs, fmt.Errorf("failed to validate the failure domain %q configuration: %w", fdRef.Name, err))
+				continue
+			}
+		}
+
+		// The failure domain configuration passed validation. Add it to the result map.
+		failureDomains[fdRef.Name] = capiv1beta1.FailureDomainSpec{ControlPlane: true}
+	}
+
+	// Remove below when the Deprecated field NutanixCluster.Spec.FailureDomains is removed
+	for _, fd := range rctx.NutanixCluster.Spec.FailureDomains { //nolint:staticcheck // suppress complaining on Deprecated field
+		failureDomains[fd.Name] = capiv1beta1.FailureDomainSpec{ControlPlane: fd.ControlPlane}
+	}
+
+	// Set the failure domains for nutanixcluster status
+	rctx.NutanixCluster.Status.FailureDomains = failureDomains
+
+	if len(validationErrs) != 0 {
+		v1beta1conditions.MarkFalse(rctx.NutanixCluster, infrav1.FailureDomainsValidatedCondition,
+			infrav1.FailureDomainsMisconfiguredReason, capiv1beta1.ConditionSeverityWarning, "%s", errors.Join(validationErrs...).Error())
+		v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+			Type:    string(infrav1.FailureDomainsValidatedCondition),
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.FailureDomainsMisconfiguredReason,
+			Message: errors.Join(validationErrs...).Error(),
+		})
+		return nil
+	}
+
+	v1beta1conditions.MarkTrue(rctx.NutanixCluster, infrav1.FailureDomainsValidatedCondition)
+	v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+		Type:   string(infrav1.FailureDomainsValidatedCondition),
+		Status: metav1.ConditionTrue,
+		Reason: infrav1.Succeeded,
+	})
+	return nil
+}
+
+// resolveProjectScopeForCluster derives the project scope implied by the cluster's
+// project policy: the project-scoped resource group (used for Prism Element lookups),
+// the effective project (used for project-aware subnet lookups), and the PC version.
+// The resource group and project are nil when no project-scoped lookup applies
+// (unrestricted policy, PC < 7.6, or - for the resource group - the default project).
+func (r *NutanixClusterReconciler) resolveProjectScopeForCluster(rctx *nctx.ClusterContext) (*multidomainModels.ResourceGroup, *nctx.ProjectInfo, string, error) {
+	pcVersion, err := rctx.ConvergedClient.DomainManager.GetPrismCentralVersion(rctx.Context)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("failed to get the PC version for cluster %s: %w", rctx.NutanixCluster.Name, err)
+	}
+	projectPolicy, ok := rctx.Cluster.Annotations[CAPXProjectPolicyAnnotation]
+	if !ok {
+		projectPolicy = CAPXProjectPolicyUnrestricted
+	}
+	projectUUID := rctx.Cluster.Annotations[CAPXProjectUUIDAnnotation]
+	resourceGroup, err := resolveResourceGroupForProjectPolicy(rctx.Context, rctx.ConvergedClient, projectPolicy, projectUUID, pcVersion)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	project, err := resolveProjectInfoForPolicy(rctx.Context, rctx.ConvergedClient, projectPolicy, projectUUID, pcVersion)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return resourceGroup, project, pcVersion, nil
+}
+
+// validateFailureDomainSpec validates the input failure domain's spec configuration.
+// It returns error if validation fails, and returns nil if validation succeeds.
+func (r *NutanixClusterReconciler) validateFailureDomainSpec(rctx *nctx.ClusterContext, fd *infrav1.NutanixFailureDomain, project *nctx.ProjectInfo, resourceGroup *multidomainModels.ResourceGroup, pcVersion string) error {
+	pe := fd.Spec.PrismElementCluster
+	peUUID, err := GetPEUUID(rctx.Context, rctx.ConvergedClient, resourceGroup, pe.Name, pe.UUID)
+	if err != nil {
+		return err
+	}
+
+	subnets := fd.Spec.Subnets
+	_, err = GetSubnetUUIDList(rctx.Context, rctx.ConvergedClient, subnets, peUUID, project, pcVersion)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileCategories(rctx *nctx.ClusterContext) error {
+	log := ctrl.LoggerFrom(rctx.Context)
+	log.Info("Reconciling categories for cluster")
+	defaultCategories := GetDefaultCAPICategoryIdentifiers(logicalClusterOf(rctx.Cluster), rctx.Cluster.Name)
+	_, err := GetOrCreateCategories(rctx.Context, rctx.ConvergedClient, defaultCategories)
+	if err != nil {
+		v1beta1conditions.MarkFalse(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition, infrav1.ClusterCategoryCreationFailed, capiv1beta1.ConditionSeverityError, "%s", err.Error())
+		v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+			Type:    string(infrav1.ClusterCategoryCreatedCondition),
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.ClusterCategoryCreationFailed,
+			Message: err.Error(),
+		})
+		return err
+	}
+	v1beta1conditions.MarkTrue(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition)
+	v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+		Type:   string(infrav1.ClusterCategoryCreatedCondition),
+		Status: metav1.ConditionTrue,
+		Reason: infrav1.Succeeded,
+	})
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileCategoriesDelete(rctx *nctx.ClusterContext) error {
+	log := ctrl.LoggerFrom(rctx.Context)
+	log.Info(fmt.Sprintf("Reconciling deletion of categories for cluster %s", rctx.Cluster.Name))
+	if v1beta1conditions.IsTrue(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition) ||
+		v1beta1conditions.GetReason(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition) == infrav1.DeletionFailed {
+		defaultCategories := GetDefaultCAPICategoryIdentifiers(logicalClusterOf(rctx.Cluster), rctx.Cluster.Name)
+		obsoleteCategories := GetObsoleteDefaultCAPICategoryIdentifiers(logicalClusterOf(rctx.Cluster), rctx.Cluster.Name)
+
+		// Scope the category deletion to the project implied by the cluster's project
+		// policy, mirroring how categories were created during machine reconciliation.
+		pcVersion, err := rctx.ConvergedClient.DomainManager.GetPrismCentralVersion(rctx.Context)
+		if err != nil {
+			return fmt.Errorf("failed to get the PC version for cluster %s: %w", rctx.Cluster.Name, err)
+		}
+		projectPolicy, ok := rctx.Cluster.Annotations[CAPXProjectPolicyAnnotation]
+		if !ok {
+			projectPolicy = CAPXProjectPolicyUnrestricted
+		}
+		projectUUID := rctx.Cluster.Annotations[CAPXProjectUUIDAnnotation]
+		project, err := resolveProjectInfoForPolicy(rctx.Context, rctx.ConvergedClient, projectPolicy, projectUUID, pcVersion)
+		if err != nil {
+			return err
+		}
+		// An unrestricted policy or PC < 7.6 yields a nil project (no project scoping);
+		// fall back to nil for the legacy, unscoped category deletion.
+		var projectExtID *string
+		if project != nil && project.ExtID != nil {
+			projectExtID = project.ExtID
+		}
+
+		err = DeleteCategoriesForProject(rctx.Context, rctx.ConvergedClient, defaultCategories, obsoleteCategories, projectExtID)
+		if err != nil {
+			v1beta1conditions.MarkFalse(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition, infrav1.DeletionFailed, capiv1beta1.ConditionSeverityWarning, "%s", err.Error())
+			v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+				Type:    string(infrav1.ClusterCategoryCreatedCondition),
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.DeletionFailed,
+				Message: err.Error(),
+			})
+			return err
+		}
+	} else {
+		log.V(1).Info(fmt.Sprintf("skipping category deletion since they were not created for cluster %s", rctx.Cluster.Name))
+	}
+	v1beta1conditions.MarkFalse(rctx.NutanixCluster, infrav1.ClusterCategoryCreatedCondition, capiv1beta1.DeletingReason, capiv1beta1.ConditionSeverityInfo, "")
+	v1beta2conditions.Set(rctx.NutanixCluster, metav1.Condition{
+		Type:   string(infrav1.ClusterCategoryCreatedCondition),
+		Status: metav1.ConditionFalse,
+		Reason: capiv1beta1.DeletingReason,
+	})
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileCredentialRefDelete(ctx context.Context, nutanixCluster *infrav1.NutanixCluster) error {
+	log := ctrl.LoggerFrom(ctx)
+	credentialRef, err := getPrismCentralCredentialRefForCluster(nutanixCluster)
+	if err != nil {
+		log.Error(err, fmt.Sprintf("error occurred while getting credential ref for cluster %s", nutanixCluster.Name))
+		return err
+	}
+	if credentialRef == nil {
+		log.V(1).Info(fmt.Sprintf("Credential ref is nil for cluster %s. Ignoring since object must be deleted", nutanixCluster.Name))
+		return nil
+	}
+	log.V(1).Info(fmt.Sprintf("Credential ref is kind Secret for cluster %s. Continue with deletion of secret", nutanixCluster.Name))
+	secret := &corev1.Secret{}
+	secretKey := client.ObjectKey{
+		Namespace: nutanixCluster.Namespace,
+		Name:      credentialRef.Name,
+	}
+	err = r.Client.Get(ctx, secretKey, secret)
+	if err != nil {
+		if kapierrors.IsNotFound(err) {
+			log.V(1).Info(fmt.Sprintf("Secret %s in namespace %s for cluster %s not found. Ignoring since object must be deleted", secret.Name, secret.Namespace, nutanixCluster.Name))
+			return nil
+		}
+		return err
+	}
+
+	ctrlutil.RemoveFinalizer(secret, infrav1.NutanixClusterCredentialFinalizer)
+	ctrlutil.RemoveFinalizer(secret, infrav1.DeprecatedNutanixClusterCredentialFinalizer)
+	log.V(1).Info(fmt.Sprintf("removing finalizers from secret %s in namespace %s for cluster %s", secret.Name, secret.Namespace, nutanixCluster.Name))
+	if err := r.Client.Update(ctx, secret); err != nil {
+		return err
+	}
+
+	if secret.DeletionTimestamp.IsZero() {
+		log.Info(fmt.Sprintf("removing secret %s in namespace %s for cluster %s", secret.Name, secret.Namespace, nutanixCluster.Name))
+		if err := r.Client.Delete(ctx, secret); err != nil && !kapierrors.IsNotFound(err) {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileTrustBundleRef(ctx context.Context, nutanixCluster *infrav1.NutanixCluster) error {
+	log := ctrl.LoggerFrom(ctx)
+	trustBundleRef := nutanixCluster.GetPrismCentralTrustBundle()
+	if trustBundleRef == nil {
+		log.Info(fmt.Sprintf("trust bundle ref is nil for cluster %s", nutanixCluster.Name))
+		return nil
+	}
+
+	// get the trust bundle configmap
+	configMap := &corev1.ConfigMap{}
+	configMapKey := client.ObjectKey{
+		Namespace: cmp.Or(trustBundleRef.Namespace, nutanixCluster.Namespace),
+		Name:      trustBundleRef.Name,
+	}
+	if err := r.Client.Get(ctx, configMapKey, configMap); err != nil {
+		log.Error(err, "error occurred while fetching trust bundle configmap", "nutanixCluster", nutanixCluster.Name)
+		v1beta1conditions.MarkFalse(nutanixCluster, infrav1.TrustBundleSecretOwnerSetCondition, infrav1.TrustBundleSecretOwnerSetFailed, capiv1beta1.ConditionSeverityError, "%s", err.Error())
+		v1beta2conditions.Set(nutanixCluster, metav1.Condition{
+			Type:    string(infrav1.TrustBundleSecretOwnerSetCondition),
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.TrustBundleSecretOwnerSetFailed,
+			Message: err.Error(),
+		})
+		return err
+	}
+
+	if !capiutil.IsOwnedByObject(configMap, nutanixCluster, infrav1.GroupVersion.WithKind(nutanixCluster.Kind).GroupKind()) {
+		// Check if another nutanixCluster already has set ownerRef. Secret can only be owned by one nutanixCluster object
+		if capiutil.HasOwner(configMap.OwnerReferences, infrav1.GroupVersion.String(), []string{nutanixCluster.Kind}) {
+			return fmt.Errorf("configmap %s/%s already owned by another nutanixCluster object", configMap.Namespace, configMap.Name)
+		}
+
+		configMap.OwnerReferences = capiutil.EnsureOwnerRef(configMap.OwnerReferences, metav1.OwnerReference{
+			APIVersion: infrav1.GroupVersion.String(),
+			Kind:       nutanixCluster.Kind,
+			UID:        nutanixCluster.UID,
+			Name:       nutanixCluster.Name,
+		})
+	}
+
+	if !ctrlutil.ContainsFinalizer(configMap, infrav1.NutanixClusterCredentialFinalizer) {
+		ctrlutil.AddFinalizer(configMap, infrav1.NutanixClusterCredentialFinalizer)
+	}
+	ctrlutil.RemoveFinalizer(configMap, infrav1.DeprecatedNutanixClusterCredentialFinalizer)
+
+	if err := r.Client.Update(ctx, configMap); err != nil {
+		log.Error(err, "error occurred while updating trust bundle configmap", "nutanixCluster", nutanixCluster)
+		v1beta1conditions.MarkFalse(nutanixCluster, infrav1.TrustBundleSecretOwnerSetCondition, infrav1.TrustBundleSecretOwnerSetFailed, capiv1beta1.ConditionSeverityError, "%s", err.Error())
+		v1beta2conditions.Set(nutanixCluster, metav1.Condition{
+			Type:    string(infrav1.TrustBundleSecretOwnerSetCondition),
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.TrustBundleSecretOwnerSetFailed,
+			Message: err.Error(),
+		})
+		return err
+	}
+
+	v1beta1conditions.MarkTrue(nutanixCluster, infrav1.TrustBundleSecretOwnerSetCondition)
+	v1beta2conditions.Set(nutanixCluster, metav1.Condition{
+		Type:   string(infrav1.TrustBundleSecretOwnerSetCondition),
+		Status: metav1.ConditionTrue,
+		Reason: infrav1.Succeeded,
+	})
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileTrustBundleRefDelete(ctx context.Context, nutanixCluster *infrav1.NutanixCluster) error {
+	log := ctrl.LoggerFrom(ctx)
+	trustBundleRef := nutanixCluster.GetPrismCentralTrustBundle()
+	if trustBundleRef == nil {
+		log.Info(fmt.Sprintf("trust bundle ref is nil for cluster %s", nutanixCluster.Name))
+		return nil
+	}
+
+	configMapKey := client.ObjectKey{
+		Namespace: cmp.Or(trustBundleRef.Namespace, nutanixCluster.Namespace),
+		Name:      trustBundleRef.Name,
+	}
+
+	configMap := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx, configMapKey, configMap); err != nil {
+		if kapierrors.IsNotFound(err) {
+			log.Info(fmt.Sprintf("configmap %s/%s for cluster %s not found. Ignoring since object must be deleted", configMapKey.Namespace, configMapKey.Name, nutanixCluster.Name))
+			return nil
+		}
+
+		return err
+	}
+
+	ctrlutil.RemoveFinalizer(configMap, infrav1.NutanixClusterCredentialFinalizer)
+	ctrlutil.RemoveFinalizer(configMap, infrav1.DeprecatedNutanixClusterCredentialFinalizer)
+	log.V(1).Info(fmt.Sprintf("removing finalizers from configmap %s/%s for cluster %s", configMap.Namespace, configMap.Name, nutanixCluster.Name))
+	if err := r.Client.Update(ctx, configMap); err != nil {
+		return err
+	}
+
+	if configMap.DeletionTimestamp.IsZero() {
+		log.Info(fmt.Sprintf("removing configmap %s/%s for cluster %s", configMap.Namespace, configMap.Name, nutanixCluster.Name))
+		if err := r.Client.Delete(ctx, configMap); err != nil && !kapierrors.IsNotFound(err) {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *NutanixClusterReconciler) reconcileCredentialRef(ctx context.Context, nutanixCluster *infrav1.NutanixCluster) error {
+	log := ctrl.LoggerFrom(ctx)
+	credentialRef, err := getPrismCentralCredentialRefForCluster(nutanixCluster)
+	if err != nil {
+		return err
+	}
+
+	secret := &corev1.Secret{}
+	if credentialRef == nil {
+		return nil
+	}
+
+	log.V(1).Info(fmt.Sprintf("credential ref is kind Secret for cluster %s", nutanixCluster.Name))
+	secretKey := client.ObjectKey{
+		Namespace: nutanixCluster.Namespace,
+		Name:      credentialRef.Name,
+	}
+
+	if err := r.Client.Get(ctx, secretKey, secret); err != nil {
+		errorMsg := fmt.Errorf("error occurred while fetching cluster %s secret for credential ref: %w", nutanixCluster.Name, err)
+		log.Error(errorMsg, "error occurred fetching cluster")
+		return errorMsg
+	}
+
+	// Check if ownerRef is already set on nutanixCluster object
+	if !capiutil.IsOwnedByObject(secret, nutanixCluster, infrav1.GroupVersion.WithKind(nutanixCluster.Kind).GroupKind()) {
+		// Check if another nutanixCluster already has set ownerRef. Secret can only be owned by one nutanixCluster object
+		if capiutil.HasOwner(secret.OwnerReferences, infrav1.GroupVersion.String(), []string{
+			nutanixCluster.Kind,
+		}) {
+			return fmt.Errorf("secret %s already owned by another nutanixCluster object", secret.Name)
+		}
+		// Set nutanixCluster ownerRef on the secret
+		secret.OwnerReferences = capiutil.EnsureOwnerRef(secret.OwnerReferences, metav1.OwnerReference{
+			APIVersion: infrav1.GroupVersion.String(),
+			Kind:       nutanixCluster.Kind,
+			UID:        nutanixCluster.UID,
+			Name:       nutanixCluster.Name,
+		})
+	}
+
+	if !ctrlutil.ContainsFinalizer(secret, infrav1.NutanixClusterCredentialFinalizer) {
+		ctrlutil.AddFinalizer(secret, infrav1.NutanixClusterCredentialFinalizer)
+	}
+	ctrlutil.RemoveFinalizer(secret, infrav1.DeprecatedNutanixClusterCredentialFinalizer)
+
+	err = r.Client.Update(ctx, secret)
+	if err != nil {
+		errorMsg := fmt.Errorf("failed to update secret for cluster %s: %w", nutanixCluster.Name, err)
+		log.Error(errorMsg, "failed to update secret")
+		return errorMsg
+	}
+
+	return nil
+}
+
+// getPrismCentralCredentialRefForCluster calls nutanixCluster.GetPrismCentralCredentialRef() function
+// and returns an error if nutanixCluster is nil
+func getPrismCentralCredentialRefForCluster(nutanixCluster *infrav1.NutanixCluster) (*credentialTypes.NutanixCredentialReference, error) {
+	if nutanixCluster == nil {
+		return nil, fmt.Errorf("cannot get credential reference if nutanix cluster object is nil")
+	}
+	return nutanixCluster.GetPrismCentralCredentialRef()
+}
+
+// credentials is where this reconciler reads Prism Central credentials from.
+func (r *NutanixClusterReconciler) credentials() credentialSource {
+	return credentialSource{
+		Reader:            r.CredentialReader,
+		SecretInformer:    r.SecretInformer,
+		ConfigMapInformer: r.ConfigMapInformer,
+	}
+}

@@ -34,7 +34,9 @@ for mod in $PROVIDER_MODULES; do
 done
 
 # Avoid Go template collision in Taskfile: use -json + python.
-capi_ver="$(go list -m -json sigs.k8s.io/cluster-api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+# The upstream components come from the drift records' base commits, via the
+# one script that derives every tag (see scripts/image-tags.sh).
+capi_ver="$(./scripts/image-tags.sh --capi-version)"
 k8s_ver="$(go list -m -json k8s.io/api | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
 base="$(sed -n 's/^Base: *`//p' DRIFT.md | sed 's/`.*$//' | tr -d '[:space:]')"
 rev="$(git rev-parse HEAD 2>/dev/null || echo dev)"
@@ -49,8 +51,7 @@ for imp in ./cmd/core-manager ./cmd/kubeadm-bootstrap-manager ./cmd/kubeadm-cont
     --image-label "$common" "$imp"
 done
 
-capx_json="$(go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
-capx_ver="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version','') or d.get('Version',''))" 2>/dev/null || go -C providers/nutanix-infrastructure list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version',''))")"
+capx_ver="$(./scripts/image-tags.sh --capx-version)"
 KO_DOCKER_REPO="$repo/kcp-capi-nutanix-infrastructure" ko build --bare $plat_flag --tags "$tag" \
   --image-label "$common,io.kcp-capi.capx-version=$capx_ver" \
   ./providers/nutanix-infrastructure/cmd/nutanix-infrastructure-manager

@@ -7,6 +7,8 @@ set -euo pipefail
 #   scripts/image-tags.sh --check         # validate only, no output
 #   scripts/image-tags.sh --gha-output    # write to $GITHUB_OUTPUT for CI
 #   scripts/image-tags.sh --repo-version  # print REPO_VERSION only (for --help smoke)
+#   scripts/image-tags.sh --capi-version  # print the CAPI upstream component only
+#   scripts/image-tags.sh --capx-version  # print the CAPX upstream component only
 #
 # Environment overrides:
 #   REPO_VERSION, CAPI_VERSION, CAPX_VERSION, K8S_VERSION, CAPI_BASE
@@ -14,19 +16,27 @@ set -euo pipefail
 #
 # Tag format (contracts/tag-schema.md#per-release-tag-matrix):
 #   Root images:    <repo>               e.g. v0.2.0
-#                   <repo>-capi-<capi>   e.g. v0.2.0-capi-v1.15.0-kcp.13
-#                   <capi>               e.g. v1.15.0-kcp.13  (fork alias)
+#                   <repo>-capi-<capi>   e.g. v0.2.0-capi-281e4e3ed2af
+#                   <capi>               e.g. 281e4e3ed2af  (upstream alias)
 #   Provider images: <repo>                              e.g. v0.2.0
-#                    <repo>-capx-<capx>-capi-<capi>     e.g. v0.2.0-capx-v1.11.0-kcp.3-capi-v1.15.0-kcp.13
-#                    <capx>                               e.g. v1.11.0-kcp.3
-#   Every version component is OCI-sanitized (+→-). ForkTag is the provider/capi
-#   version itself — a floating alias that ko overwrites on every release.
+#                    <repo>-capx-<capx>-capi-<capi>     e.g. v0.2.0-capx-b3b16750a6f1-capi-281e4e3ed2af
+#                    <capx>                               e.g. b3b16750a6f1
+#   Every version component is OCI-sanitized (+→-). The alias is the upstream
+#   component itself — a floating alias that ko overwrites on every release.
 #
-# Unchanged pins reuse the same forkTag/labels; ko push is an upsert so
-#   When CAPI/CAPX pins are unchanged between two repo releases, forkTag and
-#   labels stay identical. The new digest overwrites the old fork alias (ko push
-#   is upsert), so `:<capiVersion>` always points at the newest release. No extra
-#   retention or history tag is needed.
+# Where <capi> and <capx> come from: the upstream trees are vendored under
+# third_party/forked/ (ADR-0005), so there is no fork tag to read from the module graph any
+# more — `go list -m` reports a directory and a placeholder version. What
+# identifies the upstream each tree is cut from is the base commit its drift
+# record names, so that is the component: the first twelve characters of
+# `Base:` in DRIFT.md and providers/nutanix-infrastructure/DRIFT.md. It is
+# the one identifier of the upstream a tree is cut from that is derivable
+# offline from the record alone, it keeps every tag unique, and the checks
+# below assert both. See contracts/tag-schema.md, amended for ADR-0005.
+#
+# Unchanged bases reuse the same alias/labels; ko push is an upsert, so the
+#   new digest overwrites the old alias and `:<capi>` always points at the
+#   newest release. No extra retention or history tag is needed.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -35,7 +45,9 @@ MODE="print"
 if [[ "${1:-}" == "--check" ]]; then MODE="check"
 elif [[ "${1:-}" == "--gha-output" ]]; then MODE="gha"
 elif [[ "${1:-}" == "--repo-version" ]]; then MODE="repo-version"
-elif [[ "${1:-}" == "--help" ]]; then echo "Usage: $0 [--check|--gha-output|--repo-version]"; exit 0
+elif [[ "${1:-}" == "--capi-version" ]]; then MODE="capi-version"
+elif [[ "${1:-}" == "--capx-version" ]]; then MODE="capx-version"
+elif [[ "${1:-}" == "--help" ]]; then echo "Usage: $0 [--check|--gha-output|--repo-version|--capi-version|--capx-version]"; exit 0
 fi
 
 derive() {
@@ -53,31 +65,28 @@ derive() {
     fi
   fi
 
+  # The upstream component of a tag is the base commit the tree's drift record
+  # names (see the header). Read once here; capi_base below is the same value
+  # at full length, kept for the OCI label.
+  base_of() {
+    sed -n 's/^Base: *`//p' "$1" 2>/dev/null | sed 's/`.*$//' | tr -d '[:space:]'
+  }
   if [[ -z "$capi_version" ]]; then
-    capi_version="$(go -C "$REPO_ROOT" list -m -f '{{.Version}}' sigs.k8s.io/cluster-api 2>/dev/null || echo unknown)"
+    capi_version="$(base_of "$REPO_ROOT/DRIFT.md")"
+    capi_version="${capi_version:0:12}"
+    if [[ -z "$capi_version" ]]; then capi_version="unknown"; fi
   fi
   if [[ -z "$capx_version" ]]; then
-    # For a new provider with a different upstreamImport, add a sibling
-    # block here that runs `go -C providers/<name> list -m -json <import>` and
-    # extracts Replace.Version the same way. Alternatively, keep this capx block
-    # and add a new var (e.g. capa_version) alongside it — the table row then
-    # composes its longTag from that var.
-    # The provider module's go list shows the original require version (v1.11.0-dev.1);
-    # the fork pin (v1.11.0-kcp.3) is in the Replace block — read it via -json.
-    capx_json="$(go -C "$REPO_ROOT/providers/nutanix-infrastructure" list -m -json github.com/nutanix-cloud-native/cluster-api-provider-nutanix 2>/dev/null || echo '{}')"
-    capx_version="$(echo "$capx_json" | grep -o '"Version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || echo "")"
-    if echo "$capx_json" | grep -q '"Replace"'; then
-      capx_replace="$(echo "$capx_json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('Replace',{}).get('Version',''))" 2>/dev/null || \
-        echo "$capx_json" | sed -n '/"Replace"/,/}/p' | grep -o '"Version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || echo "")"
-      if [[ -n "$capx_replace" && "$capx_replace" != "null" && "$capx_replace" != "" ]]; then capx_version="$capx_replace"; fi
-    fi
+    # For a new provider, add a sibling block reading that provider's record.
+    capx_version="$(base_of "$REPO_ROOT/providers/nutanix-infrastructure/DRIFT.md")"
+    capx_version="${capx_version:0:12}"
     if [[ -z "$capx_version" ]]; then capx_version="unknown"; fi
   fi
   if [[ -z "$k8s_version" ]]; then
     k8s_version="$(go -C "$REPO_ROOT" list -m -f '{{.Version}}' k8s.io/api 2>/dev/null || echo unknown)"
   fi
   if [[ -z "$capi_base" ]]; then
-    capi_base="$(sed -n 's/^Base: *`//p' "$REPO_ROOT/DRIFT.md" 2>/dev/null | sed 's/`.*$//' | tr -d '[:space:]')"
+    capi_base="$(base_of "$REPO_ROOT/DRIFT.md")"
     if [[ -z "$capi_base" ]]; then capi_base="unknown"; fi
   fi
 
@@ -191,6 +200,13 @@ if [[ "$MODE" == "check" ]]; then
   fi
   echo "OK: all derived tags pass OCI validation (${#TABLESPEC[@]} images, 3 aliases each + branch/sha)"
   exit 0
+fi
+
+if [[ "$MODE" == "capi-version" ]]; then
+  echo "$DERIVED_CAPI_VERSION"; exit 0
+fi
+if [[ "$MODE" == "capx-version" ]]; then
+  echo "$DERIVED_CAPX_VERSION"; exit 0
 fi
 
 if [[ "$MODE" == "repo-version" ]]; then

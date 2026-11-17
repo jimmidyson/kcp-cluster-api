@@ -1,0 +1,15 @@
+codecov:
+  require_ci_to_pass: true
+
+ignore:
+  # ignore all generated controller-gen and conversion-gen code
+  - "**/zz_generated.*.go"
+
+coverage:
+  precision: 2
+  round: down
+  range: 75..100
+  status:
+    patch:
+      default:
+        target: 75%

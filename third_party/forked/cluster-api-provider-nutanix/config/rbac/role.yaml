@@ -1,0 +1,109 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - kubeadmconfigs
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  - machines
+  - machines/status
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters/status
+  - machinedeployments
+  - machinesets
+  - machinesets/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - nutanixclusters
+  - nutanixfailuredomains
+  - nutanixmachines
+  - nutanixmetros
+  - nutanixmetrosites
+  - nutanixvirtualhadomains
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - nutanixclusters/finalizers
+  - nutanixmachines/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - nutanixclusters/status
+  - nutanixfailuredomains/finalizers
+  - nutanixfailuredomains/status
+  - nutanixmachines/status
+  - nutanixmachinetemplates/status
+  - nutanixmetros/finalizers
+  - nutanixmetros/status
+  - nutanixmetrosites/finalizers
+  - nutanixmetrosites/status
+  - nutanixvirtualhadomains/finalizers
+  - nutanixvirtualhadomains/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - nutanixmachinetemplates
+  verbs:
+  - get
+  - list
+  - watch

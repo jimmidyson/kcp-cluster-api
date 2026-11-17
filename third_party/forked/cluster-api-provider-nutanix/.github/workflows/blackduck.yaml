@@ -1,0 +1,84 @@
+name: Black Duck Policy Check
+on:
+  schedule:
+    - cron: "0 0 * * *" # Midnight
+  push:
+    branches:
+      - main
+      - 'release-*'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+    branches:
+      - main
+      - 'release-*'
+
+jobs:
+  check_approvals:
+    runs-on: ubuntu-latest
+    outputs:
+      # For pull_request_target: pass through the actual approval result (empty string if the step was skipped, i.e. no label or not external).
+      # For all other events: default to 'true' so non-PR triggers are not blocked.
+      check_approvals: ${{ github.event_name == 'pull_request_target' && steps.check_approvals.outputs.status || (github.event_name != 'pull_request_target' && 'true') || '' }}
+      # Output whether the PR is external
+      external_pr: ${{ ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.base.repo.clone_url != github.event.pull_request.head.repo.clone_url) || 'false' }}
+    steps:
+      - name: Check integration test allowance status
+        # Only run this step for labeled external PRs.
+        if: ${{ github.event_name == 'pull_request_target' &&
+          contains(github.event.pull_request.labels.*.name, 'integration-test') &&
+          github.event.pull_request.base.repo.clone_url != github.event.pull_request.head.repo.clone_url }}
+        id: check_approvals
+        # Use an external action to check if the PR has the necessary approvals
+        uses: nutanix-cloud-native/action-check-approvals@v1
+
+  security:
+    needs: check_approvals
+    if: ${{ (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') ||
+      (github.event_name == 'pull_request' && needs.check_approvals.outputs.external_pr == 'false') ||
+      (github.event_name == 'pull_request_target' && needs.check_approvals.outputs.external_pr == 'true' && needs.check_approvals.outputs.check_approvals == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install devbox
+        uses: jetify-com/devbox-install-action@v0.14.0
+        with:
+          enable-cache: true
+
+      - name: Go cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build Project
+        run: devbox run -- make build
+
+      - name: Black Duck Full Scan
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: blackduck-inc/black-duck-security-scan@v2.1.1
+        with:
+          blackducksca_url: ${{ secrets.BLACKDUCK_URL }}
+          blackducksca_token: ${{ secrets.BLACKDUCK_API_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          blackducksca_scan_full: true
+          blackducksca_scan_failure_severities: 'BLOCKER,CRITICAL'
+
+      - name: Black Duck PR Scan
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: blackduck-inc/black-duck-security-scan@v2.1.1
+        env:
+          DETECT_PROJECT_VERSION_NAME: ${{ github.base_ref }}
+        with:
+          blackducksca_url: ${{ secrets.BLACKDUCK_URL }}
+          blackducksca_token: ${{ secrets.BLACKDUCK_API_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          blackducksca_scan_full: false
+          blackducksca_prComment_enabled: true

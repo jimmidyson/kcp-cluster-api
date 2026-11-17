@@ -44,50 +44,47 @@ touches. A new file rebases cleanly; a modified one does not. Of the
 forty-nine deliberate entries below, twenty-five are new files and twenty-four
 modify existing ones — and the twenty-four are the number that matters.
 
-## Where the check runs, and why not on every pull request
+## Where the check runs
 
-The check runs on a daily schedule, on demand, and on pull requests that
-touch the pin, this record, or the checker itself — not on every pull
-request, and not in the fork.
+The check runs on every pull request that touches a vendored tree, a record,
+or the checker; on a daily schedule; and on demand.
 
-**Not on every pull request here**, because the thing being measured lives
-in another repository. Gating every change on it means an unrelated pull
-request goes red because somebody pushed to the fork: a failure its author
-can neither fix nor merge past. The scheduled run surfaces the same problem
-within a day, without holding anyone's work hostage. The path filter keeps
-it blocking exactly where a pull request in this repository *is* the right
-place to fix it — when the pinned version or this record changes.
+**On every such pull request**, because the thing being measured is in it.
+The upstream trees are vendored under `third_party/forked/`
+([ADR-0005](docs/adr-0005-one-repository.md)), so a change to one arrives
+as a diff here, where its author can add the entry or drop the change. This
+inverts the reasoning the record carried while the trees lived in forks of
+their own: then the measurement depended on another repository's state, and
+gating every pull request on it meant unrelated work going red for a push
+nobody here made. There is no other repository now.
 
-**Not in the fork**, though that is where drift is introduced, because the
-checker would become drift. The fork's contract is "upstream at base commit
-plus recorded patches, nothing else", which is what makes
-`git diff upstream..kcp/v1.15` mean something without mental subtraction.
-Adding a workflow and a copy of this record there would add two more
-differing paths and require the check to exempt its own infrastructure. It
-would also need a second implementation: the checker is Go in this module,
-and the fork is the Cluster API module, which cannot import it without a
-cycle.
+**On a schedule as well**, because the other side of the measurement —
+upstream at the base commit — is fetched, and a day on which the fetch could
+not run should not pass unnoticed.
 
-If push-time rejection on the fork is wanted, branch protection on `kcp/*`
-is the honest mechanism, not a workflow the fork has to carry.
+**On what is on disk, less what git ignores and does not track.** The
+vendored tree is a snapshot of upstream plus the recorded patches, and the
+record's question is "what differs from upstream". The checker compares the
+directory, so an edit shows before it is staged; it then drops the files
+upstream's own ignore rules exclude and nothing tracks, because a vendored
+tree's own test suite leaves those behind — a log beside each golden file —
+and nothing would ever commit them. A tracked file is measured whatever the
+rules say, so a file added by force is not hidden by them.
 
-Fork: [`github.com/jimmidyson/cluster-api`](https://github.com/jimmidyson/cluster-api), branch `kcp/v1.15`, tag `v1.15.0-kcp.13`
-
-> All three modules are at the same version. `api/` was left behind at
-> `v1.15.0-kcp.6` for two tags because nothing touched it and re-tagging would
-> have pointed a new version at an unchanged tree; it is tagged along with the
-> others again now, which costs nothing and removes a version skew that had to
-> be explained every time it was read.
+Tree: `third_party/forked/cluster-api`, keeping the module path `sigs.k8s.io/cluster-api`
+with its `api/` and `test/` modules as they are upstream. Cut from the fork
+repository's tag `v1.15.0-kcp.13`, which is the last pin this project held
+before the tree was vendored; the fork is retired and nothing resolves it.
 
 Base: `281e4e3ed2af1d6852651d69e1207a3073b478c2`
 
-> **The pins do not propagate.** The fork keeps the module path
-> `sigs.k8s.io/cluster-api`, and Go honours `replace` only in the main module.
-> Anything consuming this module must restate all three `replace` directives
-> at matching versions; without them it resolves genuine upstream Cluster API,
-> which fails as a confusing "unknown revision" at best and as duplicate types
-> at worst. There is one consumer today, so nothing checks this. See
-> [ADR-0004](docs/adr-0004-scaling-to-many-provider-forks.md).
+> **There is no pin.** Every module that consumes Cluster API replaces the
+> module path with a relative path into this tree, and `go.work` lists every
+> module so the tree is one build. Go honours `replace` only in the main
+> module, so each consumer restates the three directives; a relative path
+> cannot disagree with another on a version, which is what retired the
+> pin-propagation hazard [ADR-0004](docs/adr-0004-scaling-to-many-provider-forks.md)
+> recorded.
 
 The base is an upstream `main` commit, not a release tag, and that is
 forced rather than chosen: at `v1.14.0` the docker provider's reconcilers
@@ -152,6 +149,7 @@ cannot build without them. See the feature's research notes (R2).
 | `bootstrap/kubeadm/reconcilers/kubeadmconfig/kubeadmconfig_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmConfig reconciler. One substantive difference from its single-cluster twin: `KubeadmInitLock` defaults to a mutex over the reconciler's own cluster-aware client rather than the manager's, because the lock is a ConfigMap in the cluster being reconciled and the manager's client addresses no cluster in particular. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller_workspace.go` | New file. `SetupWithMulticlusterManager` for the KubeadmControlPlane reconciler. One behavioural difference: the Machine client that returns the deleted object is built from the reconciler's cluster-aware client rather than from the manager's config, which addresses no cluster in particular here. The cost is the cache-consistency optimisation it enabled; both call sites already handle a nil result. | None — carried deliberately, ADR-0003 |
 | `controlplane/kubeadm/reconcilers/kubeadmcontrolplane/kubeadmcontrolplane_controller.go` | **Modified.** The `controller` field narrows to the three methods the reconcile path calls, so one field can hold either the single-cluster controller or the fleet-wide one — the same change the Machine reconciler carries, for the same reason. | None — carried deliberately, ADR-0003 |
+| `test/infrastructure/inmemory/pkg/server/api/handler.go` | **Modified.** A delete writes a response body — the deleted object, or a `Status` once it is gone. controller-runtime v0.25 decodes a `Delete` call's response into the object and fails on an empty body with "empty data", so with the dependency bump this tree carries, every delete against the in-memory workload cluster failed, and five of the server's own tests with it. Ported from upstream `main`, which made the same bump and the same fix. | **Upstream** — already on `main`; retires at the next adoption |
 | `test/infrastructure/inmemory/pkg/server/mux.go` | **Modified.** `getFreePortLocked` binds each candidate port to check it is free and skips what is taken, implementing the TODO that stood in its place. The port is recorded on the listener and never revisited, so an unchecked one that turns out to be taken is retried with the same port forever — a workload cluster whose endpoint nothing answers on, which presents as slowness rather than as failure. | **Pending** |
 | `test/infrastructure/inmemory/pkg/server/mux_test.go` | **Modified.** Covers both halves of the above: a port in use is skipped, and a range with nothing free still reports that rather than handing one out. | **Pending** |
 | `test/infrastructure/docker/reconcilers/backends/inmemory/workspace_keys.go` | New file. Names the in-memory backend's per-cluster state by management cluster as well as namespace and name. | None — carried deliberately, ADR-0003 |
