@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-30
 
-**Status**: Draft
+**Status**: Shipped in #138
 
 **Input**: User description: "Upgrade to latest KCP release"
 
@@ -15,6 +15,13 @@
 > name. The "Measured on kcp v0.32.3" line in `docs/conversion-plan.md` is
 > left alone, because that figure has not been re-measured on the new
 > version.
+>
+> The upgrade was not the no-op for behaviour the spec expected. On kcp 0.33
+> a workspace that unbinds while it holds clusters never finished: see
+> "Unbinding a workspace that still holds clusters" in
+> `docs/site/content/en/docs/design/workspace-resource-usage.md` for what
+> changed and the three reconciler changes carried for it, which `DRIFT.md`
+> records.
 
 ## Context
 

@@ -182,3 +182,140 @@ func TestDevClusterWaitsForItsDevMachines(t *testing.T) {
 		g.Expect(err).To(HaveOccurred(), "with no DevMachines left the DevCluster should have finished deleting")
 	})
 }
+
+// A DevCluster being deleted whose Cluster has already gone still tears its
+// backend down, and still waits for its DevMachines first.
+//
+// Cluster API's own teardown never produces this: a Cluster waits for its
+// infrastructure cluster. Something that removes the objects in a different
+// order does, and the reconcile used to fail on the missing Cluster forever
+// with the finalizer in place - see the stand-in in Reconcile.
+func TestDeletedDevClusterWhoseClusterIsGone(t *testing.T) {
+	key := types.NamespacedName{Name: "test-cluster", Namespace: "default"}
+	newDevCluster := func(deleting bool) *infrav1.DevCluster {
+		devCluster := &infrav1.DevCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       key.Name,
+				Namespace:  key.Namespace,
+				Finalizers: []string{infrav1.ClusterFinalizer},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: clusterv1.GroupVersion.String(),
+					Kind:       "Cluster",
+					Name:       "test-cluster",
+					UID:        "test-cluster-uid",
+				}},
+			},
+			Spec: infrav1.DevClusterSpec{
+				Backend: infrav1.DevClusterBackendSpec{InMemory: &infrav1.InMemoryClusterBackendSpec{}},
+			},
+		}
+		if deleting {
+			devCluster.DeletionTimestamp = ptr.To(metav1.Now())
+		}
+		return devCluster
+	}
+	devMachine := &infrav1.DevMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-machine",
+			Namespace: "default",
+			Labels:    map[string]string{clusterv1.ClusterNameLabel: "test-cluster"},
+		},
+	}
+
+	t.Run("waits while a DevMachine remains", func(t *testing.T) {
+		g := NewWithT(t)
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme.Scheme).
+			WithObjects(newDevCluster(true), devMachine).
+			WithStatusSubresource(&infrav1.DevCluster{}).
+			Build()
+		r := &DevCluster{Client: c}
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(result.RequeueAfter).To(Equal(devMachineDeletionRequeue))
+
+		var got infrav1.DevCluster
+		g.Expect(c.Get(context.Background(), key, &got)).To(Succeed())
+		g.Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer),
+			"the DevCluster gave up its finalizer while a DevMachine still needed it to clean up")
+	})
+
+	t.Run("deletes its backend and goes once none do", func(t *testing.T) {
+		g := NewWithT(t)
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme.Scheme).
+			WithObjects(newDevCluster(true)).
+			WithStatusSubresource(&infrav1.DevCluster{}).
+			Build()
+		// A real in-memory backend, as above: this case runs the delete.
+		inMemoryManager := inmemoryruntime.NewManager(scheme.Scheme)
+		g.Expect(inMemoryManager.Start(context.Background())).To(Succeed())
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		g.Expect(err).ToNot(HaveOccurred())
+		port := int32(listener.Addr().(*net.TCPAddr).Port) //nolint:forcetypeassert // a TCP listener has a TCP address.
+		g.Expect(listener.Close()).To(Succeed())
+		mux, err := inmemoryserver.NewWorkloadClustersMux(inMemoryManager, "127.0.0.1",
+			inmemoryserver.CustomPorts{MinPort: port + 1, MaxPort: port + 10, DebugPort: port})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		r := &DevCluster{Client: c, InMemoryManager: inMemoryManager, APIServerMux: mux}
+
+		_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		var got infrav1.DevCluster
+		err = c.Get(context.Background(), key, &got)
+		g.Expect(client.IgnoreNotFound(err)).ToNot(HaveOccurred())
+		g.Expect(err).To(HaveOccurred(), "the DevCluster kept its finalizer for a Cluster that is never coming back")
+	})
+
+	t.Run("a live DevCluster still fails", func(t *testing.T) {
+		g := NewWithT(t)
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme.Scheme).
+			WithObjects(newDevCluster(false)).
+			WithStatusSubresource(&infrav1.DevCluster{}).
+			Build()
+		r := &DevCluster{Client: c}
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		g.Expect(err).To(HaveOccurred())
+
+		var got infrav1.DevCluster
+		g.Expect(c.Get(context.Background(), key, &got)).To(Succeed())
+		g.Expect(got.Finalizers).To(ContainElement(infrav1.ClusterFinalizer))
+	})
+}
+
+// The stand-in for a Cluster that has gone has to name what the real one
+// named. The docker backend finds a cluster's load balancer by the Cluster's
+// name and the logical cluster it lives in, so a stand-in missing either
+// deletes nothing and reports success.
+func TestStandInForDeletedCluster(t *testing.T) {
+	g := NewWithT(t)
+
+	devCluster := &infrav1.DevCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "infra",
+			Namespace:   "tenant",
+			Annotations: map[string]string{logicalClusterAnnotation: "abc123", "unrelated": "x"},
+			OwnerReferences: []metav1.OwnerReference{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "not-this"},
+				{APIVersion: clusterv1.GroupVersion.String(), Kind: "Cluster", Name: "workload"},
+			},
+		},
+	}
+
+	cluster := standInForDeletedCluster(devCluster)
+	g.Expect(cluster).ToNot(BeNil())
+	g.Expect(cluster.Namespace).To(Equal("tenant"))
+	g.Expect(cluster.Name).To(Equal("workload"))
+	g.Expect(cluster.Annotations).To(Equal(map[string]string{logicalClusterAnnotation: "abc123"}))
+
+	devCluster.OwnerReferences = devCluster.OwnerReferences[:1]
+	g.Expect(standInForDeletedCluster(devCluster)).To(BeNil(), "a DevCluster with no owner Cluster has nothing to stand in for")
+}

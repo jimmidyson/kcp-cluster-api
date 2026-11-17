@@ -482,6 +482,37 @@ enough on its own:
   is gone there is nothing left to reach and holding on only blocks whatever
   owns the object.
 
+**kcp 0.33 found a second way in**, from the other end of the chain. A
+`Cluster` reads its control plane and its infrastructure cluster through
+permission claims, because they are bound through other providers'
+`APIBinding`s. On kcp 0.32 it went on seeing them until they had really gone.
+From kcp 0.33 it stops being shown them as soon as those bindings start
+deleting — observed on v0.33.3 and v0.33.6: the reads answer `NotFound` for
+objects that are still there with their finalizers on. Cluster API's `Cluster`
+reconciler takes that at its word, concludes both have finished deleting, and
+removes its own finalizer. The `Cluster` goes first, and the `Machine`, the
+`KubeadmControlPlane` and the `DevCluster` it left behind each failed on the
+missing `Cluster` forever, holding three bindings open.
+
+Why kcp's answer changed was not established; its release notes for 0.33
+include a change to how the APIExport virtual workspace answers for claimed
+resources it does not serve, which fits, and that is a guess. The fix does not
+depend on it, because the reconcilers were wrong for any removal in this
+order:
+
+- A deleted `Machine` or `KubeadmControlPlane` whose `Cluster` has gone
+  releases its finalizer. Everything either would do on the way out is done
+  through the `Cluster`, and what they own goes with them through its own
+  controller.
+- A deleted `DevCluster` whose `Cluster` has gone still runs its backend
+  delete, against a stand-in carrying the `Cluster`'s namespace, name and
+  logical cluster — all the delete reads from it. It still waits for its
+  `DevMachine`s first, so this does not reopen the leak above.
+
+An object that is not being deleted still fails on a missing `Cluster`, as
+upstream intends. The Nutanix provider's reconcilers have not been checked for
+the same exit: nothing here unbinds a workspace holding Nutanix clusters.
+
 `test/integration/teardown` is the check from the outside: a workspace with a
 running control plane, every `APIBinding` deleted without touching the cluster,
 and every binding required to finish deleting. It takes about two minutes,

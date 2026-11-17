@@ -5080,3 +5080,65 @@ func getTestCACert(key *rsa.PrivateKey) (*x509.Certificate, error) {
 	c, err := x509.ParseCertificate(b)
 	return c, err
 }
+
+// A KubeadmControlPlane being deleted whose Cluster has already gone gives up
+// its finalizer, and one that is not being deleted still fails - which is what
+// TestReconcileReturnErrorWhenOwnerClusterIsMissing above has always required.
+//
+// Cluster API's own teardown never produces the first case: a Cluster waits
+// for its control plane. Something that removes the objects in a different
+// order does - see releaseDeletedKubeadmControlPlane.
+func TestKubeadmControlPlaneWhoseClusterIsGone(t *testing.T) {
+	newKCP := func(deleting bool) *controlplanev1.KubeadmControlPlane {
+		kcp := &controlplanev1.KubeadmControlPlane{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "orphan",
+				Namespace:  metav1.NamespaceDefault,
+				Finalizers: []string{controlplanev1.KubeadmControlPlaneFinalizer, "test"},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: clusterv1.GroupVersion.String(),
+					Kind:       "Cluster",
+					Name:       "gone",
+					UID:        "gone-uid",
+				}},
+			},
+		}
+		if deleting {
+			kcp.DeletionTimestamp = ptr.To(metav1.Now())
+		}
+		return kcp
+	}
+
+	t.Run("a deleted control plane is released", func(t *testing.T) {
+		g := NewWithT(t)
+
+		kcp := newKCP(true)
+		key := client.ObjectKeyFromObject(kcp)
+		c := fake.NewClientBuilder().WithObjects(kcp).WithStatusSubresource(&controlplanev1.KubeadmControlPlane{}).Build()
+		r := &Reconciler{Client: c, SecretCachingClient: c, recorder: record.NewFakeRecorder(32)}
+
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		var actual controlplanev1.KubeadmControlPlane
+		g.Expect(c.Get(ctx, key, &actual)).To(Succeed())
+		g.Expect(actual.Finalizers).To(Equal([]string{"test"}),
+			"the control plane kept its finalizer for a Cluster that is never coming back")
+	})
+
+	t.Run("a live control plane still fails", func(t *testing.T) {
+		g := NewWithT(t)
+
+		kcp := newKCP(false)
+		key := client.ObjectKeyFromObject(kcp)
+		c := fake.NewClientBuilder().WithObjects(kcp).WithStatusSubresource(&controlplanev1.KubeadmControlPlane{}).Build()
+		r := &Reconciler{Client: c, SecretCachingClient: c, recorder: record.NewFakeRecorder(32)}
+
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+		g.Expect(err).To(HaveOccurred())
+
+		var actual controlplanev1.KubeadmControlPlane
+		g.Expect(c.Get(ctx, key, &actual)).To(Succeed())
+		g.Expect(actual.Finalizers).To(ContainElement(controlplanev1.KubeadmControlPlaneFinalizer))
+	})
+}

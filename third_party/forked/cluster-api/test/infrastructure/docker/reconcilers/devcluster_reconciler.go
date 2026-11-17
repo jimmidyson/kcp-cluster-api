@@ -23,6 +23,8 @@ import (
 
 	pkgerrors "github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -110,7 +112,31 @@ func (r *DevCluster) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	// Fetch the Cluster.
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, devCluster.ObjectMeta)
 	if err != nil {
-		return ctrl.Result{}, err
+		if devCluster.DeletionTimestamp.IsZero() || !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		// A DevCluster being deleted whose Cluster has already gone still has
+		// a backend to tear down, and used to fail here forever with its
+		// finalizer in place.
+		//
+		// Cluster API's own teardown keeps the Cluster until its
+		// infrastructure cluster has gone, so this never arises there. It
+		// does when something removes the objects in another order: deleting
+		// a kcp APIBinding takes every bound object at once, and from kcp
+		// 0.33 a Cluster stops being shown an infrastructure cluster bound
+		// through another APIBinding as soon as that binding starts deleting,
+		// reads that as it having gone, and goes first.
+		//
+		// The delete below needs the Cluster only to name what it deletes -
+		// the docker load balancer and the in-memory resource group are both
+		// keyed by namespace and name - so a stand-in carrying those is
+		// enough to run it, rather than dropping the finalizer and leaking
+		// whatever the backend holds.
+		cluster = standInForDeletedCluster(devCluster)
+		if cluster == nil {
+			return ctrl.Result{}, err
+		}
+		log.Info("The owner Cluster of a deleted DevCluster is already gone, deleting the DevCluster without it", "Cluster", klog.KObj(cluster))
 	}
 	if cluster == nil {
 		// Note: If ownerRef was not set, there is nothing to delete. Remove finalizer so deletion can succeed.
@@ -143,8 +169,12 @@ func (r *DevCluster) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, cluster, devCluster); err != nil || isPaused || requeue {
-		return ctrl.Result{}, err
+	// A stand-in for a Cluster that has gone is never paused, and has no
+	// UID: there is nothing left that could pause this deletion.
+	if cluster.UID != "" {
+		if isPaused, requeue, err := paused.EnsurePausedCondition(ctx, r.Client, cluster, devCluster); err != nil || isPaused || requeue {
+			return ctrl.Result{}, err
+		}
 	}
 
 	backendReconciler := r.backendReconcilerFactory(ctx, devCluster)
@@ -183,6 +213,35 @@ func (r *DevCluster) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 	// Handle non-deleted clusters
 	return backendReconciler.ReconcileNormal(ctx, cluster, devCluster)
+}
+
+// logicalClusterAnnotation is where kcp records the logical cluster an object
+// lives in. It is on every object kcp serves, so the DevCluster carries the
+// same value its Cluster did. The docker backend reads it from the Cluster to
+// name containers (see logicalClusterOf there).
+const logicalClusterAnnotation = "kcp.io/cluster"
+
+// standInForDeletedCluster returns a Cluster carrying only what a backend
+// delete reads from one - the namespace and name of the Cluster a DevCluster's
+// owner reference points at, and the logical cluster both live in - for
+// running a deletion after that Cluster has gone. It returns nil if there is
+// no such reference.
+func standInForDeletedCluster(devCluster *infrav1.DevCluster) *clusterv1.Cluster {
+	for _, ref := range devCluster.GetOwnerReferences() {
+		if ref.Kind != "Cluster" {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(ref.APIVersion)
+		if err != nil || gv.Group != clusterv1.GroupVersion.Group {
+			continue
+		}
+		cluster := &clusterv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: devCluster.Namespace, Name: ref.Name}}
+		if logicalCluster, ok := devCluster.Annotations[logicalClusterAnnotation]; ok {
+			cluster.Annotations = map[string]string{logicalClusterAnnotation: logicalCluster}
+		}
+		return cluster
+	}
+	return nil
 }
 
 // devMachineDeletionRequeue is how often a deleting DevCluster re-checks
