@@ -6,7 +6,11 @@ updates:
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
-      interval: "weekly"
+      interval: "monthly"
+  # Let a release settle before proposing it: one that is superseded within
+  # days is a pull request nobody needed. Security updates are not delayed.
+  cooldown:
+    default-days: 7
   groups:
     all-github-actions:
       patterns: [ "*" ]
@@ -35,8 +39,28 @@ updates:
   schedule:
     interval: "weekly"
     day: "monday"
-  ## group all dependencies with a k8s.io prefix into a single PR.
+  cooldown:
+    default-days: 7
+  # A dependency joins the first group whose patterns match it, so the
+  # families come before the catch-all.
   groups:
+    # One advisory often lands on several modules of a family at once (the
+    # OpenTelemetry modules are the usual case). Without this, security
+    # updates ignore the groups below and arrive one pull request per module.
+    go-mod-security:
+      applies-to: security-updates
+      patterns: [ "*" ]
+    # Families released together and only coherent at one version: a bump of
+    # one member alone does not build, and mixed into the catch-all it hides
+    # which family broke.
+    opentelemetry:
+      patterns: [ "go.opentelemetry.io/*" ]
+      update-types: [ "patch", "minor" ]
+    kcp:
+      patterns: [ "github.com/kcp-dev/*" ]
+      update-types: [ "patch", "minor" ]
+    # Every other patch and minor update in a single pull request. Majors
+    # stay one pull request each.
     all-go-mod-patch-and-minor:
       patterns: [ "*" ]
       update-types: [ "patch", "minor" ]
@@ -62,6 +86,41 @@ updates:
     # Bumping the kustomize API independently can break compatibility with client-go as they share k8s.io/kube-openapi as a dependency.
   - dependency-name: "sigs.k8s.io/kustomize/api"
     update-types: [ "version-update:semver-major", "version-update:semver-minor" ]
+  commit-message:
+    prefix: "build"
+  labels:
+    - "dependencies"
+
+# Documentation site (Hugo + Docsy). Build-time only and nothing ships from
+# it, so monthly and in one pull request per ecosystem is enough.
+- package-ecosystem: "npm"
+  directory: "/docs/site"
+  schedule:
+    interval: "monthly"
+  cooldown:
+    default-days: 7
+  groups:
+    docs-site-npm:
+      patterns: [ "*" ]
+    docs-site-npm-security:
+      applies-to: security-updates
+      patterns: [ "*" ]
+  commit-message:
+    prefix: "build"
+  labels:
+    - "dependencies"
+
+# The site's Hugo modules (the Docsy theme). A module of its own, outside
+# go.work, so an update here touches nothing else.
+- package-ecosystem: "gomod"
+  directory: "/docs/site"
+  schedule:
+    interval: "monthly"
+  cooldown:
+    default-days: 7
+  groups:
+    docs-site-hugo-modules:
+      patterns: [ "*" ]
   commit-message:
     prefix: "build"
   labels:
