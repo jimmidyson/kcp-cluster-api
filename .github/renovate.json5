@@ -45,8 +45,12 @@
   // the schedule says. Needs Dependabot *alerts* on in the repository
   // settings; Dependabot security *updates* should be off, or both bots open
   // a pull request for the same advisory.
+  // One advisory often lands on several modules of a family at once, and
+  // each alert is otherwise its own pull request: the first run raised two
+  // for a single OpenTelemetry advisory, one a subset of the other.
   vulnerabilityAlerts: {
     labels: ["dependencies"],
+    groupName: "security updates",
   },
 
   packageRules: [
@@ -125,6 +129,15 @@
       matchManagers: ["npm"],
       groupName: "docs site npm",
       schedule: ["* 0-5 1 * *"],
+    },
+    // The github-actions manager also reads the versions that setup actions
+    // are given (`node-version`, `hugo-version`). A new Node major is a
+    // decision about the docs toolchain, not a routine bump.
+    {
+      matchManagers: ["github-actions"],
+      matchDepNames: ["node"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
     },
   ],
 }
