@@ -247,12 +247,12 @@ github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHm
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/k0kubun/pp/v3 v3.1.0 h1:ifxtqJkRZhw3h554/z/8zm6AAbyO4LLKDlA5eV+9O8Q=
 github.com/k0kubun/pp/v3 v3.1.0/go.mod h1:vIrP5CF0n78pKHm2Ku6GVerpZBJvscg48WepUYEk2gw=
-github.com/kcp-dev/apimachinery/v2 v2.33.3 h1:hiv6thtQR+g4O3TlIYlf62nNhBVI4MKE8PVfBZwyO9Y=
-github.com/kcp-dev/apimachinery/v2 v2.33.3/go.mod h1:1Rkhiwoq345wlUYtq1/P+3chL2eE1rdoIgBPwb6Y9x8=
+github.com/kcp-dev/apimachinery/v2 v2.33.6 h1:3XPqlKmerTPyz6ZdcSXLhVZPed94SBckGS4tbXNHrYs=
+github.com/kcp-dev/apimachinery/v2 v2.33.6/go.mod h1:1Rkhiwoq345wlUYtq1/P+3chL2eE1rdoIgBPwb6Y9x8=
 github.com/kcp-dev/logicalcluster/v3 v3.0.5 h1:JbYakokb+5Uinz09oTXomSUJVQsqfxEvU4RyHUYxHOU=
 github.com/kcp-dev/logicalcluster/v3 v3.0.5/go.mod h1:EWBUBxdr49fUB1cLMO4nOdBWmYifLbP1LfoL20KkXYY=
-github.com/kcp-dev/sdk v0.33.3 h1:55xePo07cZvrS5XtDKCmoXUOryB06+xr1MQ3jmrEShc=
-github.com/kcp-dev/sdk v0.33.3/go.mod h1:uwXWP65d5t/+hRtcG32XHtRs+beqUeBo1kwCHYEi3zg=
+github.com/kcp-dev/sdk v0.33.6 h1:AEUaZWr0Gwx+GTh2xEIOoyIXc+WuS/c5Xka0Dpu0N8Y=
+github.com/kcp-dev/sdk v0.33.6/go.mod h1:L+OpanF7sMijfN6gisSL+Qo2qWLtLKS2ivpeFJR/8Hg=
 github.com/keploy/go-sdk v0.9.0 h1:kpSNcCTDdELsa1gWyhoD9oV57SgSMbG/wq6Cjp4y7cY=
 github.com/keploy/go-sdk v0.9.0/go.mod h1:vNKXoFd2MaK+Gly/K6XeP1Hs9dP834C74szH+vtBPwg=
 github.com/klauspost/compress v1.19.0 h1:sXLILfc9jV2QYWkzFOPWStmcUVH2RHEB1JCdY2oVvCQ=

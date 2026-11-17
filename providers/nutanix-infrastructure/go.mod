@@ -108,10 +108,10 @@ require (
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/kcp-dev/apimachinery/v2 v2.33.3 // indirect
+	github.com/kcp-dev/apimachinery/v2 v2.33.6 // indirect
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5 // indirect
 	github.com/kcp-dev/multicluster-provider v0.8.0 // indirect
-	github.com/kcp-dev/sdk v0.33.3 // indirect
+	github.com/kcp-dev/sdk v0.33.6 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect

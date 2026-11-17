@@ -8,6 +8,14 @@
 
 **Input**: User description: "Upgrade to latest KCP release"
 
+> **Amended 2026-11-17 — the target is v0.33.6.** The request was the latest
+> kcp release, and by the time this was picked up again that was v0.33.6
+> (`github.com/kcp-dev/sdk` v0.33.6, `github.com/kcp-dev/apimachinery/v2`
+> v2.33.6). Read every `v0.33.3` below as v0.33.6; the directory keeps its
+> name. The "Measured on kcp v0.32.3" line in `docs/conversion-plan.md` is
+> left alone, because that figure has not been re-measured on the new
+> version.
+
 ## Context
 
 The project currently pins kcp v0.32.3 as its test/integration server and as the

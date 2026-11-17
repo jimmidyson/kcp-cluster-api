@@ -5,10 +5,10 @@ go 1.27.3
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/go-logr/logr v1.4.4
-	github.com/kcp-dev/apimachinery/v2 v2.33.3
+	github.com/kcp-dev/apimachinery/v2 v2.33.6
 	github.com/kcp-dev/logicalcluster/v3 v3.0.5
 	github.com/kcp-dev/multicluster-provider v0.8.0
-	github.com/kcp-dev/sdk v0.33.3
+	github.com/kcp-dev/sdk v0.33.6
 	github.com/moby/moby/client v0.6.2
 	github.com/nutanix-cloud-native/cluster-api-provider-nutanix v0.0.0-00010101000000-000000000000
 	github.com/onsi/gomega v1.44.0
