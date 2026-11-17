@@ -40,6 +40,8 @@
   // Mondays, early (UTC).
   schedule: ["* 0-5 * * 1"],
   postUpdateOptions: ["gomodTidy"],
+  // Squash, as every pull request here is merged.
+  automergeStrategy: "squash",
 
   // Pull requests for GitHub security advisories, raised at once whatever
   // the schedule says. Needs Dependabot *alerts* on in the repository
@@ -138,6 +140,16 @@
       matchDepNames: ["node"],
       matchUpdateTypes: ["major"],
       enabled: false,
+    },
+
+    // Merge on green. Everything short of a major merges itself once the
+    // required checks pass - `verify` runs the unit and integration suites,
+    // and a red pull request simply stays open. Security updates are minor
+    // or patch bumps, so this covers them. Majors wait for a person. Last in
+    // the list so that no rule above switches it back off by accident.
+    {
+      matchUpdateTypes: ["minor", "patch", "digest", "pin", "pinDigest"],
+      automerge: true,
     },
   ],
 }
