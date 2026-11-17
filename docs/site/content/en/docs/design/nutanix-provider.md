@@ -26,10 +26,10 @@ other three managers never speak to Nutanix, and a provider whose SDK is
 absent from that graph cannot break its builds.
 
 > **Dependencies are aligned with upstream CAPX.** The provider module is
-> excluded from Dependabot (`exclude-paths` in `.github/dependabot.yaml`).
+> excluded from Renovate (`ignorePaths` in `.github/renovate.json5`).
 > Its Go dependencies track the CAPX fork's base and the pins the main
 > module restates. They move only when the CAPX fork pin moves — not on
-> independent Dependabot bumps. See
+> independent dependency bumps. See
 > [`providers/nutanix-infrastructure/DRIFT.md`](https://github.com/jimmidyson/kcp-cluster-api/blob/main/providers/nutanix-infrastructure/DRIFT.md).
 
 Two things about the boundary are worth knowing before adding a second one:

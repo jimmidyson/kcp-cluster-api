@@ -61,7 +61,7 @@ patches applied in place. Their contract:
   honours `replace` only in the main module, and `go.work` lists every module
   so the tree is one build. There is no version to pin and nothing to tag.
 - Nothing is deleted from a vendored tree. GitHub runs workflows only from
-  the root `.github/`, and Dependabot is pointed only at this project's own
+  the root `.github/`, and Renovate is pointed only at this project's own
   modules, so upstream's are text. Deleting them would turn every upstream
   adoption into conflicts on paths nobody cares about.
 - A tree differs from its upstream base only in the paths its record lists.
