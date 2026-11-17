@@ -14,11 +14,11 @@ the tree was vendored ([ADR-0005](../../docs/adr-0005-one-repository.md));
 the fork is retired and nothing resolves it.
 
 > **Dependencies are aligned with upstream CAPX.** This module and the
-> vendored tree are both excluded from Dependabot (`exclude-paths` in
-> `.github/dependabot.yaml`). Their Go dependencies track the tree's base
+> vendored tree are both excluded from Renovate (`ignorePaths` in
+> `.github/renovate.json5`). Their Go dependencies track the tree's base
 > (`sigs.k8s.io/cluster-api`, `sigs.k8s.io/controller-runtime`, `k8s.io/*`,
 > …) and move only when a new upstream release is adopted — not on
-> independent Dependabot bumps — because otherwise the provider desyncs from
+> independent dependency bumps — because otherwise the provider desyncs from
 > both its upstream and the main module.
 
 > There is no pin. This module and the repository root both replace the CAPX
