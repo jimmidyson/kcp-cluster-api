@@ -92,7 +92,7 @@ updates:
     - "dependencies"
 
 # Documentation site (Hugo + Docsy). Build-time only and nothing ships from
-# it, so monthly and in one pull request per ecosystem is enough.
+# it, so monthly and in one pull request is enough.
 - package-ecosystem: "npm"
   directory: "/docs/site"
   schedule:
@@ -110,18 +110,7 @@ updates:
   labels:
     - "dependencies"
 
-# The site's Hugo modules (the Docsy theme). A module of its own, outside
-# go.work, so an update here touches nothing else.
-- package-ecosystem: "gomod"
-  directory: "/docs/site"
-  schedule:
-    interval: "monthly"
-  cooldown:
-    default-days: 7
-  groups:
-    docs-site-hugo-modules:
-      patterns: [ "*" ]
-  commit-message:
-    prefix: "build"
-  labels:
-    - "dependencies"
+# The site's Hugo modules (docs/site/go.mod, the Docsy theme) are deliberately
+# not listed. No Go package imports the theme, so the `go mod tidy` a gomod
+# update runs deletes the requirement instead of bumping it. Bump it with
+# `hugo mod get`.
