@@ -3812,3 +3812,67 @@ func toUnstructured(obj client.Object) *unstructured.Unstructured {
 	unstructuredObj.SetDeletionTimestamp(obj.GetDeletionTimestamp())
 	return unstructuredObj
 }
+
+// A Machine being deleted whose Cluster has already gone gives up its
+// finalizer, and one that is not being deleted still fails.
+//
+// Cluster API's own teardown never produces the first case: a Cluster waits
+// for its Machines. Something that removes the objects in a different order
+// does - see releaseDeletedMachine.
+func TestMachineWhoseClusterIsGone(t *testing.T) {
+	newMachine := func(deleting bool) *clusterv1.Machine {
+		m := &clusterv1.Machine{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "orphan",
+				Namespace:  metav1.NamespaceDefault,
+				Finalizers: []string{clusterv1.MachineFinalizer, "test"},
+			},
+			Spec: clusterv1.MachineSpec{
+				ClusterName: "gone",
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: clusterv1.GroupVersionInfrastructure.Group,
+					Kind:     "GenericInfrastructureMachine",
+					Name:     "infra-config1",
+				},
+				Bootstrap: clusterv1.Bootstrap{DataSecretName: ptr.To("data")},
+			},
+		}
+		if deleting {
+			m.DeletionTimestamp = ptr.To(metav1.Now())
+		}
+		return m
+	}
+
+	t.Run("a deleted Machine is released", func(t *testing.T) {
+		g := NewWithT(t)
+
+		m := newMachine(true)
+		key := client.ObjectKeyFromObject(m)
+		c := fake.NewClientBuilder().WithObjects(m).WithStatusSubresource(&clusterv1.Machine{}).Build()
+		mr := &Reconciler{Client: c}
+
+		_, err := mr.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		var actual clusterv1.Machine
+		g.Expect(c.Get(ctx, key, &actual)).To(Succeed())
+		g.Expect(actual.Finalizers).To(Equal([]string{"test"}),
+			"the Machine kept its finalizer for a Cluster that is never coming back")
+	})
+
+	t.Run("a live Machine still fails", func(t *testing.T) {
+		g := NewWithT(t)
+
+		m := newMachine(false)
+		key := client.ObjectKeyFromObject(m)
+		c := fake.NewClientBuilder().WithObjects(m).WithStatusSubresource(&clusterv1.Machine{}).Build()
+		mr := &Reconciler{Client: c}
+
+		_, err := mr.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		g.Expect(err).To(HaveOccurred())
+
+		var actual clusterv1.Machine
+		g.Expect(c.Get(ctx, key, &actual)).To(Succeed())
+		g.Expect(actual.Finalizers).To(ContainElement(clusterv1.MachineFinalizer))
+	})
+}

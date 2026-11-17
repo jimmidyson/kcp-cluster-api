@@ -206,6 +206,40 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	return nil
 }
 
+// releaseDeletedKubeadmControlPlane drops the finalizer from a
+// KubeadmControlPlane that is being deleted and whose Cluster is already gone.
+//
+// Deleting a control plane means deleting its Machines and waiting for them,
+// and all of that is addressed through the Cluster. Cluster API's own teardown
+// keeps the Cluster until its control plane has gone, so this never arises
+// there. It does when something removes the objects in another order: deleting
+// a kcp APIBinding takes every bound object at once, and from kcp 0.33 a
+// Cluster stops being shown a control plane bound through another APIBinding as
+// soon as that binding starts deleting, reads that as the control plane having
+// gone, and goes first. Before this, the control plane then failed on the
+// missing Cluster forever and its finalizer stayed, which held the APIBinding
+// that serves it - a workspace that can never finish unbinding.
+//
+// It is a last resort, not the normal path. The Machines are not deleted from
+// here: they are owned by this object and go with it, and a Machine whose
+// Cluster has gone releases itself the same way. Holding the finalizer would
+// not clean anything up either - it would only stop everything that owns this
+// object from finishing.
+func (r *Reconciler) releaseDeletedKubeadmControlPlane(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(kcp, controlplanev1.KubeadmControlPlaneFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	ctrl.LoggerFrom(ctx).Info("Releasing a deleted KubeadmControlPlane because its Cluster is already gone")
+
+	kcpWithoutFinalizer := kcp.DeepCopy()
+	controllerutil.RemoveFinalizer(kcpWithoutFinalizer, controlplanev1.KubeadmControlPlaneFinalizer)
+	if err := r.Client.Patch(ctx, kcpWithoutFinalizer, client.MergeFrom(kcp)); err != nil {
+		return ctrl.Result{}, pkgerrors.Wrapf(err, "failed to patch KubeadmControlPlane %s", klog.KObj(kcp))
+	}
+	return ctrl.Result{}, nil
+}
+
 // Reconcile reconciles the passed in object.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, reterr error) {
 	log := ctrl.LoggerFrom(ctx)
@@ -223,6 +257,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// Fetch the Cluster.
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, kcp.ObjectMeta)
 	if err != nil {
+		// A KubeadmControlPlane being deleted whose Cluster has already gone
+		// has nothing left to reconcile against, and without this the
+		// finalizer is never removed - see releaseDeletedKubeadmControlPlane.
+		if !kcp.DeletionTimestamp.IsZero() && apierrors.IsNotFound(err) {
+			return r.releaseDeletedKubeadmControlPlane(ctx, kcp)
+		}
 		// It should be an issue to be investigated if the controller get the NotFound status.
 		// So, it should return the error.
 		return ctrl.Result{}, pkgerrors.Wrapf(err, "failed to retrieve owner Cluster")

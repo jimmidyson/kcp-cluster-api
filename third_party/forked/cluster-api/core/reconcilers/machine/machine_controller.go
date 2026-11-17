@@ -268,6 +268,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (retres ct
 
 	cluster, err := util.GetClusterByName(ctx, r.Client, m.Namespace, m.Spec.ClusterName)
 	if err != nil {
+		// A Machine being deleted whose Cluster has already gone has nothing
+		// left to reconcile against, and without this the finalizer is never
+		// removed - see releaseDeletedMachine.
+		if !m.DeletionTimestamp.IsZero() && apierrors.IsNotFound(err) {
+			return r.releaseDeletedMachine(ctx, m)
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -372,6 +378,43 @@ func (r *Reconciler) getOwnerMachineDeployment(ctx context.Context, ms *clusterv
 		return nil, fmt.Errorf("failed to retrieve owner MachineDeployment for MachineSet %s: %w", klog.KObj(ms), err)
 	}
 	return md, nil
+}
+
+// releaseDeletedMachine drops the finalizer from a Machine that is being
+// deleted and whose Cluster is already gone.
+//
+// Everything a Machine's deletion does is done through its Cluster: draining
+// and deleting the Node needs the workload cluster the Cluster names, and the
+// reconcile cannot even start without it. Cluster API's own teardown keeps the
+// Cluster until its Machines have gone, so this never arises there. It does
+// when something removes the objects in another order. Deleting a kcp
+// APIBinding takes every bound object at once, and from kcp 0.33 a Cluster
+// whose control plane and infrastructure are bound through other APIBindings
+// stops being shown them as soon as those bindings start deleting; it reads
+// that as both having gone, and goes itself while its Machines remain. Before
+// this, such a Machine failed on the missing Cluster forever and its finalizer
+// stayed, which held the APIBinding that serves it - a workspace that can
+// never finish unbinding.
+//
+// It is a last resort, not the normal path. The Machine's bootstrap config
+// and infrastructure machine are not deleted from here: they are owned by the
+// Machine and go with it, each through its own controller's deletion, which is
+// where their cleanup belongs. Holding the finalizer would not clean anything
+// up either - it would only stop everything that owns this object from
+// finishing.
+func (r *Reconciler) releaseDeletedMachine(ctx context.Context, m *clusterv1.Machine) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(m, clusterv1.MachineFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	ctrl.LoggerFrom(ctx).Info("Releasing a deleted Machine because its Cluster is already gone")
+
+	machineWithoutFinalizer := m.DeepCopy()
+	controllerutil.RemoveFinalizer(machineWithoutFinalizer, clusterv1.MachineFinalizer)
+	if err := r.Client.Patch(ctx, machineWithoutFinalizer, client.MergeFrom(m)); err != nil {
+		return ctrl.Result{}, pkgerrors.Wrapf(err, "failed to patch Machine %s", klog.KObj(m))
+	}
+	return ctrl.Result{}, nil
 }
 
 func patchMachine(ctx context.Context, patchHelper *patch.Helper, machine *clusterv1.Machine, options ...patch.Option) error {
