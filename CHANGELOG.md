@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.2 (2026-11-18)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Bug Fixes
+* fix: correct pinned Docker action SHAs in publish-images by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/164
+
+
+**Full Changelog**: https://github.com/jimmidyson/kcp-cluster-api/compare/v0.2.1...v0.2.2
+
 ## 0.2.1 (2026-11-18)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
