@@ -55,22 +55,6 @@ jobs:
             echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
             echo "ref_type=unknown" >> "$GITHUB_OUTPUT"
           fi
-        run: |
-          set -euo pipefail
-          scripts/image-tags.sh --check
-          scripts/image-tags.sh --gha-output
-          # Record ref classification for the publish matrix (tag vs branch).
-          ref="${GITHUB_REF_NAME:-}"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "ref_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-            echo "ref_type=tag" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
-            echo "ref_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
-            echo "ref_type=branch" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
-            echo "ref_type=unknown" >> "$GITHUB_OUTPUT"
-          fi
 
   publish-tag:
     name: publish (${{ matrix.image }})
