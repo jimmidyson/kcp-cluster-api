@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 (2026-11-18)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Bug Fixes
+* fix: remove duplicate run key in publish-images workflow by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/162
+
+
+**Full Changelog**: https://github.com/jimmidyson/kcp-cluster-api/compare/v0.2.0...v0.2.1
+
 ## 0.2.0 (2026-11-17)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
