@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.0 (2026-11-17)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Breaking Changes
+* feat!: vendor the upstream trees under third_party/forked and release as one by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/147
+### Features
+* feat: add kcp-capi image publishing via ko + image tag derivation by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/136
+### Bug Fixes
+* fix: respect feature_numbering=timestamp from init-options.json by default by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/134
+* fix: finish unbinding a workspace that holds clusters on kcp v0.33.6 by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/138
+### Documentation
+* docs: slim the README to what a user needs to run the project by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/123
+### Build and Dependencies
+* build: ignore Dependabot updates for the local Nutanix provider by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/128
+* build: bump source-map-js from 1.2.1 to 1.2.2 in /docs/site by @dependabot[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/126
+* build: fix dependabot labels to existing repo label by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/132
+* build: bump the all-go-mod-patch-and-minor group across 1 directory with 4 updates by @dependabot[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/131
+* build: fix dependabot labels to existing repo label by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/133
+* build: bump the all-github-actions group across 1 directory with 3 updates by @dependabot[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/125
+* build: group and slow Dependabot updates, and cover the docs site by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/151
+* build: bump the all-github-actions group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/142
+* build: replace Dependabot with Renovate by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/152
+* build: update module go.opentelemetry.io/otel/sdk to v1.47.0 [security] by @renovate[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/157
+* build: group Renovate security updates and hold Node majors by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/160
+* build: let Renovate merge non-major updates on green by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/161
+### Other Changes
+* feat: browse the demo's workspaces in a UI by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/106
+* fix: detect a signature by reading it, not by verifying it by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/105
+* ci: take release notes from GitHub's generator, labelled from commit titles by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/104
+* docs: mark the UI work shipped, and correct what the plan says it does by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/108
+
+## New Contributors
+* @renovate[bot] made their first contribution in https://github.com/jimmidyson/kcp-cluster-api/pull/157
+
+**Full Changelog**: https://github.com/jimmidyson/kcp-cluster-api/compare/v0.1.0...v0.2.0
+
 ## 0.1.0 (2026-08-22)
 
 
