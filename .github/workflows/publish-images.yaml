@@ -3,11 +3,15 @@ name: publish-images
 # Publish the 6 ko-built images to GHCR (T015/T035).
 # Triggers: release tags (from release-please) and pushes to main.
 # Local builds (task image:build, KO_DOCKER_REPO=ko.local) never need GHCR creds (T029).
+# Note: push tags from release-please via GITHUB_TOKEN do not trigger push workflows
+# (GitHub anti-loop), so release.published is required for version tags.
 
 on:
   push:
     tags: ['v*']
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 # Least privilege; jobs that push elevate via `packages: write` (T035).
@@ -34,6 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
       - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
         with:
@@ -44,9 +49,11 @@ jobs:
           devbox run -- scripts/image-tags.sh --check
           devbox run -- scripts/image-tags.sh --gha-output
           # Record ref classification for the publish matrix (tag vs branch).
+          # release-please's tag push via GITHUB_TOKEN does not trigger push workflows,
+          # so release.published is the real version trigger (GITHUB_REF_NAME == v*).
           ref="${GITHUB_REF_NAME:-}"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            echo "ref_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]] || [[ "$ref" == v* ]]; then
+            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
             echo "ref_type=tag" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
             echo "ref_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
@@ -84,6 +91,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
       - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
         with:
@@ -163,6 +171,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
       - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
         with:
