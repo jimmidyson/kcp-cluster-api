@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3 (2026-11-23)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Bug Fixes
+* fix: publish version tags on release.published and fetch tags by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/166
+* fix: publish release images from the release-please workflow by @jimmidyson in https://github.com/jimmidyson/kcp-cluster-api/pull/169
+### Build and Dependencies
+* build: update go modules (minor and patch) by @renovate[bot] in https://github.com/jimmidyson/kcp-cluster-api/pull/168
+
+
+**Full Changelog**: https://github.com/jimmidyson/kcp-cluster-api/compare/v0.2.2...v0.2.3
+
 ## 0.2.2 (2026-11-18)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
