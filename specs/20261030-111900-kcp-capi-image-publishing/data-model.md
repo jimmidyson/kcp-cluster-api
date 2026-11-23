@@ -108,4 +108,4 @@ Release  ──1:N──►  Image  ──1:1──►  OCI Tag Set (per release
 ## State Transitions
 
 None — this feature is build/release infra with no runtime state machine. The only transition is the release lifecycle:
-`main commit` → `release-please PR` → `merge` → `tag push (vX.Y.Z + providers/*/vX.Y.Z)` → `publish-images.yaml` → `GHCR (3 aliases per image)`.
+`main commit` → `release-please PR` → `merge` → `release-please.yaml` cuts `vX.Y.Z` and calls `publish-images.yaml` with it → `GHCR (3 aliases per image)`.

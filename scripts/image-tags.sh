@@ -98,7 +98,12 @@ derive() {
   capi_oci="${capi_version//+/-}"
   capx_oci="${capx_version//+/-}"
 
-  local git_sha="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo dev)}"
+  # The revision is the commit that is checked out, not GITHUB_SHA: a run that
+  # publishes a tag from another ref (release-please calling the publish
+  # workflow, or a manual republish) checks the tag out, while GITHUB_SHA still
+  # names the ref the run started on.
+  local git_sha
+  git_sha="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "${GITHUB_SHA:-dev}")"
   local short_sha="${git_sha:0:7}"
 
   DERIVED_REPO_VERSION="$repo_version"

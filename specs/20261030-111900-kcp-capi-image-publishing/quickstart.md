@@ -71,9 +71,9 @@ task verify   # still the done-condition: includes test:integration against real
 
 ## 4 — CI publish path (what happens on release)
 
-No manual run; documented for review. On `vX.Y.Z` + `providers/nutanix-infrastructure/vX.Y.Z` tag push (created by release-please merge):
+No manual run; documented for review. When merging the release-please pull request cuts `vX.Y.Z`:
 
-1. `publish-images.yaml` GHA triggers on `push: tags: ['v*']`.
+1. `release-please.yaml` calls `publish-images.yaml` with the tag it has just created. The call is required: the tag and release are created with `GITHUB_TOKEN`, and GitHub starts no `push: tags` or `release: published` run for events that token causes. `push: tags: ['v*']` remains for a tag pushed by a person, and `workflow_dispatch` with a `tag` input republishes an existing release.
 2. Logs in to `ghcr.io` via `docker/login-action` (`GITHUB_TOKEN` has `packages: write`).
 3. Calls `scripts/image-tags.sh --gha-output` to emit `REPO_VERSION`, `CAPI_VERSION`, `CAPX_VERSION`, `K8S_VERSION`, `CAPI_BASE`, and the per-image `TAGS` matrix into `GITHUB_OUTPUT`.
 4. For each image, `ko build --bare --push --platform=linux/amd64,linux/arm64` with `--tags <repoTag>,<longTag>,<forkTag>` and `--image-label io.kcp-capi.*`.
