@@ -15,8 +15,27 @@ jobs:
       # Needs write to open the release PR and create the release/tag.
       contents: write
       pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Publish the images for the tag just cut. This has to be a call from here:
+  # the tag and release are created with GITHUB_TOKEN, and GitHub starts no
+  # `push: tags` or `release: published` run for events that token causes, so
+  # publish-images.yaml can never be triggered by them.
+  publish-images:
+    name: publish images
+    needs: [release-please]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-images.yaml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

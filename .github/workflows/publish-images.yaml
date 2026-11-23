@@ -1,18 +1,38 @@
 name: publish-images
 
 # Publish the 6 ko-built images to GHCR (T015/T035).
-# Triggers: release tags (from release-please) and pushes to main.
+#
+# Three ways in:
+#   - release-please.yaml calls this workflow (workflow_call) with the tag it
+#     has just cut. This is the release path.
+#   - push to main publishes :main and :sha-<short>.
+#   - workflow_dispatch with a `tag` input republishes an existing release.
+#
+# Why release-please has to call it: release-please creates the tag and the
+# GitHub release with GITHUB_TOKEN, and GitHub starts no workflow run for an
+# event GITHUB_TOKEN caused — not `push: tags`, and not `release: published`
+# either. Only workflow_dispatch and repository_dispatch are exempt. A trigger
+# on either event here is therefore dead for release-please's tags; `push:
+# tags` stays only so that a tag pushed by a person still publishes.
+#
 # Local builds (task image:build, KO_DOCKER_REPO=ko.local) never need GHCR creds (T029).
-# Note: push tags from release-please via GITHUB_TOKEN do not trigger push workflows
-# (GitHub anti-loop), so release.published is required for version tags.
 
 on:
   push:
     tags: ['v*']
     branches: [main]
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build and publish (vX.Y.Z).
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)publish (vX.Y.Z). Empty publishes the selected ref.
+        required: false
+        type: string
 
 # Least privilege; jobs that push elevate via `packages: write` (T035).
 permissions:
@@ -34,9 +54,36 @@ jobs:
       short_sha: ${{ steps.tags.outputs.short_sha }}
       ref_name: ${{ steps.tags.outputs.ref_name }}
       ref_type: ${{ steps.tags.outputs.ref_type }}
+      checkout_ref: ${{ steps.ref.outputs.checkout_ref }}
     steps:
+      # Decide what is being published before checking anything out. A called
+      # or dispatched run carries the tag as an input: its GITHUB_REF is the
+      # caller's (refs/heads/main), so the ref alone would classify a release
+      # as a branch build.
+      - id: ref
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$INPUT_TAG"
+          if [[ -z "$tag" && "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          if [[ -n "$tag" ]]; then
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::'$tag' is not a release tag (vX.Y.Z)"
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+          else
+            # Empty ref: checkout's default, the commit that triggered the run.
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ steps.ref.outputs.checkout_ref }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -44,22 +91,25 @@ jobs:
         with:
           enable-cache: true
       - id: tags
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
         run: |
           set -euo pipefail
+          # The tag being published is the version, whatever ref the run is on.
+          if [[ -n "$TAG" ]]; then
+            export REPO_VERSION="$TAG"
+          fi
           devbox run -- scripts/image-tags.sh --check
           devbox run -- scripts/image-tags.sh --gha-output
           # Record ref classification for the publish matrix (tag vs branch).
-          # release-please's tag push via GITHUB_TOKEN does not trigger push workflows,
-          # so release.published is the real version trigger (GITHUB_REF_NAME == v*).
-          ref="${GITHUB_REF_NAME:-}"
-          if [[ "$GITHUB_REF" == refs/tags/* ]] || [[ "$ref" == v* ]]; then
-            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
+          if [[ -n "$TAG" ]]; then
+            echo "ref_name=$TAG" >> "$GITHUB_OUTPUT"
             echo "ref_type=tag" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF" == refs/heads/* ]]; then
             echo "ref_name=${GITHUB_REF#refs/heads/}" >> "$GITHUB_OUTPUT"
             echo "ref_type=branch" >> "$GITHUB_OUTPUT"
           else
-            echo "ref_name=$ref" >> "$GITHUB_OUTPUT"
+            echo "ref_name=${GITHUB_REF_NAME:-}" >> "$GITHUB_OUTPUT"
             echo "ref_type=unknown" >> "$GITHUB_OUTPUT"
           fi
 
@@ -88,8 +138,9 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.derive-tags.outputs.checkout_ref }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -104,6 +155,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Validate tags
+        env:
+          REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
         run: devbox run -- scripts/image-tags.sh --check
       - name: Build and push ${{ matrix.image }}
         env:
@@ -168,8 +221,9 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.derive-tags.outputs.checkout_ref }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -184,6 +238,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Validate tags
+        env:
+          REPO_VERSION: ${{ needs.derive-tags.outputs.repo_version }}
         run: devbox run -- scripts/image-tags.sh --check
       - name: Build and push ${{ matrix.image }} (:main, :sha-<short>)
         env:
